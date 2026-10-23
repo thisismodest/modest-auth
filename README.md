@@ -85,7 +85,8 @@ npm install modest-auth
 
 Node 24 or later, and tested on 24 and 26. The first time `node:sqlite` is used, Node
 24 prints a warning that SQLite is experimental: that's Node's own notice about its
-built-in module, not an error.
+built-in module, not an error. In Node 26, `node:sqlite` is a release candidate
+(stability 1.2).
 
 ```ts
 import { createServer } from "node:http";
