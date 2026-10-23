@@ -24,8 +24,7 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small enough to read in one sitting.** About 900 lines of source, and a promise
-  to stay under 1,000.
+- **Small.** About 900 lines of source. CI fails if it goes over 1,000.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, or passkeys today, use a
@@ -228,7 +227,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 
 ## Documents
 
-- [The site](site/): the homepage, docs, and security pages, published to GitHub Pages.
+- [The site](site/): the homepage, docs, security, and legal pages, published to GitHub Pages at [modest-auth.com](https://modest-auth.com).
 
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and what's in scope.
 - [docs/threat-model.md](docs/threat-model.md): what it protects, against whom, and how.

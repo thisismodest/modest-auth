@@ -5,16 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
-    <title>modest-auth: sign-in for Node, simple and secure</title>
-    <meta name="description" content="Email and password sign-in for Node, with sessions. No dependencies, no settings that weaken it, and small enough to read in one sitting." />
+    <title>modest-auth: email and password sign-in for Node.js</title>
+    <meta name="description" content="Email and password authentication for Node.js, with sessions. No dependencies, and no options that turn its protections off." />
+    <link rel="canonical" href="https://modest-auth.com/" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="modest-auth" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://modest-auth.com/" />
+    <meta property="og:title" content="modest-auth: email and password sign-in for Node.js" />
+    <meta property="og:description" content="Email and password authentication for Node.js, with sessions. No dependencies, and no options that turn its protections off." />
+    <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="modest-auth: Sign-in for Node. No dependencies. Beside it, the code that adds sign-in to a Node server." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareSourceCode", "name": "modest-auth", "description": "Email and password authentication for Node.js, with sessions. No dependencies, and no options that turn its protections off.", "url": "https://modest-auth.com/", "codeRepository": "https://github.com/thisismodest/modest-auth", "programmingLanguage": "TypeScript", "runtimePlatform": "Node.js 24", "license": "https://opensource.org/license/mit", "author": {"@type": "Person", "name": "Marcus Michaels"}}</script>
     <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
     <link rel="stylesheet" href="assets/site.css" />
   </head>
   <body class="mdst-ui">
     <div class="wrap">
       <nav class="site-nav" aria-label="Site">
-        <a class="name" href="./">modest-auth</a>
-        <a href="./" aria-current="page">Home</a>
+        <a class="name" href="./">
+          <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#151515" /><circle cx="12" cy="10" r="3" fill="#fff" /><path d="M10.6 12.2 9.8 17h4.4l-.8-4.8" fill="#fff" /></svg>
+          modest-auth
+        </a>
         <a href="docs.html">Docs</a>
         <a href="security.html">Security</a>
         <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
@@ -22,105 +40,169 @@
 
       <main>
         <header class="hero">
-          <h1>Sign-in for Node.<br />Simple, and secure.</h1>
-          <p class="lead">
-            Email and password, sessions, and nothing you don't need. No dependencies, no settings
-            that weaken it, and small enough to read in one sitting.
-          </p>
-          <p class="mdst-banner mdst-banner--warning" role="note">
-            Early: not yet on npm, and not yet independently audited. Please don't use it for
-            anything real yet.
-          </p>
+          <div class="hero-grid">
+            <div>
+              <span class="pill"><span class="dot amber" aria-hidden="true"></span>Not on npm yet, and not yet audited</span>
+              <h1>Sign-in for Node.<br /><span class="quiet">No dependencies.</span></h1>
+              <p class="lead">
+                Sign-up, sign-in, sessions, and password changes, using only Node's built-in crypto and
+                SQLite. There are no options that turn its protections off.
+              </p>
+              <div class="actions">
+                <a class="mdst-button mdst-button--solid" href="docs.html">Read the docs</a>
+                <a class="mdst-button" href="https://github.com/thisismodest/modest-auth">View on GitHub</a>
+              </div>
+            </div>
+
+            <div>
+              <div class="window" role="figure" aria-label="Adding sign-in to a Node server">
+                <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
+                <pre><code><span class="k">import</span> { createAuth, createHandler } <span class="k">from</span> <span class="s">"modest-auth"</span>;
+<span class="k">import</span> { handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
+
+<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
+<span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
+  origin: <span class="s">"https://example.org"</span>,
+});
+
+<span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
+  <span class="c">// Sign-up, sign-in, sign-out, and more, at /auth</span>
+  <span class="k">if</span> (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) <span class="k">return</span>;
+  <span class="k">const</span> user = handler.<span class="f">userOf</span>(<span class="f">toRequest</span>(req));
+  res.<span class="f">end</span>(user ? <span class="s">`Hello, ${user.email}`</span> : <span class="s">"Hello"</span>);
+}).<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
+              </div>
+              <div class="status" aria-label="The session cookie">
+                <p><span class="dot" aria-hidden="true"></span><strong>Signed in: new session</strong></p>
+                <p>HttpOnly · Secure · __Host- · SameSite=Lax</p>
+              </div>
+            </div>
+          </div>
         </header>
 
         <ul class="facts" aria-label="In numbers">
-          <li><strong>0</strong><span>dependencies</span></li>
+          <li><strong>0</strong><span>runtime dependencies</span></li>
           <li><strong>~900</strong><span>lines of source</span></li>
-          <li><strong>7</strong><span>routes, ready-made</span></li>
-          <li><strong>1</strong><span>SQLite file</span></li>
+          <li><strong>7</strong><span>routes</span></li>
+          <li><strong>1</strong><span>SQLite database</span></li>
         </ul>
 
-        <section aria-labelledby="start">
-          <h2 id="start">Getting started</h2>
-          <p>Node 24 or later. Sign-up, sign-in, and sign-out for a whole site:</p>
-          <pre><code>import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
-import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
-
-const auth = createAuth(new DatabaseSync("app.db"));
-const handler = createHandler(auth, { origin: "https://example.org" });
-
-createServer(async (req, res) =&gt; {
-  if (await handleNode(handler, req, res)) return; // the /auth routes
-  const user = handler.userOf(toRequest(req)); // who's signed in, or null
-  res.end(user ? `Hello, ${user.email}` : "Hello");
-}).listen(3000);</code></pre>
-          <p>Your pages send JSON:</p>
-          <pre><code>await fetch("/auth/sign-in", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ email, password }),
-});</code></pre>
-          <p><a href="docs.html">The docs</a> have the rest: every route, the errors, and what your app does round it.</p>
-        </section>
-
-        <div class="pair">
-          <section aria-labelledby="simple">
-            <h2 id="simple">Simple</h2>
-            <ul>
-              <li><strong>No dependencies.</strong> Only Node's own <code>crypto</code> and <code>node:sqlite</code>: nothing else to trust, update, or have compromised.</li>
-              <li><strong>No settings that weaken it.</strong> The secure way is the only way.</li>
-              <li><strong>The routes come ready-made,</strong> with the checks an app could forget built in.</li>
-              <li><strong>About 900 lines,</strong> and a promise to stay under 1,000. Read all of it in an afternoon.</li>
-            </ul>
-          </section>
-          <section aria-labelledby="secure">
-            <h2 id="secure">Secure</h2>
-            <ul>
-              <li><strong>Passwords</strong> hashed with scrypt at OWASP's cost, and chosen by NIST's rules: 15 characters or more, and not one of 5,500 common ones.</li>
-              <li><strong>Sessions</strong> in a cookie scripts can't read, kept only as hashes, ended when unused.</li>
-              <li><strong>Guessing is slowed</strong> per account and per address, before any password is checked.</li>
-              <li><strong>Other sites can't act</strong> for someone who's signed in.</li>
-              <li><strong>Every promise has a test</strong> that fails if it stops being true.</li>
-            </ul>
-          </section>
-        </div>
-
         <section aria-labelledby="why">
-          <h2 id="why">Why so little?</h2>
-          <p>
-            Most authentication breaches aren't in the cryptography. They're logic bugs in features:
-            two options that interact in a way nobody tested, or a flow added for one case that opens
-            a door in another. The more an auth library does, and the more it can be configured, the
-            more of those there are to find.
+          <p class="eyebrow">Approach</p>
+          <h2 id="why">Fewer features, fewer bugs</h2>
+          <p class="section-lead">
+            Many security flaws in authentication come from features and options that combine in ways
+            nobody tested, rather than from the cryptography. modest-auth has few features and no options
+            that weaken it, so there are fewer combinations to get wrong.
           </p>
-          <p>
-            So modest-auth does the least that sign-in needs, the same way every time. If you need
-            social sign-in, single sign-on, or passkeys today, use a larger library. If you need people
-            to sign in with an email and a password, safely, this is for you.
-          </p>
-        </section>
-
-        <section aria-labelledby="not">
-          <h2 id="not">Deliberately not here</h2>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th scope="col">Not here</th><th scope="col">Why</th></tr></thead>
-              <tbody>
-                <tr><td>JWTs</td><td>A session in the database can be ended at once; a JWT lasts until it expires.</td></tr>
-                <tr><td>Plugins and hooks</td><td>Every extension point is a way to break the guarantees.</td></tr>
-                <tr><td>Other databases</td><td>SQLite is built into Node: one database is one thing to get right.</td></tr>
-                <tr><td>Social sign-in, single sign-on</td><td>Perhaps later, one at a time, if they can be made as small and certain as the rest.</td></tr>
-                <tr><td>A user interface</td><td>Your forms, your words.</td></tr>
-              </tbody>
-            </table>
+          <div class="compare">
+            <div>
+              <h3>Many auth libraries</h3>
+              <ul>
+                <li>Dozens of packages to install</li>
+                <li>Plugins and database adapters</li>
+                <li>Options that can turn protections off</li>
+                <li>Tens of thousands of lines of code</li>
+              </ul>
+            </div>
+            <div>
+              <h3>modest-auth</h3>
+              <ul>
+                <li>No packages besides itself</li>
+                <li>Node's built-in SQLite only</li>
+                <li>No options that weaken it</li>
+                <li>About 900 lines of code</li>
+              </ul>
+            </div>
           </div>
         </section>
-      </main>
 
-      <footer>
-        <p>MIT License. <a href="security.html#report">Report a vulnerability</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
-      </footer>
+        <section aria-labelledby="every">
+          <p class="eyebrow">Signing in</p>
+          <h2 id="every">What happens when someone signs in</h2>
+          <p class="section-lead">The routes do all four, so your app doesn't have to.</p>
+          <ol class="steps">
+            <li><strong>Where it came from</strong><span>Requests from other sites are refused.</span></li>
+            <li><strong>How many tries</strong><span>Attempts are counted per account, per address, and per IPv6 block, before any password is checked.</span></li>
+            <li><strong>The password</strong><span>Checked against a scrypt hash. An unknown email takes as long as a wrong password.</span></li>
+            <li><strong>The session</strong><span>A new 256-bit token replaces any old one, and only its hash is stored.</span></li>
+          </ol>
+        </section>
+
+        <section aria-labelledby="what">
+          <p class="eyebrow">Features</p>
+          <h2 id="what">What's included</h2>
+          <div class="features">
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></svg>
+              <h3>Passwords</h3>
+              <p>Hashed with scrypt at OWASP's recommended cost. New passwords follow NIST's rules: at least 15 characters, and not one of 5,500 common passwords.</p>
+            </div>
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>
+              <h3>Sessions</h3>
+              <p>A session lasts 30 days at most, or 7 days unused. Changing the password ends every other session.</p>
+            </div>
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6L12 3Z" /><path d="m9 12 2.2 2.2L15.5 10" /></svg>
+              <h3>Cross-site protection</h3>
+              <p>Changes must come from your own pages, sent as JSON. Signing in always starts a new session, so a cookie set by someone else is never used.</p>
+            </div>
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18h16" /><path d="M7 18V12" /><path d="M12 18V8" /><path d="M17 18v-4" /></svg>
+              <h3>Rate limits</h3>
+              <p>Stored in the database, so restarting the server doesn't reset them.</p>
+            </div>
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="m8 10 2 2-2 2" /><path d="M12.5 14h3.5" /></svg>
+              <h3>Routes</h3>
+              <p>Sign up, sign in, sign out, sign out everywhere, change password, delete account, and check the session.</p>
+            </div>
+            <div>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3.5h6" /><path d="M10 3.5v5.2L5 18a2 2 0 0 0 1.8 2.5h10.4A2 2 0 0 0 19 18l-5-9.3V3.5" /><path d="M7.5 14.5h9" /></svg>
+              <h3>Tests</h3>
+              <p>Each measure in the threat model has a test that fails if it stops working.</p>
+            </div>
+          </div>
+
+          <div class="window terminal" role="figure" aria-label="Output of npm run check">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>terminal</span></div>
+            <pre><code><span class="c">$</span> npm run check
+<span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 934 lines.
+<span class="ok">ℹ pass 84</span>
+ℹ fail 0</code></pre>
+          </div>
+        </section>
+
+        <section aria-labelledby="where">
+          <p class="eyebrow">Compatibility</p>
+          <h2 id="where">Runs on Node 24</h2>
+          <p class="section-lead">It also works with any server that uses the standard Request and Response.</p>
+          <ul class="pills" aria-label="Servers">
+            <li>node:http</li>
+            <li>Express</li>
+            <li>Fastify</li>
+            <li>Bun</li>
+            <li>Deno</li>
+          </ul>
+        </section>
+
+        <div class="closing">
+          <h2>Getting started</h2>
+          <p>modest-auth isn't on npm yet and hasn't been independently audited. Please don't use it in production until it has.</p>
+          <div class="actions">
+            <a class="mdst-button" href="docs.html">Read the docs</a>
+            <a class="mdst-button mdst-button--borderless" href="security.html">Security</a>
+          </div>
+        </div>
+      </main>
     </div>
+
+    <footer>
+      <div class="wrap">
+        <span>modest-auth · MIT License</span>
+        <span><a href="legal.html">Legal</a> · <a href="security.html#report">Report a vulnerability</a> · Styled with <a href="https://modest-ui.com">modest-ui</a></span>
+      </div>
+    </footer>
   </body>
 </html>

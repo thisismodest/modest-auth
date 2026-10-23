@@ -5,38 +5,67 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
-    <title>Security: modest-auth</title>
+    <title>Security: modest-auth, sign-in for Node.js</title>
     <meta name="description" content="What modest-auth protects, from whom, and how; what it doesn't yet; and how to report a vulnerability." />
+    <link rel="canonical" href="https://modest-auth.com/security.html" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="modest-auth" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://modest-auth.com/security.html" />
+    <meta property="og:title" content="Security: modest-auth, sign-in for Node.js" />
+    <meta property="og:description" content="What modest-auth protects, from whom, and how; what it doesn't yet; and how to report a vulnerability." />
+    <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="modest-auth: Sign-in for Node. No dependencies. Beside it, the code that adds sign-in to a Node server." />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
     <link rel="stylesheet" href="assets/site.css" />
   </head>
   <body class="mdst-ui">
     <div class="wrap">
       <nav class="site-nav" aria-label="Site">
-        <a class="name" href="./">modest-auth</a>
-        <a href="./">Home</a>
+        <a class="name" href="./">
+          <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#151515" /><circle cx="12" cy="10" r="3" fill="#fff" /><path d="M10.6 12.2 9.8 17h4.4l-.8-4.8" fill="#fff" /></svg>
+          modest-auth
+        </a>
         <a href="docs.html">Docs</a>
         <a href="security.html" aria-current="page">Security</a>
         <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
       </nav>
+    </div>
 
-      <main>
-        <header class="hero">
-          <h1>Security</h1>
-          <p class="lead">What it protects, from whom, and how. And, just as plainly, what it doesn't yet.</p>
-          <p class="mdst-banner mdst-banner--warning" role="note">
-            Not yet independently audited. It has had repeated rounds of internal adversarial review (by AI
-            reviewers, each given one area), and every finding is fixed. That helps, but it isn't an
-            audit: please don't rely on it until it has had one.
-          </p>
-        </header>
+    <header class="page-head">
+      <div class="wrap">
+        <p class="eyebrow">Security</p>
+        <h1>What it protects, and how</h1>
+        <p class="lead">What it protects, from whom, and how. And, just as plainly, what it doesn't do yet.</p>
+        <p class="note" role="note"><span class="dot amber" aria-hidden="true"></span><span>Not yet independently audited. It has had repeated rounds of internal adversarial review (by AI reviewers, each given one area), and every finding is fixed. That helps, but it isn't an audit: please don't rely on it until it has had one.</span></p>
+      </div>
+    </header>
 
+    <div class="wrap doc">
+      <nav class="toc" aria-label="On this page">
+        <p>On this page</p>
+        <ol>
+            <li><a href="#promises">What it promises</a></li>
+            <li><a href="#how">How</a></li>
+            <li><a href="#limits">What it doesn't do yet</a></li>
+            <li><a href="#practices">How the project stays secure</a></li>
+            <li><a href="#report">Reporting a vulnerability</a></li>
+        </ol>
+      </nav>
+
+      <main class="article">
         <section aria-labelledby="promises">
           <h2 id="promises">What it promises</h2>
-          <ol>
+          <ol class="steps promises">
             <li><strong>Nobody signs in as someone else.</strong></li>
-            <li><strong>Nobody learns a password,</strong> from it or from a copy of its database.</li>
-            <li><strong>A session works only in the browser it was given to,</strong> and ends when it should.</li>
+            <li><strong>Nobody learns a password,</strong> <span>from it or from a copy of its database.</span></li>
+            <li><strong>A session works only in the browser it was given to,</strong> <span>and ends when it should.</span></li>
             <li><strong>Signing in doesn't reveal who has an account.</strong></li>
             <li><strong>It stays usable under ordinary attack.</strong></li>
           </ol>
@@ -45,7 +74,7 @@
 
         <section aria-labelledby="how">
           <h2 id="how">How</h2>
-          <div class="table-scroll">
+          <div class="table-card">
             <table>
               <thead><tr><th scope="col">Against</th><th scope="col">What it does</th></tr></thead>
               <tbody>
@@ -66,7 +95,7 @@
 
         <section aria-labelledby="limits">
           <h2 id="limits">What it doesn't do yet</h2>
-          <ul>
+          <ul class="checks not">
             <li><strong>Sign-up says when an email already has an account.</strong> Hiding it needs email confirmation, which is on the roadmap.</li>
             <li><strong>No password reset yet.</strong> That needs email too.</li>
             <li><strong>Someone with many addresses can pause sign-in to an account for up to an hour.</strong> Its owner, already signed in, can still change the password.</li>
@@ -77,28 +106,34 @@
 
         <section aria-labelledby="practices">
           <h2 id="practices">How the project stays secure</h2>
-          <ul>
+          <ul class="checks">
             <li>No runtime dependencies, and CI fails if one is added, or if anything but Node's own modules is imported.</li>
             <li>CI refuses invisible or direction-changing characters in code ("Trojan Source").</li>
-            <li>The source stays under 1,000 lines, so it can always be read whole.</li>
+            <li>CI fails if the source goes over 1,000 lines.</li>
             <li>CodeQL checks every change, OpenSSF Scorecard grades the project weekly, and GitHub Actions are pinned to exact commits.</li>
             <li>Releases are to be published only by CI, from a tag on main, with provenance linking each to its source.</li>
           </ul>
         </section>
 
-        <section aria-labelledby="report">
+        <section class="closing" aria-labelledby="report">
           <h2 id="report">Reporting a vulnerability</h2>
           <p>
             Please don't describe it in public. Use the repository's <strong>Security</strong> tab, then
             <strong>Report a vulnerability</strong>, with what you found, how to make it happen, and what an
             attacker could do with it. You'll hear back within 5 working days.
           </p>
+          <div class="actions">
+            <a class="mdst-button" href="https://github.com/thisismodest/modest-auth/security/advisories/new">Report a vulnerability</a>
+          </div>
         </section>
       </main>
-
-      <footer>
-        <p>MIT License. <a href="https://github.com/thisismodest/modest-auth/blob/main/SECURITY.md">SECURITY.md</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
-      </footer>
     </div>
+
+    <footer>
+      <div class="wrap">
+        <span>modest-auth · MIT License</span>
+        <span><a href="legal.html">Legal</a> · <a href="security.html#report">Report a vulnerability</a> · Styled with <a href="https://modest-ui.com">modest-ui</a></span>
+      </div>
+    </footer>
   </body>
 </html>

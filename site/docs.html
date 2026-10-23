@@ -5,29 +5,51 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
-    <title>Docs: modest-auth</title>
+    <title>Docs: modest-auth, sign-in for Node.js</title>
     <meta name="description" content="How to use modest-auth: the routes, the errors, the settings, and what your app does round it." />
+    <link rel="canonical" href="https://modest-auth.com/docs.html" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="modest-auth" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://modest-auth.com/docs.html" />
+    <meta property="og:title" content="Docs: modest-auth, sign-in for Node.js" />
+    <meta property="og:description" content="How to use modest-auth: the routes, the errors, the settings, and what your app does round it." />
+    <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="modest-auth: Sign-in for Node. No dependencies. Beside it, the code that adds sign-in to a Node server." />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
     <link rel="stylesheet" href="assets/site.css" />
   </head>
   <body class="mdst-ui">
     <div class="wrap">
       <nav class="site-nav" aria-label="Site">
-        <a class="name" href="./">modest-auth</a>
-        <a href="./">Home</a>
+        <a class="name" href="./">
+          <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#151515" /><circle cx="12" cy="10" r="3" fill="#fff" /><path d="M10.6 12.2 9.8 17h4.4l-.8-4.8" fill="#fff" /></svg>
+          modest-auth
+        </a>
         <a href="docs.html" aria-current="page">Docs</a>
         <a href="security.html">Security</a>
         <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
       </nav>
+    </div>
 
-      <main>
-        <header class="hero">
-          <h1>Docs</h1>
-          <p class="lead">Everything you need, on one page.</p>
-        </header>
+    <header class="page-head">
+      <div class="wrap">
+        <p class="eyebrow">Docs</p>
+        <h1>Using modest-auth</h1>
+        <p class="lead">How to add it to a Node server, call it from your pages, and handle what it sends back.</p>
+      </div>
+    </header>
 
-        <nav aria-label="On this page">
-          <ol>
+    <div class="wrap doc">
+      <nav class="toc" aria-label="On this page">
+        <p>On this page</p>
+        <ol>
             <li><a href="#start">Getting started</a></li>
             <li><a href="#routes">The routes</a></li>
             <li><a href="#pages">From your pages</a></li>
@@ -38,35 +60,39 @@
             <li><a href="#servers">Other servers</a></li>
             <li><a href="#parts">Using the parts</a></li>
             <li><a href="#limits">Limits</a></li>
-          </ol>
-        </nav>
+        </ol>
+      </nav>
 
+      <main class="article">
         <section aria-labelledby="start">
           <h2 id="start">Getting started</h2>
           <p>Node 24 or later. It isn't on npm yet; for now, use it from the repository.</p>
-          <pre><code>import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
-import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
+            <pre><code><span class="k">import</span> { createServer } <span class="k">from</span> <span class="s">"node:http"</span>;
+<span class="k">import</span> { DatabaseSync } <span class="k">from</span> <span class="s">"node:sqlite"</span>;
+<span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
-// Its tables (auth_users, auth_sessions, auth_limits) can live in your app's own database.
-const auth = createAuth(new DatabaseSync("app.db"));
-// Your site's address (HTTPS), and how many reverse proxies are in front of it.
-const handler = createHandler(auth, { origin: "https://example.org", proxies: 0 });
+<span class="c">// Its tables (auth_users, auth_sessions, auth_limits) can live in your app's own database.</span>
+<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
+<span class="c">// Your site's address (HTTPS), and how many reverse proxies are in front of it.</span>
+<span class="k">const</span> handler = <span class="f">createHandler</span>(auth, { origin: <span class="s">"https://example.org"</span>, proxies: <span class="s">0</span> });
 
-const server = createServer(async (req, res) =&gt; {
-  if (await handleNode(handler, req, res)) return; // /auth/*, answered; anything else untouched
-  const user = handler.userOf(toRequest(req)); // who's signed in, or null
-  res.end(user ? `Hello, ${user.email}` : "Hello");
+<span class="k">const</span> server = <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
+  <span class="k">if</span> (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) <span class="k">return</span>; <span class="c">// /auth/*, answered; anything else untouched</span>
+  <span class="k">const</span> user = handler.<span class="f">userOf</span>(<span class="f">toRequest</span>(req)); <span class="c">// who's signed in, or null</span>
+  res.<span class="f">end</span>(user ? <span class="s">`Hello, ${user.email}`</span> : <span class="s">"Hello"</span>);
 });
-server.requestTimeout = 10_000; // slow clients get ten seconds, not five minutes
-server.headersTimeout = 10_000;
-server.listen(3000);</code></pre>
+server.requestTimeout = <span class="s">10_000</span>; <span class="c">// slow clients get ten seconds, not five minutes</span>
+server.headersTimeout = <span class="s">10_000</span>;
+server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
+          </div>
         </section>
 
         <section aria-labelledby="routes">
           <h2 id="routes">The routes</h2>
           <p>Every <code>POST</code> takes JSON, and must come from your site's own pages.</p>
-          <div class="table-scroll">
+          <div class="table-card">
             <table>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
@@ -93,22 +119,31 @@ server.listen(3000);</code></pre>
             Send each route JSON with <code>fetch</code>, which another site's page can't do without
             the browser asking first. (A plain HTML form can't send JSON.)
           </p>
-          <pre><code>const res = await fetch("/auth/sign-in", {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ email, password }),
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>sign-in.js</span></div>
+            <pre><code><span class="k">const</span> res = <span class="k">await</span> <span class="f">fetch</span>(<span class="s">"/auth/sign-in"</span>, {
+  method: <span class="s">"POST"</span>,
+  headers: { <span class="s">"content-type"</span>: <span class="s">"application/json"</span> },
+  body: JSON.<span class="f">stringify</span>({ email, password }),
 });
-if (!res.ok) showError((await res.json()).error.message); // fit to show as it is</code></pre>
+<span class="k">if</span> (!res.ok) <span class="f">showError</span>((<span class="k">await</span> res.<span class="f">json</span>()).error.message); <span class="c">// fit to show as it is</span></code></pre>
+          </div>
         </section>
 
         <section aria-labelledby="own">
           <h2 id="own">Your own routes</h2>
           <p>Ask who's signed in, and check that anything that changes something came from your own pages:</p>
-          <pre><code>const request = toRequest(req); // headers only: your own reading of the body is undisturbed
-const user = handler.userOf(request); // { id, email }, or null
-if (req.method === "POST" &amp;&amp; !handler.fromSite(request)) return res.writeHead(403).end();</code></pre>
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
+            <pre><code><span class="k">const</span> request = <span class="f">toRequest</span>(req); <span class="c">// headers only: your own reading of the body is undisturbed</span>
+<span class="k">const</span> user = handler.<span class="f">userOf</span>(request); <span class="c">// { id, email }, or null</span>
+<span class="k">if</span> (req.method === <span class="s">"POST"</span> &amp;&amp; !handler.<span class="f">fromSite</span>(request)) <span class="k">return</span> res.<span class="f">writeHead</span>(<span class="s">403</span>).<span class="f">end</span>();</code></pre>
+          </div>
           <p>Link your own tables to accounts, so they go when an account is deleted:</p>
-          <pre><code>CREATE TABLE notes (id INTEGER PRIMARY KEY, user TEXT REFERENCES auth_users(id) ON DELETE CASCADE, text TEXT);</code></pre>
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>schema.sql</span></div>
+            <pre><code><span class="k">CREATE</span> <span class="k">TABLE</span> notes (id <span class="k">INTEGER</span> <span class="k">PRIMARY</span> <span class="k">KEY</span>, user <span class="k">TEXT</span> <span class="k">REFERENCES</span> auth_users(id) <span class="k">ON</span> <span class="k">DELETE</span> <span class="k">CASCADE</span>, text <span class="k">TEXT</span>);</code></pre>
+          </div>
         </section>
 
         <section aria-labelledby="errors">
@@ -118,7 +153,7 @@ if (req.method === "POST" &amp;&amp; !handler.fromSite(request)) return res.writ
             is fit to show. When paused or busy, <code>Retry-After</code> says how many seconds until
             it's worth trying again.
           </p>
-          <div class="table-scroll">
+          <div class="table-card">
             <table>
               <thead><tr><th scope="col">Code</th><th scope="col">Status</th><th scope="col">Means</th></tr></thead>
               <tbody>
@@ -147,20 +182,26 @@ if (req.method === "POST" &amp;&amp; !handler.fromSite(request)) return res.writ
 
         <section aria-labelledby="settings">
           <h2 id="settings">Settings</h2>
-          <p>Three, each a fact about your site rather than a choice of how secure to be. Get them right:</p>
-          <dl>
-            <dt><code>origin</code></dt>
-            <dd>Your site's address, such as <code>"https://example.org"</code>. HTTPS, except <code>localhost</code> for development. The cookie is worked out from it.</dd>
-            <dt><code>proxies</code></dt>
-            <dd>How many reverse proxies are in front of your server (0 if none). Only then is <code>X-Forwarded-For</code> believed, read from the right.</dd>
-            <dt><code>base</code></dt>
-            <dd>Where the routes live. <code>"/auth"</code> unless you say otherwise.</dd>
-          </dl>
+          <p>There are three, and each is a fact about your site, not a choice of how secure to be.</p>
+          <div class="cards">
+            <div>
+              <h3><code>origin</code></h3>
+              <p>Your site's address, such as <code>"https://example.org"</code>. HTTPS, except <code>localhost</code> for development. The cookie is worked out from it.</p>
+            </div>
+            <div>
+              <h3><code>proxies</code></h3>
+              <p>How many reverse proxies are in front of your server (0 if none). Only then is <code>X-Forwarded-For</code> believed, read from the right.</p>
+            </div>
+            <div>
+              <h3><code>base</code></h3>
+              <p>Where the routes live. <code>"/auth"</code> unless you say otherwise.</p>
+            </div>
+          </div>
         </section>
 
         <section aria-labelledby="app">
           <h2 id="app">What your app does</h2>
-          <ul>
+          <ul class="checks">
             <li><strong>Serves the site over HTTPS.</strong></li>
             <li><strong>Declares its proxies,</strong> and lets nothing reach the server, or any proxy but the outermost, any other way.</li>
             <li><strong>Checks its own changing routes</strong> with <code>handler.fromSite(request)</code>.</li>
@@ -177,14 +218,17 @@ if (req.method === "POST" &amp;&amp; !handler.fromSite(request)) return res.writ
         <section aria-labelledby="servers">
           <h2 id="servers">Other servers</h2>
           <p><code>handler.handle(request, remoteAddress)</code> takes a Web-standard <code>Request</code> and gives a <code>Response</code>, or <code>null</code> for paths that aren't its own.</p>
-          <pre><code>// Bun
-Bun.serve({ fetch: async (req, server) =&gt; (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) });
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
+            <pre><code><span class="c">// Bun</span>
+Bun.<span class="f">serve</span>({ fetch: <span class="k">async</span> (req, server) =&gt; (<span class="k">await</span> handler.<span class="f">handle</span>(req, server.<span class="f">requestIP</span>(req)?.address)) ?? <span class="f">app</span>(req) });
 
-// Deno
-Deno.serve(async (req, info) =&gt; (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req));
+<span class="c">// Deno</span>
+Deno.<span class="f">serve</span>(<span class="k">async</span> (req, info) =&gt; (<span class="k">await</span> handler.<span class="f">handle</span>(req, info.remoteAddr.hostname)) ?? <span class="f">app</span>(req));
 
-// Express: first, before any body parser
-app.use(async (req, res, next) =&gt; (await handleNode(handler, req, res)) || next());</code></pre>
+<span class="c">// Express: first, before any body parser</span>
+app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&gt; (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) || <span class="f">next</span>());</code></pre>
+          </div>
         </section>
 
         <section aria-labelledby="parts">
@@ -194,7 +238,7 @@ app.use(async (req, res, next) =&gt; (await handleNode(handler, req, res)) || ne
             then does what the handler would: checks <code>Origin</code>, starts a fresh session at each
             sign-in, and passes where each request came from.
           </p>
-          <div class="table-scroll">
+          <div class="table-card">
             <table>
               <thead><tr><th scope="col"><code>auth.</code></th><th scope="col">Does</th></tr></thead>
               <tbody>
@@ -219,7 +263,7 @@ app.use(async (req, res, next) =&gt; (await handleNode(handler, req, res)) || ne
         <section aria-labelledby="limits">
           <h2 id="limits">Limits</h2>
           <p>Counted before any password is checked, and kept in the database (so a restart doesn't reset them).</p>
-          <div class="table-scroll">
+          <div class="table-card">
             <table>
               <thead><tr><th scope="col">Of</th><th scope="col">At most</th></tr></thead>
               <tbody>
@@ -235,10 +279,13 @@ app.use(async (req, res, next) =&gt; (await handleNode(handler, req, res)) || ne
           </div>
         </section>
       </main>
-
-      <footer>
-        <p>MIT License. <a href="security.html#report">Report a vulnerability</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
-      </footer>
     </div>
+
+    <footer>
+      <div class="wrap">
+        <span>modest-auth · MIT License</span>
+        <span><a href="legal.html">Legal</a> · <a href="security.html#report">Report a vulnerability</a> · Styled with <a href="https://modest-ui.com">modest-ui</a></span>
+      </div>
+    </footer>
   </body>
 </html>
