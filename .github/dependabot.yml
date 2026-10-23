@@ -14,6 +14,11 @@ updates:
     groups:
       development:
         patterns: ["*"]
+    # The types describe the oldest Node it supports (24, as in "engines"), so code
+    # can't use anything newer without the type check noticing.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
