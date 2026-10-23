@@ -49,9 +49,11 @@ wrong are still welcome, as ordinary issues.
 - CodeQL's security queries run on every change, and weekly.
 - Every security property has a test, which must pass before anything is merged.
 - GitHub Actions are pinned to exact commits.
-- Releases (none yet) are to be published to npm only by the release workflow, from a tagged commit,
-  after every check and a person's approval, with provenance linking each one to the
-  commit and build that made it (see docs/maintaining.md).
+- Releases are published to npm only by the release workflow, from a version tag on
+  `main`, after every check, using npm's trusted publishing (no token is stored), with
+  provenance linking each one to the commit and build that made it. Only the
+  maintainer can create release tags, and `main` can't be force-pushed. (The first
+  release, 0.1.0, was published by hand, without provenance: see docs/maintaining.md.)
 - OpenSSF Scorecard grades the project's practices weekly.
 - An independent audit before 1.0, and after any change to how passwords, sessions,
   or limits work. (So far it has had internal reviews only.)
