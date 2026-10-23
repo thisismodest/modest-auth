@@ -69,7 +69,7 @@
             <li><strong>Nobody signs in as someone else.</strong></li>
             <li><strong>Nobody learns a password,</strong> <span>from it or from a copy of its database.</span></li>
             <li><strong>A session works only in the browser it was given to,</strong> <span>and ends when it should.</span></li>
-            <li><strong>Signing in doesn't reveal who has an account.</strong></li>
+            <li><strong>Signing in, signing up, and asking for a link don't reveal who has an account.</strong></li>
             <li><strong>It stays usable under ordinary attack.</strong></li>
           </ol>
           <p>Each is kept by the measures below, and each measure has a test that fails if it stops working.</p>
@@ -82,13 +82,18 @@
               <thead><tr><th scope="col">Against</th><th scope="col">What it does</th></tr></thead>
               <tbody>
                 <tr><td>Guessing passwords</td><td>scrypt at OWASP's cost; 15 characters or more; 5,500 common passwords refused; limits per account, per address, and per IPv6 block, counted before any password is checked</td></tr>
-                <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions only as hashes of 256-bit tokens</td></tr>
+                <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions and emailed links only as hashes of 256-bit tokens</td></tr>
+                <tr><td>Signing up with someone else's email</td><td>An account is made only by a link emailed to the address: whoever opens it chooses the password</td></tr>
+                <tr><td>Guessing or reusing a link</td><td>256-bit tokens, single-use, 60 minutes to choose a password and 15 to sign in; using one, or a new password, ends the rest</td></tr>
+                <tr><td>A link leaking from its URL</td><td>The token follows <code>#</code>, which browsers never send to a server; a mail service checking links can't use one</td></tr>
+                <tr><td>Sending someone your own link</td><td>The link page shows which email it's for, and acts only when the person does</td></tr>
+                <tr><td>Flooding an inbox</td><td>3 links of each kind to one address in 15 minutes, the rest quietly not sent; each one sent still works, so nobody can stop its owner getting one</td></tr>
                 <tr><td>Stealing a session</td><td>A cookie scripts can't read, sent only to this exact site over HTTPS; a session ends after 7 days unused, and 30 at most</td></tr>
                 <tr><td>Other sites acting for someone</td><td>Every change must come from the site's own pages, as JSON</td></tr>
                 <tr><td>Planting a session</td><td>A fresh session at every sign-in; two session cookies in one request mean nobody</td></tr>
                 <tr><td>Racing a password change</td><td>A session starts only if the password just checked is still the account's</td></tr>
-                <tr><td>Finding who has an account</td><td>A wrong email and a wrong password get the same answer, after the same work</td></tr>
-                <tr><td>Swamping the server</td><td>Two passwords checked at once, with a short queue; small bodies; malformed requests answered, never crashing</td></tr>
+                <tr><td>Finding who has an account</td><td>A wrong email and a wrong password get the same answer, after the same work; asking for a link gets the same answer, and sends an email, either way</td></tr>
+                <tr><td>Swamping the server</td><td>Two passwords checked at once, with a short queue; 10 emails sent at once, with 1,000 waiting; small bodies; malformed requests answered, never crashing</td></tr>
                 <tr><td>Lookalike or invisible characters</td><td>Emails normalised, and invisible characters refused</td></tr>
               </tbody>
             </table>
@@ -99,9 +104,9 @@
         <section aria-labelledby="limits">
           <h2 id="limits">What it doesn't do yet</h2>
           <ul class="checks not">
-            <li><strong>Sign-up says when an email already has an account.</strong> Hiding it needs email confirmation, which is on the roadmap.</li>
-            <li><strong>No password reset yet.</strong> That needs email too.</li>
-            <li><strong>Someone with many addresses can pause sign-in to an account for up to an hour.</strong> Its owner, already signed in, can still change the password.</li>
+            <li><strong>Whoever reads an inbox can take over its account,</strong> by choosing a new password or signing in by link, as on most sites.</li>
+            <li><strong>Anyone can have a few emails sent to any address:</strong> up to 5 from one address in 15 minutes. The words are fixed, but it's mail nobody asked for.</li>
+            <li><strong>Someone with many addresses can pause signing in with the password to an account for up to an hour.</strong> Its owner can still sign in by an emailed link.</li>
             <li><strong>Letters from other alphabets that look alike</strong> (a Cyrillic "а") make a different account that looks the same.</li>
             <li><strong>One factor only:</strong> NIST's Authenticator Assurance Level 1. Two-step sign-in is on the roadmap.</li>
           </ul>

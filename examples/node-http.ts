@@ -3,8 +3,9 @@
 //   node examples/node-http.ts      then open http://localhost:3000
 //
 // The handler answers /auth/*; everything else is the app's, which asks the
-// handler who's signed in. On a real site, ORIGIN is its https:// address, and
-// `proxies` says how many reverse proxies are in front of it.
+// handler who's signed in. Emails are printed here rather than sent: a real app
+// sends them with its email service. On a real site, ORIGIN is its https://
+// address, and `proxies` says how many reverse proxies are in front of it.
 
 import { createServer, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -13,30 +14,75 @@ import { createAuth, createHandler, handleNode, toRequest } from "../src/index.t
 const ORIGIN = "http://localhost:3000";
 
 const auth = createAuth(new DatabaseSync("example.db"));
-const handler = createHandler(auth, { origin: ORIGIN, proxies: 0 });
+const handler = createHandler(auth, {
+  origin: ORIGIN,
+  proxies: 0,
+  // The page emailed links open (below).
+  linkPage: "/link",
+  sendEmail: (to, subject, text) => console.log(`\nEmail to ${to}: ${subject}\n${text}`),
+});
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+// Every form is method="post": should the script fail to load, a password still never ends up in a URL.
 const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><title>modest-auth example</title>
 <h1>${email ? `Signed in as ${escape(email)}` : "Not signed in"}</h1>
-<form data-route="sign-up"><input name="email" type="email" required> <input name="password" type="password" required minlength="15"> <button>Sign up</button></form>
-<form data-route="sign-in"><input name="email" type="email" required> <input name="password" type="password" required> <button>Sign in</button></form>
-<form data-route="sign-out"><button>Sign out</button></form>
+<h2>Sign up, or choose a new password</h2>
+<form method="post" data-route="send-password-link"><input name="email" type="email" required> <button>Email me a link</button></form>
+<h2>Sign in</h2>
+<form method="post" data-route="sign-in"><input name="email" type="email" required> <input name="password" type="password" required> <button>Sign in</button></form>
+<form method="post" data-route="send-sign-in-link"><input name="email" type="email" required> <button>Email me a sign-in link</button></form>
+<form method="post" data-route="sign-out"><button>Sign out</button></form>
 <p id="status" role="status"></p>
 <script src="/app.js"></script>`;
 
+// Where emailed links land. It says which account the link is for before anything happens, and
+// never acts by itself: someone could send a person their own link, to sign them in to the wrong account.
+const linkPage = `<!doctype html><meta charset="utf-8"><title>modest-auth example</title>
+<h1 id="for">Checking the link…</h1>
+<form method="post" data-route="set-password" hidden><input name="password" type="password" required minlength="15"> <button>Save and sign in</button></form>
+<form method="post" data-route="sign-in-with-link" hidden><button>Sign in</button></form>
+<p id="status" role="status"></p>
+<script src="/link.js"></script>`;
+
 // Each form is sent as JSON, which another site's page can't send without the browser asking first.
-const script = `for (const form of document.querySelectorAll("form")) {
+const post = `async function post(route, body) {
+  const res = await fetch("/auth/" + route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { res, json: await res.json() };
+}
+const status = (text) => (document.getElementById("status").textContent = text);`;
+
+const script = `${post}
+for (const form of document.querySelectorAll("form")) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const res = await fetch("/auth/" + form.dataset.route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-    if (res.ok) location.reload();
-    else document.getElementById("status").textContent = (await res.json()).error.message;
+    const { res, json } = await post(form.dataset.route, Object.fromEntries(new FormData(form)));
+    if (res.status === 202) status("Check your email for a link.");
+    else if (res.ok) location.reload();
+    else status(json.error.message);
   });
 }`;
 
+// The token is after the "#", which the browser never sends to a server: read first, then taken out of the address bar.
+const linkScript = `${post}
+const [kind, token] = location.hash.slice(1).split("=");
+history.replaceState(null, "", location.pathname);
+const heading = document.getElementById("for");
+post("link", { token }).then(({ res, json }) => {
+  if (!res.ok) return (heading.textContent = json.error.message);
+  heading.textContent = (json.kind === "password" ? "Choose a password for " : "Sign in as ") + json.email;
+  const form = document.querySelector(json.kind === "password" ? "[data-route=set-password]" : "[data-route=sign-in-with-link]");
+  form.hidden = false;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const { res, json } = await post(form.dataset.route, { ...Object.fromEntries(new FormData(form)), token });
+    if (res.ok) location.href = "/";
+    else status(json.error.message);
+  });
+});`;
+
 function send(res: ServerResponse, type: string, body: string): void {
-  res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'" });
+  res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'", "referrer-policy": "no-referrer" });
   res.end(body);
 }
 
@@ -44,6 +90,8 @@ const server = createServer(async (req, res) => {
   try {
     if (await handleNode(handler, req, res)) return;
     if (req.url === "/app.js") return send(res, "text/javascript", script);
+    if (req.url === "/link.js") return send(res, "text/javascript", linkScript);
+    if (req.url === "/link") return send(res, "text/html", linkPage);
     send(res, "text/html", page(handler.userOf(toRequest(req))?.email ?? null));
   } catch (error) {
     console.error(error);

@@ -7,7 +7,8 @@
 //   URL standard gives it), so "bücher.de" and "xn--bcher-kva.de" are one too.
 // - Invisible and control characters (bidirectional overrides among them, which can
 //   make an address display as another) are refused, as are spaces, quotes, and
-//   brackets: an app that shows an email can't be handed markup through one.
+//   brackets: an app that shows an email can't be handed markup through one. So is a
+//   leading "-" or "|", which a mail program could take as an option or a pipe.
 
 /** RFC 5321's limits: 254 in all, 64 before the @. */
 const LONGEST = 254;
@@ -26,6 +27,8 @@ export function cleanEmail(given: string): string | null {
   const local = email.slice(0, at);
   const domain = email.slice(at + 1);
   if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return null;
+  // Nor one a mail program would read as a command-line option or a pipe ("-X/file@x.org", "|cmd@x.org"), should an app pass it to one.
+  if (local.startsWith("-") || local.startsWith("|")) return null;
   // Nothing a URL would read as more than a host (a path, query, fragment, or %-escape), before the URL parser sees it.
   if (/[/?#%]/.test(domain)) return null;
   let ascii: string;

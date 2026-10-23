@@ -6,14 +6,19 @@
 // the same way every time.
 //
 //   GET  /auth/session               who's signed in: { user: { email } | null }
-//   POST /auth/sign-up               { email, password }
+//   POST /auth/send-password-link    { email }: to sign up, or to choose a new password
+//   POST /auth/send-sign-in-link     { email }
+//   POST /auth/link                  { token }: which email a link is for, and its kind
+//   POST /auth/set-password          { token, password }: from a password link
+//   POST /auth/sign-in-with-link     { token }: from a sign-in link
 //   POST /auth/sign-in               { email, password }
 //   POST /auth/sign-out               (no fields: an empty body, or {})
 //   POST /auth/sign-out-everywhere    (no fields)
 //   POST /auth/password              { current, next }: every other session ends
 //   POST /auth/delete-account        { password }
 
-import type { Auth, User } from "./auth.ts";
+import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, type User } from "./auth.ts";
+import { atMost } from "./limits.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
 import { addressKey } from "./limits.ts";
@@ -25,6 +30,25 @@ export type HandlerOptions = {
   proxies?: number;
   /** Where the routes live. */
   base?: string;
+  /**
+   * The app's page that emailed links open, such as "/account/link". The token
+   * follows "#" ("#password=…" or "#sign-in=…"), which browsers never send to a
+   * server. The page reads it (before any other script can), asks /auth/link which
+   * email it's for and shows that, then asks for a password or shows a sign-in
+   * button, and sends it to set-password or sign-in-with-link. It never acts by
+   * itself: someone could send a person their own link, to sign them in to the
+   * wrong account.
+   */
+  linkPage: string;
+  /**
+   * Sends an email: the app's own way (any email service). Called after the answer
+   * has gone, and for every request whether or not there's an account, so neither
+   * the answer nor the work after it shows which. At most 10 at once (each until it
+   * finishes, so give it a timeout of its own) and 1,000 waiting; beyond that, or
+   * once its link has run out, an email is dropped. Failures are logged, without
+   * the email's text.
+   */
+  sendEmail(to: string, subject: string, text: string): Promise<void> | void;
 };
 
 export type Handler = {
@@ -87,8 +111,53 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
   }
 }
 
+/** The email for a link, in plain text. */
+function linkEmail(link: Link, site: string, url: string, origin: string): { subject: string; text: string } {
+  if (link.token === null) {
+    return {
+      subject: `Sign in to ${site}`,
+      text: `Someone asked to sign in to ${site} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\nIf it wasn't you, you can ignore this email.\n`,
+    };
+  }
+  if (link.kind === "sign-in") {
+    return {
+      subject: `Sign in to ${site}`,
+      text: `To sign in to ${site}, open this link within ${SIGN_IN_LINK_MINUTES} minutes:\n\n${url}\n\nIf you didn't ask to sign in, you can ignore this email.\n`,
+    };
+  }
+  if (link.account) {
+    return {
+      subject: `Choose a new password for ${site}`,
+      text: `To choose a new password for your account on ${site}, open this link within ${PASSWORD_LINK_MINUTES} minutes:\n\n${url}\n\nChoosing one signs you out everywhere else. If you didn't ask, you can ignore this email: your password stays as it is.\n`,
+    };
+  }
+  return {
+    subject: `Finish signing up to ${site}`,
+    text: `To finish signing up to ${site}, choose a password at this link within ${PASSWORD_LINK_MINUTES} minutes:\n\n${url}\n\nIf you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
+  };
+}
+
 export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const { origin } = siteOrigin(options.origin);
+  const { linkPage, sendEmail } = options;
+  if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage)) throw new Error('linkPage must be a path on the site, such as "/account/link".');
+  if (typeof sendEmail !== "function") throw new Error("sendEmail must be a function that sends an email: (to, subject, text).");
+  const site = new URL(origin).host;
+  // A slow or stuck email service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
+  const sending = atMost(10, 1000);
+  // Why, but never the email's text (it holds the link) nor the service's own message (which may repeat it).
+  const why = (error: unknown) => (error instanceof AuthError ? "too many waiting" : error instanceof Error ? error.name : typeof error);
+  /** Sent after the answer, so a slow email service doesn't hold it up. */
+  const send = (link: Link | null) => {
+    if (!link) return;
+    const { subject, text } = linkEmail(link, site, `${origin}${linkPage}#${link.kind}=${link.token}`, origin);
+    setImmediate(() => {
+      sending(async () => {
+        if (Date.now() >= link.expires) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
+        await sendEmail(link.to, subject, text);
+      }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
+    });
+  };
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
   const proxies = options.proxies ?? 0;
@@ -119,7 +188,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   };
 
   const routes: Record<string, (body: Record<string, string>, request: Request, from: string) => Promise<Response> | Response> = {
-    "sign-up": async (b, r, from) => signedIn(await auth.signUp(b.email ?? "", b.password ?? "", from), tokenOf(r), 201),
+    "send-password-link": (b, _r, from) => (send(auth.requestLink("password", b.email ?? "", from)), reply(202, {})),
+    "send-sign-in-link": (b, _r, from) => (send(auth.requestLink("sign-in", b.email ?? "", from)), reply(202, {})),
+    link: (b, _r, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
+    "set-password": async (b, r, from) => signedIn(await auth.usePasswordLink(b.token ?? "", b.password ?? "", from), tokenOf(r)),
+    "sign-in-with-link": (b, r, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r)),
     "sign-in": async (b, r, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r)),
     "sign-out": (_b, r) => {
       const token = tokenOf(r);

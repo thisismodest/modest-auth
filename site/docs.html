@@ -6,7 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
     <title>Docs: modest-auth, sign-in for Node.js</title>
-    <meta name="description" content="How to use modest-auth: the routes, the errors, the settings, and what your app does round it." />
+    <meta name="description" content="How to use modest-auth: the routes, emailed links, the errors, the settings, and what your app does round it." />
     <link rel="canonical" href="https://modest-auth.com/docs.html" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
@@ -16,7 +16,7 @@
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://modest-auth.com/docs.html" />
     <meta property="og:title" content="Docs: modest-auth, sign-in for Node.js" />
-    <meta property="og:description" content="How to use modest-auth: the routes, the errors, the settings, and what your app does round it." />
+    <meta property="og:description" content="How to use modest-auth: the routes, emailed links, the errors, the settings, and what your app does round it." />
     <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -56,6 +56,7 @@
             <li><a href="#start">Getting started</a></li>
             <li><a href="#routes">The routes</a></li>
             <li><a href="#pages">From your pages</a></li>
+            <li><a href="#link-page">The link page</a></li>
             <li><a href="#own">Your own routes</a></li>
             <li><a href="#errors">Errors</a></li>
             <li><a href="#settings">Settings</a></li>
@@ -85,10 +86,14 @@
 <span class="k">import</span> { DatabaseSync } <span class="k">from</span> <span class="s">"node:sqlite"</span>;
 <span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
-<span class="c">// Its tables (auth_users, auth_sessions, auth_limits) can live in your app's own database.</span>
+<span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
-<span class="c">// Your site's address (HTTPS), and how many reverse proxies are in front of it.</span>
-<span class="k">const</span> handler = <span class="f">createHandler</span>(auth, { origin: <span class="s">"https://example.org"</span>, proxies: <span class="s">0</span> });
+<span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
+  origin: <span class="s">"https://example.org"</span>, <span class="c">// your site's address (HTTPS)</span>
+  proxies: <span class="s">0</span>, <span class="c">// how many reverse proxies are in front of it</span>
+  linkPage: <span class="s">"/account/link"</span>, <span class="c">// your page that emailed links open</span>
+  sendEmail: (to, subject, text) =&gt; <span class="f">sendWithYourService</span>({ to, subject, text }),
+});
 
 <span class="k">const</span> server = <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
   <span class="k">if</span> (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) <span class="k">return</span>; <span class="c">// /auth/*, answered; anything else untouched</span>
@@ -109,7 +114,11 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
                 <tr><td><code>GET /auth/session</code></td><td></td><td><code>{ user: { email } }</code>, or <code>{ user: null }</code></td></tr>
-                <tr><td><code>POST /auth/sign-up</code></td><td><code>{ email, password }</code></td><td>Makes the account, and signs in</td></tr>
+                <tr><td><code>POST /auth/send-password-link</code></td><td><code>{ email }</code></td><td>Emails a link to choose a password: to sign up, or for a forgotten one</td></tr>
+                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in</td></tr>
+                <tr><td><code>POST /auth/link</code></td><td><code>{ token }</code></td><td><code>{ kind, email }</code>: which email a link is for</td></tr>
+                <tr><td><code>POST /auth/set-password</code></td><td><code>{ token, password }</code></td><td>From a password link: makes the account or replaces its password, signs in, and ends every other session</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in</td></tr>
                 <tr><td><code>POST /auth/sign-in</code></td><td><code>{ email, password }</code></td><td>Signs in, with a fresh session (any old one ends)</td></tr>
                 <tr><td><code>POST /auth/sign-out</code></td><td>none</td><td>Ends this session</td></tr>
                 <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
@@ -118,6 +127,11 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
               </tbody>
             </table>
           </div>
+          <p>
+            The two that send a link answer <code>202</code> and <code>{}</code> whatever happens, so
+            nobody can tell whether an email has an account; an email goes either way. Links last 60
+            minutes (password) or 15 (sign-in), and work once.
+          </p>
           <p>
             New passwords are 15 to 200 characters, any characters at all, but not a common password,
             not made from the email, and not with fewer than four different characters. A session lasts
@@ -139,6 +153,31 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
   body: JSON.<span class="f">stringify</span>({ email, password }),
 });
 <span class="k">if</span> (!res.ok) <span class="f">showError</span>((<span class="k">await</span> res.<span class="f">json</span>()).error.message); <span class="c">// fit to show as it is</span></code></pre>
+          </div>
+        </section>
+
+        <section aria-labelledby="link-page">
+          <h2 id="link-page">The link page</h2>
+          <p>
+            Emailed links open your page at <code>linkPage</code>, with the token after <code>#</code>:
+            <code>/account/link#password=…</code> or <code>/account/link#sign-in=…</code>. Browsers never
+            send what follows <code>#</code> to a server, so the token stays out of logs, and a mail
+            service that opens links to check them can't use one up. The page:
+          </p>
+          <ol>
+            <li><strong>Reads the token first,</strong> before any other script runs, and takes it out of the address bar. Keep analytics and other sites' scripts off it.</li>
+            <li><strong>Asks <code>/auth/link</code> which email it's for, and says so:</strong> "Choose a password for ann@example.org", or "Sign in as ann@example.org".</li>
+            <li><strong>Waits for the person to act.</strong> It never acts by itself: someone could send a person their own link, to sign them in to the wrong account. Showing the email is what lets them notice.</li>
+            <li><strong>Sends the token</strong> with the password to <code>set-password</code>, or alone to <code>sign-in-with-link</code>.</li>
+          </ol>
+          <div class="window">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>link.js</span></div>
+            <pre><code><span class="k">const</span> [kind, token] = location.hash.<span class="f">slice</span>(<span class="s">1</span>).<span class="f">split</span>(<span class="s">"="</span>);
+history.<span class="f">replaceState</span>(<span class="k">null</span>, <span class="s">""</span>, location.pathname);
+<span class="k">const</span> { email } = <span class="k">await</span> <span class="f">post</span>(<span class="s">"/auth/link"</span>, { token });
+<span class="f">show</span>(kind === <span class="s">"password"</span> ? <span class="s">`Choose a password for ${email}`</span> : <span class="s">`Sign in as ${email}`</span>);
+<span class="c">// Then, only when the person presses the button:</span>
+<span class="k">await</span> <span class="f">post</span>(kind === <span class="s">"password"</span> ? <span class="s">"/auth/set-password"</span> : <span class="s">"/auth/sign-in-with-link"</span>, { token, password });</code></pre>
           </div>
         </section>
 
@@ -174,7 +213,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>long-password</code></td><td>422</td><td>More than 200 characters</td></tr>
                 <tr><td><code>common-password</code></td><td>422</td><td>Too easy to guess</td></tr>
                 <tr><td><code>invalid-password</code></td><td>422</td><td>Broken text (not valid Unicode)</td></tr>
-                <tr><td><code>email-taken</code></td><td>409</td><td>An account already has that email</td></tr>
+                <tr><td><code>invalid-link</code></td><td>400</td><td>The link has expired or been used</td></tr>
                 <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
                 <tr><td><code>signed-out</code></td><td>401</td><td>That needs a signed-in browser</td></tr>
                 <tr><td><code>too-many-tries</code></td><td>429</td><td>Paused: wait, then try again</td></tr>
@@ -194,7 +233,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
 
         <section aria-labelledby="settings">
           <h2 id="settings">Settings</h2>
-          <p>There are three, and each is a fact about your site, not a choice of how secure to be.</p>
+          <p>Each is a fact about your site, not a choice of how secure to be.</p>
           <div class="cards">
             <div>
               <h3><code>origin</code></h3>
@@ -203,6 +242,14 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
             <div>
               <h3><code>proxies</code></h3>
               <p>How many reverse proxies are in front of your server (0 if none). Only then is <code>X-Forwarded-For</code> believed, read from the right.</p>
+            </div>
+            <div>
+              <h3><code>linkPage</code></h3>
+              <p>Your page that emailed links open, such as <code>"/account/link"</code>.</p>
+            </div>
+            <div>
+              <h3><code>sendEmail</code></h3>
+              <p>How your app sends email: <code>(to, subject, text)</code>. Give it a timeout of its own, and don't log the text: it holds the link.</p>
             </div>
             <div>
               <h3><code>base</code></h3>
@@ -215,6 +262,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
           <h2 id="app">What your app does</h2>
           <ul class="checks">
             <li><strong>Serves the site over HTTPS.</strong></li>
+            <li><strong>Has a link page</strong> that shows which email a link is for, and acts only when the person does.</li>
             <li><strong>Declares its proxies,</strong> and lets nothing reach the server, or any proxy but the outermost, any other way.</li>
             <li><strong>Checks its own changing routes</strong> with <code>handler.fromSite(request)</code>.</li>
             <li><strong>Sets short timeouts</strong> for slow clients.</li>
@@ -248,13 +296,17 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
           <p>
             <code>createAuth</code> gives the accounts, sessions, and limits without the routes. Your app
             then does what the handler would: checks <code>Origin</code>, starts a fresh session at each
-            sign-in, and passes where each request came from.
+            sign-in, passes where each request came from, and for links, sends the email
+            <code>requestLink</code> gives after answering, whatever it says, and answers the same either way.
           </p>
           <div class="table-card">
             <table>
               <thead><tr><th scope="col"><code>auth.</code></th><th scope="col">Does</th></tr></thead>
               <tbody>
-                <tr><td><code>signUp(email, password, from)</code></td><td>A new account</td></tr>
+                <tr><td><code>requestLink(kind, email, from)</code></td><td>An email to send, or null: <code>{ kind, to, token, account, expires }</code>, with <code>token</code> null when it should say there's no account</td></tr>
+                <tr><td><code>lookUpLink(token, from)</code></td><td>Which email a link is for, without using it</td></tr>
+                <tr><td><code>usePasswordLink(token, password, from)</code></td><td>The account, made or with its new password; every session ends</td></tr>
+                <tr><td><code>useSignInLink(token, from)</code></td><td>The account a sign-in link is for</td></tr>
                 <tr><td><code>signIn(email, password, from)</code></td><td>The account, if the password's right</td></tr>
                 <tr><td><code>startSession(user)</code></td><td>A session token, for a user just returned by the calls above</td></tr>
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
@@ -281,8 +333,12 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
               <tbody>
                 <tr><td>Tries at one account, from one address</td><td>10 in 15 minutes</td></tr>
                 <tr><td>Tries at one account, from anywhere</td><td>100 an hour</td></tr>
-                <tr><td>Sign-ins, sign-ups, and password checks from one address</td><td>20 in 15 minutes</td></tr>
+                <tr><td>Sign-ins, links, and password checks from one address</td><td>20 in 15 minutes</td></tr>
                 <tr><td>The same, from one IPv6 /48</td><td>200 in 15 minutes</td></tr>
+                <tr><td>Links asked for from one address</td><td>5 in 15 minutes</td></tr>
+                <tr><td>The same, from one IPv6 /48</td><td>20 in 15 minutes</td></tr>
+                <tr><td>Links of each kind emailed to one address (the rest quietly not sent)</td><td>3 in 15 minutes</td></tr>
+                <tr><td>Emails being sent at once</td><td>10, with 1,000 waiting</td></tr>
                 <tr><td>Password checks by an account's own sessions</td><td>10 an hour</td></tr>
                 <tr><td>Passwords being checked at once</td><td>2, with 50 waiting</td></tr>
                 <tr><td>Sessions per account</td><td>50</td></tr>

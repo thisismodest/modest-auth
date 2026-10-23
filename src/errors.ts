@@ -12,8 +12,8 @@ export type AuthErrorCode =
   | "common-password"
   /** Not valid text (broken Unicode), which can't be stored faithfully. */
   | "invalid-password"
-  /** Signing up with an email that already has an account. */
-  | "email-taken"
+  /** An emailed link that has expired, been used, or was never sent. */
+  | "invalid-link"
   /** Signing in with a wrong email or password (the same either way). */
   | "wrong-credentials"
   /** Too many tries: wait, then try again. */
@@ -27,7 +27,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   "long-password": 422,
   "common-password": 422,
   "invalid-password": 422,
-  "email-taken": 409,
+  "invalid-link": 400,
   "wrong-credentials": 401,
   "too-many-tries": 429,
   busy: 503,

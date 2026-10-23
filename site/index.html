@@ -48,8 +48,8 @@
               <span class="pill"><span class="dot amber" aria-hidden="true"></span>Early release, not yet audited</span>
               <h1>Sign-in for Node.<br /><span class="quiet">No dependencies.</span></h1>
               <p class="lead">
-                Sign-up, sign-in, sessions, and password changes, using only Node's built-in crypto and
-                SQLite. There are no options that turn its protections off.
+                Sign-up, sign-in by password or emailed link, password resets, and sessions, using only
+                Node's built-in crypto and SQLite. There are no options that turn its protections off.
               </p>
               <div class="actions">
                 <a class="mdst-button mdst-button--solid" href="docs.html">Read the docs</a>
@@ -67,10 +67,12 @@
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: <span class="s">"https://example.org"</span>,
+  linkPage: <span class="s">"/account/link"</span>,
+  sendEmail: yourMailer, <span class="c">// (to, subject, text)</span>
 });
 
 <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
-  <span class="c">// Sign-up, sign-in, sign-out, and more, at /auth</span>
+  <span class="c">// Sign-up, sign-in, links, and more, at /auth</span>
   <span class="k">if</span> (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) <span class="k">return</span>;
   <span class="k">const</span> user = handler.<span class="f">userOf</span>(<span class="f">toRequest</span>(req));
   res.<span class="f">end</span>(user ? <span class="s">`Hello, ${user.email}`</span> : <span class="s">"Hello"</span>);
@@ -86,8 +88,8 @@
 
         <ul class="facts" aria-label="In numbers">
           <li><strong>0</strong><span>runtime dependencies</span></li>
-          <li><strong>~900</strong><span>lines of source</span></li>
-          <li><strong>7</strong><span>routes</span></li>
+          <li><strong>~1,100</strong><span>lines of source</span></li>
+          <li><strong>11</strong><span>routes</span></li>
           <li><strong>1</strong><span>SQLite database</span></li>
         </ul>
 
@@ -115,7 +117,7 @@
                 <li>No packages besides itself</li>
                 <li>Node's built-in SQLite only</li>
                 <li>No options that weaken it</li>
-                <li>About 900 lines of code</li>
+                <li>About 1,100 lines of code</li>
               </ul>
             </div>
           </div>
@@ -159,8 +161,8 @@
             </div>
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="m8 10 2 2-2 2" /><path d="M12.5 14h3.5" /></svg>
-              <h3>Routes</h3>
-              <p>Sign up, sign in, sign out, sign out everywhere, change password, delete account, and check the session.</p>
+              <h3>Emailed links</h3>
+              <p>Sign up, choose a new password, or sign in by a link that works once and is gone within the hour. Asking for one never shows who has an account.</p>
             </div>
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3.5h6" /><path d="M10 3.5v5.2L5 18a2 2 0 0 0 1.8 2.5h10.4A2 2 0 0 0 19 18l-5-9.3V3.5" /><path d="M7.5 14.5h9" /></svg>
@@ -172,8 +174,8 @@
           <div class="window terminal" role="figure" aria-label="Output of npm run check">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>terminal</span></div>
             <pre><code><span class="c">$</span> npm run check
-<span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 934 lines.
-<span class="ok">ℹ pass 84</span>
+<span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 1151 lines.
+<span class="ok">ℹ pass 111</span>
 ℹ fail 0</code></pre>
           </div>
         </section>

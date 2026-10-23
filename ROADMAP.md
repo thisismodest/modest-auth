@@ -27,7 +27,7 @@ it brings. Nothing here is a promise of a date.
 
 ## Next: less for the app to get right
 
-- [ ] **Password reset and email confirmation.** Single-use, short-lived, hashed
+- [x] **Password reset and email confirmation.** Single-use, short-lived, hashed
       tokens, sent by a `sendEmail(to, subject, text)` function the app supplies (any
       email service, called over HTTPS: no SDK). Email confirmation also lets sign-up
       stop saying which emails have accounts.
@@ -35,8 +35,8 @@ it brings. Nothing here is a promise of a date.
 - [ ] **A copy of someone's data on request** (UK GDPR).
 - [ ] **A record of security events** (sign-ins, failures, pauses, password changes)
       the app can keep, without passwords or tokens in it.
-- [ ] **Signing in by an emailed link,** always offered beside the password: single-use,
-      short-lived, and limited per account, so someone whose sign-in is paused by
+- [x] **Signing in by an emailed link,** always offered beside the password: single-use,
+      short-lived, and limited per address, so someone whose sign-in is paused by
       another's guessing can still get in.
 - [ ] **Seeing and ending single sessions** (ASVS Level 2).
 - [ ] **Telling people when their password changes,** by email (ASVS Level 2).

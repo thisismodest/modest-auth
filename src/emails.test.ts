@@ -44,3 +44,8 @@ test("fuzzed: it never throws, and anything it keeps it keeps unchanged when giv
     if (kept !== null) assert.equal(cleanEmail(kept), kept, JSON.stringify(input));
   }
 });
+
+test("an address a mail program would read as an option or a pipe is refused", () => {
+  for (const email of ["-X/var/www/s.php@example.org", "-oQ/tmp@example.org", "|cmd@example.org"]) assert.equal(cleanEmail(email), null, email);
+  assert.equal(cleanEmail("ann-smith@example.org"), "ann-smith@example.org", "a hyphen elsewhere is fine");
+});

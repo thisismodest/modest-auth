@@ -23,7 +23,7 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 900 lines of source: only what sign-in needs.
+- **Small.** About 1,100 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, or passkeys today, use a
@@ -32,8 +32,19 @@ this is for you.
 
 ## What it does
 
-- **Accounts:** an email and a password. Change the password (which ends every other
-  session), or delete the account.
+- **Accounts:** an email and a password, made by a link emailed to that address:
+  whoever opens it chooses the password, so nobody can sign up with someone else's
+  email. Change the password (which ends every other session), or delete the account.
+- **Forgotten passwords:** the same link, sent to an email that has an account, chooses
+  a new password, and signs out everywhere else.
+- **Signing in** with the password, or with a link emailed on request, always offered:
+  so someone whose sign-in is paused by another's guessing can still get in.
+- **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
+  choose a password, 15 to sign in). The token follows `#` in the link, which browsers
+  never send to a server, so it stays out of logs and `Referer` headers. At most 3 of
+  each kind to one address in 15 minutes, and every one sent stays usable for at least
+  that long, so nobody can flood an inbox, or (while the email queue isn't full) stop
+  its owner getting a link.
 - **New passwords** follow NIST SP 800-63B: 15 to 200 characters (counted as
   characters, not bytes), any characters at all, no rules about mixing them, but not
   one of the 5,500 passwords that long in two public lists of common ones (one from
@@ -61,15 +72,19 @@ this is for you.
     that account (but not its owner, signing in from elsewhere);
   - 100 tries at one account an hour from anywhere pauses signing in to it (its
     signed-in owner can still change the password or delete the account);
-  - 20 sign-ins, sign-ups, or password checks from one address in 15 minutes pauses
+  - 20 sign-ins, links, or password checks from one address in 15 minutes pauses
     that address, and 200 from one IPv6 /48;
+  - 5 links asked for from one address in 15 minutes, and 20 from one IPv6 /48, so
+    nobody can use sign-up to email strangers in bulk;
   - 10 password checks an hour by an account's own signed-in sessions (changing the
     password, deleting the account), so a stolen session can't be used to guess it.
 
   IPv6 addresses count by their /64; a port added by a proxy is ignored; and
   `X-Forwarded-For` is only believed through the proxies you declare.
-- **No telling who has an account at sign-in:** a wrong email and a wrong password get
-  the same answer, after the same work (see the threat model for one small exception).
+- **No telling who has an account:** signing in, signing up, and asking for a link
+  each give the same answer, after the same work, whether or not the email has one;
+  and an email goes either way (for a sign-in link to an email with no account, one
+  saying so). See the threat model for one small exception.
 - **Sign-ins can't take the server down:** password hashing runs two at a time, with a
   short queue. Under a flood, further sign-ins are refused as "busy" (without counting
   against anyone) until it passes.
@@ -93,11 +108,18 @@ import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
 
-// Its tables (auth_users, auth_sessions, auth_limits) can live in your app's own database.
+// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
 const auth = createAuth(new DatabaseSync("app.db"));
-// Your site's address (HTTPS), and how many reverse proxies are in front of it:
-// 0 if none, so nobody can claim another address in X-Forwarded-For.
-const handler = createHandler(auth, { origin: "https://example.org", proxies: 0 });
+const handler = createHandler(auth, {
+  // Your site's address (HTTPS), and how many reverse proxies are in front of it:
+  // 0 if none, so nobody can claim another address in X-Forwarded-For.
+  origin: "https://example.org",
+  proxies: 0,
+  // Your page that emailed links open (see "The link page" below).
+  linkPage: "/account/link",
+  // Your way of sending email: any service. Give it a timeout of its own.
+  sendEmail: (to, subject, text) => sendWithYourService({ to, subject, text }),
+});
 
 const server = createServer(async (req, res) => {
   if (await handleNode(handler, req, res)) return; // /auth/*, answered; anything else untouched
@@ -115,20 +137,43 @@ The routes take and give JSON:
 | Route | Body | Does |
 | --- | --- | --- |
 | `GET /auth/session` | | `{ user: { email } }`, or `{ user: null }` |
-| `POST /auth/sign-up` | `{ email, password }` | Makes the account, and signs in |
+| `POST /auth/send-password-link` | `{ email }` | Emails a link to choose a password: to sign up, or for a forgotten one |
+| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in |
+| `POST /auth/link` | `{ token }` | Which email a link is for, and its kind: `{ kind, email }` |
+| `POST /auth/set-password` | `{ token, password }` | From a password link: makes the account or replaces its password, signs in, and ends every other session |
+| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in |
 | `POST /auth/sign-in` | `{ email, password }` | Signs in (a fresh session; any old one ends) |
 | `POST /auth/sign-out` | none, or `{}` | Ends this session |
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
 | `POST /auth/password` | `{ current, next }` | Changes the password, and ends every other session |
 | `POST /auth/delete-account` | `{ password }` | Deletes the account and its sessions |
 
-Every `POST` must come from the site's own pages, with `Content-Type: application/json`
-(even with no body). A refusal is `{ error: { code, message } }`, with an HTTP status to
+The two that send a link answer `202` and `{}` whatever happens, so nobody can tell
+whether an email has an account. Every `POST` must come from the site's own pages, with
+`Content-Type: application/json` (even with no body). A refusal is `{ error: { code, message } }`, with an HTTP status to
 match (and `Retry-After` when paused or busy); the message is fit to show. [`examples/node-http.ts`](examples/node-http.ts) is a whole working app
 in one file: run it with `node examples/node-http.ts`.
 
 `createAuth` alone gives the same accounts, sessions, and limits, without the routes,
 for an app that needs its own; see "Using the parts" below.
+
+### The link page
+
+Emailed links open your page at `linkPage`, with the token after `#`:
+`/account/link#password=…` or `/account/link#sign-in=…`. The example has one. The page:
+
+1. **Reads the token first,** before any other script runs, and takes it out of the
+   address bar (`history.replaceState`). Keep analytics and other sites' scripts off it.
+2. **Asks `POST /auth/link` which email it's for, and says so:** "Choose a password for
+   ann@example.org", or "Sign in as ann@example.org".
+3. **Waits for the person to act:** a password and a button, or just a button. It never
+   acts by itself, because someone could send a person their own link, to sign them in
+   to the wrong account unawares; showing the email is what lets them notice.
+4. **Sends the token** with the password to `set-password`, or alone to
+   `sign-in-with-link`.
+
+Because the token is after `#`, a mail service that opens links to check them can't
+use one up.
 
 ### With other servers
 
@@ -154,6 +199,9 @@ On a Unix socket there's no client address: put it behind a proxy and set `proxi
 
 ## What your app does
 
+- **Has a link page** that does the four things above.
+- **Sends email,** with a timeout of its own (a send holds one of 10 places until it
+  finishes), and without logging the text (it holds the link).
 - **Checks its own changing routes come from its own pages,** with `handler.fromSite(request)`,
   as the handler does for its own.
 - **Sets short timeouts** for slow clients, such as `server.requestTimeout = 10_000` and
@@ -189,21 +237,23 @@ Worth knowing:
   database file; while one writes, the others wait (the whole process waits) up to two
   seconds, then that request fails.
 - **Many people can share one address,** behind an office, a school, or a mobile
-  network. They share its allowance of 20 sign-ins in 15 minutes, so a busy shared
-  address can pause briefly. Likewise everyone in one IPv6 /48 (often one organisation)
-  shares 200.
+  network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
+  shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one
+  organisation) shares 200, and 20 links.
 
 ## Using the parts
 
 Without the handler, the app takes on what it does: check every changing request's
 `Origin` is the site's own; start a fresh session at each sign-in, ending the old one;
-and work out the caller's address with `addressKey`.
+work out the caller's address with `addressKey`; and for links, send the email
+`requestLink` gives after answering, whatever it says (when its `token` is null, an
+email saying there's no account), and answer the same either way.
 
 ```ts
 // Who's asking: here, one reverse proxy is in front. Refuse a request whose address isn't known.
 const from = addressKey({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"] }, 1);
 if (from === "unknown") return res.writeHead(400).end();
-const user = await auth.signIn(email, password, from); // or signUp; throws AuthError
+const user = await auth.signIn(email, password, from); // or usePasswordLink, useSignInLink; throws AuthError
 // The cookie is worked out from your site's origin (HTTPS: Secure, and __Host-).
 res.setHeader("set-cookie", sessionCookie(auth.startSession(user), "https://example.org"));
 const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://example.org") ?? "");
@@ -219,7 +269,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
   on the roadmap), so it makes no claim to a level. Level 2 would also need
   multi-factor sign-in, checking new passwords against a full breached-password set,
   letting people see and end single sessions, and telling them when their password
-  changes.
+  changes (all but the first on the roadmap).
 
 ## Deliberately not here
 
@@ -228,7 +278,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 | JWTs | A session in the database can be ended at once; a JWT is valid until it expires. For a site with a server, sessions are simpler and safer. |
 | Plugins, adapters, hooks | Every extension point is a way to break the guarantees above. |
 | Other databases | `node:sqlite` is built into Node; one database is one thing to get right. |
-| Social sign-in, SSO, magic links | Possibly later, one at a time, and only if they can be made as small and certain as the rest. See the roadmap. |
+| Social sign-in, SSO | Possibly later, one at a time, and only if they can be made as small and certain as the rest. See the roadmap. |
 | A user interface | Your forms, your words. |
 
 ## Documents

@@ -6,6 +6,37 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+### Added
+
+- Emailed links. `POST /auth/send-password-link` emails a link to choose a password,
+  which makes the account, or replaces a forgotten password (signing out everywhere
+  else); `POST /auth/send-sign-in-link` emails a link to sign in, always offered beside
+  the password, so someone paused by another's guessing can still get in. Links are
+  single-use, kept only as hashes, last 60 and 15 minutes, and carry the token after
+  `#`. `POST /auth/link` says which email a link is for, so the page it opens can show
+  it before anything happens.
+- Limits on links: 3 of each kind to one address in 15 minutes (quietly), and 5 asked
+  for from one address and 20 from one IPv6 /48.
+- `requestLink`, `lookUpLink`, `usePasswordLink`, and `useSignInLink` for apps using
+  the parts; `PASSWORD_LINK_MINUTES` and `SIGN_IN_LINK_MINUTES`.
+- An `invalid-link` error.
+
+### Changed
+
+- Sign-up is email first: an account is made only by a link emailed to the address,
+  so nobody can sign up with someone else's email, and sign-up no longer says whether
+  an email has an account.
+- `createHandler` needs `linkPage` (the app's page that links open) and `sendEmail`
+  (how the app sends email).
+- Emails with a local part starting `-` or `|` are refused.
+- The WAL is also emptied after old links are cleared, without waiting; and emptying
+  it never fails a request (if it can't finish, it's tried again later).
+
+### Removed
+
+- `POST /auth/sign-up`, `auth.signUp`, and the `email-taken` error: sign up with a
+  password link instead.
+
 ## [0.1.0] - 2026-10-23
 
 The first release.

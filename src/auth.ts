@@ -3,9 +3,15 @@
 // keeps a hash of each token, never the token itself, and a slow hash of each
 // password, never the password.
 //
-// It keeps its tables (auth_users, auth_sessions, auth_limits) in a node:sqlite
-// database you give it, which may be your app's own, and may be shared by
-// several processes.
+// An account is made by a link sent to its email: whoever opens it chooses the
+// password, so only the person who reads that inbox can. The same link, sent to
+// an email that has an account, chooses a new password; and a sign-in link
+// signs in without one. Links are single-use and short-lived, and kept only as
+// hashes.
+//
+// It keeps its tables (auth_users, auth_sessions, auth_links, auth_limits) in a
+// node:sqlite database you give it, which may be your app's own, and may be
+// shared by several processes.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
@@ -25,14 +31,45 @@ const DAY_MS = 86_400_000;
 const SEEN_EVERY_MS = 60 * 60 * 1000;
 /** Sessions one account can have at once: beyond this, the oldest ends. */
 const MOST_SESSIONS = 50;
+/** How long a link to choose a password lasts. */
+export const PASSWORD_LINK_MINUTES = 60;
+/** How long a sign-in link lasts. */
+export const SIGN_IN_LINK_MINUTES = 15;
+const MINUTE_MS = 60_000;
+
+/** What an emailed link does: choose a password (making the account, if there isn't one), or sign in. */
+export type LinkKind = "password" | "sign-in";
+
+/**
+ * An email to send. `token` goes in the link, and only `to` should get it; for a
+ * sign-in link to an email with no account there's none, and the email says so
+ * instead, so an email goes either way. `account` chooses the email's words, and
+ * must never change what the person asking is told. Not worth sending after `expires`.
+ */
+export type Link = { kind: LinkKind; to: string; token: string | null; account: boolean; expires: number };
 
 export type Auth = {
-  /** A new account. `from` is who's asking (addressKey in limits.ts). */
-  signUp(email: string, password: string, from: string): Promise<User>;
+  /**
+   * An email to send to `email`, or null if none should be: at most 3 of each kind
+   * to one address in 15 minutes, and the rest quietly aren't sent, so nobody can
+   * flood an inbox; every link sent in those 15 minutes still works, so nobody can
+   * stop its owner getting one either. An email goes whether or not there's an
+   * account (for a sign-in link to an email with none, one saying so), so neither
+   * the answer nor the work after it shows which. At most 5 asked for from one
+   * address in 15 minutes, and 20 from one IPv6 /48. `from` is who's asking
+   * (addressKey in limits.ts).
+   */
+  requestLink(kind: LinkKind, email: string, from: string): Link | null;
+  /** Which email a link is for, and its kind, without using it: for the page it opens to show, so nobody is signed in to someone else's account unawares. */
+  lookUpLink(token: string, from: string): { kind: LinkKind; email: string };
+  /** The account, given a password link's token and the password chosen: made, or its password replaced (every session ending). */
+  usePasswordLink(token: string, password: string, from: string): Promise<User>;
+  /** The account a sign-in link's token is for. */
+  useSignInLink(token: string, from: string): User;
   /** The account, if the password is right. A wrong email and a wrong password get the same answer. */
   signIn(email: string, password: string, from: string): Promise<User>;
   /**
-   * A new session for a user just returned by signIn, signUp, or changePassword: the
+   * A new session for a user just returned by signIn, a link, or changePassword: the
    * token to put in their cookie. One session for each time the password was checked,
    * and only while it's still the account's password (and the account still there).
    */
@@ -65,13 +102,23 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions (user);
   CREATE INDEX IF NOT EXISTS auth_sessions_expires ON auth_sessions (expires);
   CREATE INDEX IF NOT EXISTS auth_sessions_seen ON auth_sessions (seen);
+  CREATE TABLE IF NOT EXISTS auth_links (
+    token TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    email TEXT NOT NULL,
+    expires INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS auth_links_email ON auth_links (email);
+  CREATE INDEX IF NOT EXISTS auth_links_expires ON auth_links (expires);
 `;
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
 /** What addressKey gives for a real address: IPv4, or an IPv6 /64. */
 const ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3}::\/64$/;
 const WRONG = () => new AuthError("wrong-credentials", "That email and password don't match.");
-const TAKEN = () => new AuthError("email-taken", "There's already an account for that email: sign in instead.");
+const EXPIRED = () => new AuthError("invalid-link", "That link has expired or been used. Please ask for a new one.");
+/** A link token as made here: 32 random bytes, base64url. */
+const LINK_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
 export function createAuth(db: DatabaseSync): Auth {
@@ -85,7 +132,7 @@ export function createAuth(db: DatabaseSync): Auth {
   const limit = databaseLimits(db);
 
   // Each counted before a password is hashed, so tries sent all at once count too.
-  // 20 sign-ins, sign-ups, or password checks from one address in 15 minutes.
+  // 20 sign-ins, links, or password checks from one address in 15 minutes.
   const perAddress = limit("address", 20, 15 * 60 * 1000);
   // 10 tries at one account from one address in 15 minutes: a stranger elsewhere can't lock its owner out.
   const perAccountAndAddress = limit("account+address", 10, 15 * 60 * 1000);
@@ -96,6 +143,14 @@ export function createAuth(db: DatabaseSync): Auth {
   // 10 password checks an hour by the account's own signed-in sessions (changing the password, deleting the
   // account): strangers can't use these up, and a stolen session can't guess the password.
   const perOwner = limit("owner", 10, 60 * 60 * 1000);
+  // 3 links of each kind emailed to one address in 15 minutes: no more, but quietly, so the answer is the same
+  // either way. Each exact address counts alone: another spelling that reaches the same inbox can't use up its
+  // allowance (its links go to that spelling, and its account), and the limits on senders bound the rest.
+  const perInbox = limit("inbox", 3, 15 * MINUTE_MS);
+  // 5 links asked for from one address, and 20 from one IPv6 /48, in 15 minutes: so nobody can use sign-up to email
+  // strangers in bulk.
+  const linksFrom = limit("links", 5, 15 * MINUTE_MS);
+  const linksFromBlock = limit("links-block", 20, 15 * MINUTE_MS);
   const fromWhere = (from: string) => {
     // Without an address, everyone would share one allowance: that's a mistake in the calling code.
     if (typeof from !== "string" || !ADDRESS.test(from)) throw new Error("from must be where the request came from, as addressKey gives it.");
@@ -140,8 +195,39 @@ export function createAuth(db: DatabaseSync): Auth {
   }
 
   const endAllSessions = (userId: string) => void db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId);
-  // After a deletion or a new password: empty the WAL into the file, so old rows don't linger beside it.
-  const flush = () => db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  /** Every link to an email ends: once one is used, or the password changes, or the account goes. */
+  const endLinks = (email: string) => void db.prepare("DELETE FROM auth_links WHERE email = ?").run(email);
+  /** The email a link's token was sent to, ending the link: once only, while it lasts, and for its kind. */
+  const takeLink = (token: string, kind: LinkKind) => {
+    if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
+    const row = db.prepare("DELETE FROM auth_links WHERE token = ? AND kind = ? AND expires > ? RETURNING email").get(tokenHash(token), kind, Date.now()) as
+      | { email: string }
+      | undefined;
+    if (!row) throw EXPIRED();
+    return row.email;
+  };
+  // Whether the WAL may still hold rows that were removed (it couldn't be emptied last time).
+  let unflushed = false;
+  /**
+   * Empties the WAL into the file, so removed rows don't linger beside it: after a deletion or a new password
+   * (waiting, as any write does, for another process), and after clearing old links on an everyday request
+   * (`wait` false: not waiting at all). Best effort, never failing the request: if another process is reading,
+   * or the app is part-way through its own transaction or query on this connection (it's the app's connection
+   * too), it's tried again at every clearing until it's done. The app's own busy_timeout is left as it was.
+   */
+  const flush = (wait = true) => {
+    unflushed = true;
+    if (db.isTransaction) return;
+    const timeout = (db.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
+    try {
+      if (!wait) db.exec("PRAGMA busy_timeout = 0;");
+      unflushed = (db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy: number }).busy !== 0;
+    } catch {
+      // Left for the next clearing.
+    } finally {
+      if (!wait) db.exec(`PRAGMA busy_timeout = ${timeout};`);
+    }
+  };
 
   let swept = 0;
   /** Expired and idle sessions, cleared a batch at a time, at most every ten seconds. */
@@ -151,26 +237,79 @@ export function createAuth(db: DatabaseSync): Auth {
     db.prepare(
       "DELETE FROM auth_sessions WHERE token IN (SELECT token FROM auth_sessions WHERE expires <= ? UNION SELECT token FROM auth_sessions WHERE seen <= ? LIMIT 2000)",
     ).run(now, now - IDLE_DAYS * DAY_MS);
+    // Links hold the emails of people who may have no account: once they've gone, not left in the WAL either.
+    const cleared = db.prepare("DELETE FROM auth_links WHERE token IN (SELECT token FROM auth_links WHERE expires <= ? LIMIT 2000)").run(now).changes;
+    if (cleared || unflushed) flush(false);
   };
 
   return {
-    async signUp(given, password, from) {
-      checkHashingFree();
+    requestLink(kind, given, from) {
+      if (kind !== "password" && kind !== "sign-in") throw new Error('kind must be "password" or "sign-in".');
       fromWhere(from);
+      linksFrom(from);
+      if (from.endsWith("::/64")) linksFromBlock(`${from.split(":").slice(0, 3).join(":")}::/48`);
       const email = cleanEmail(given);
       if (!email) throw new AuthError("invalid-email", "Please give your email address.");
-      checkNewPassword(password, email);
-      if (userRow("email", email)) throw TAKEN();
-      const user = { id: randomUUID(), email };
-      const hashed = await hashPassword(password);
+      const now = Date.now();
+      sweep(now);
+      const account = !!userRow("email", email);
+      // Counted, a link stored, and an email sent, whether or not there's an account: the same work either way.
       try {
-        db.prepare("INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?)").run(user.id, email, hashed, Date.now());
+        perInbox(`${kind}\0${email}`);
       } catch (error) {
-        // Two sign-ups for one email at once: the second finds it taken. Anything else is a real failure.
-        if (userRow("email", email)) throw TAKEN();
+        if (error instanceof AuthError) return null;
         throw error;
       }
+      const token = randomBytes(32).toString("base64url");
+      const expires = now + (kind === "password" ? PASSWORD_LINK_MINUTES : SIGN_IN_LINK_MINUTES) * MINUTE_MS;
+      // A sign-in link with no account to sign in to is stored as one that does nothing (for the same work), and never sent.
+      const usable = kind === "password" || account;
+      db.prepare("INSERT INTO auth_links (token, kind, email, expires) VALUES (?, ?, ?, ?)").run(tokenHash(token), usable ? kind : "none", email, expires);
+      return { kind, to: email, token: usable ? token : null, account, expires };
+    },
+
+    lookUpLink(token, from) {
+      fromWhere(from);
+      if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
+      const row = db.prepare("SELECT kind, email FROM auth_links WHERE token = ? AND kind IN ('password', 'sign-in') AND expires > ?").get(tokenHash(token), Date.now()) as
+        | { kind: LinkKind; email: string }
+        | undefined;
+      if (!row) throw EXPIRED();
+      return { kind: row.kind, email: row.email };
+    },
+
+    async usePasswordLink(token, password, from) {
+      checkHashingFree();
+      fromWhere(from);
+      // Looked at first, but only used once the password will do: a password refused doesn't use up the link.
+      if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
+      const link = db.prepare("SELECT email FROM auth_links WHERE token = ? AND kind = 'password' AND expires > ?").get(tokenHash(token), Date.now()) as
+        | { email: string }
+        | undefined;
+      if (!link) throw EXPIRED();
+      checkNewPassword(password, link.email);
+      const hashed = await hashPassword(password);
+      const email = takeLink(token, "password");
+      // Made, or (if there's an account, or one was made meanwhile) its password replaced.
+      const { id } = db
+        .prepare("INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET password = excluded.password RETURNING id")
+        .get(randomUUID(), email, hashed, Date.now()) as { id: string };
+      endAllSessions(id);
+      endLinks(email);
+      flush();
+      const user = { id, email };
       checked.set(user, hashed);
+      return user;
+    },
+
+    useSignInLink(token, from) {
+      fromWhere(from);
+      const email = takeLink(token, "sign-in");
+      const row = userRow("email", email);
+      if (!row) throw EXPIRED();
+      endLinks(email);
+      const user = { id: row.id, email: row.email };
+      checked.set(user, row.password);
       return user;
     },
 
@@ -188,7 +327,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const now = Date.now();
       sweep(now);
       const hash = checked.get(user);
-      if (hash === undefined) throw new Error("startSession needs a user just returned by signIn, signUp, or changePassword, and starts one session for it.");
+      if (hash === undefined) throw new Error("startSession needs a user just returned by signIn, a link, or changePassword, and starts one session for it.");
       checked.delete(user);
       // Only while the account exists and still has the password that was checked.
       const started = db
@@ -229,6 +368,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ?").run(fresh, userId, hash);
       if (done.changes === 0) throw WRONG();
       endAllSessions(userId);
+      endLinks(row.email);
       flush();
       const user = { id: row.id, email: row.email };
       checked.set(user, fresh);
@@ -241,6 +381,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const hash = await verify(row, row.email, password, from, true);
       const done = db.prepare("DELETE FROM auth_users WHERE id = ? AND password = ?").run(userId, hash);
       if (done.changes === 0) throw WRONG();
+      endLinks(row.email);
       flush();
     },
   };
