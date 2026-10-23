@@ -1,0 +1,43 @@
+# Every push and pull request: types, tests, the build, and the promises CI can
+# check by itself: no runtime dependencies, only Node's own modules imported, and
+# the source under 1,000 lines (and 50,000 characters, so long lines can't hide it).
+# Actions are pinned to exact commits (their version in the comment), so a moved
+# tag can't change what runs here.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported (package.json's engines), and the latest.
+        node: ["24", "node"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: No dependencies, only Node's own modules, and the size budget
+        run: npm run rules
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
