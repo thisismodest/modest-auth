@@ -11,7 +11,7 @@ README.md for what it promises, and docs/threat-model.md for how.
 2. **Never weaken a default, and never add an option that could.** If a change makes
    anything in docs/threat-model.md less true, stop and ask.
 3. **Every security property has a test.** Add one with each; show it fails without the change.
-4. **Small.** Source under 1,000 lines (tests and examples aside). Prefer removing code.
+4. **Only what's needed.** Write no more than a feature needs, and prefer removing code to adding it.
 5. **No secrets or tokens in logs, errors, or test output.**
 6. **Git:** commit each finished piece of work on its own; never push or publish unless
    asked. Never add a co-author line or any other attribution.
@@ -36,7 +36,7 @@ README.md for what it promises, and docs/threat-model.md for how.
 | A whole app using it | `examples/node-http.ts` |
 | What it protects, and how | `docs/threat-model.md` |
 | What's next, and what never will be | `ROADMAP.md` |
-| CI: checks, the no-dependency and line-budget rules; CodeQL, Scorecard, releases | `.github/workflows/` |
+| CI: checks, the no-dependency and import rules; CodeQL, Scorecard, releases | `.github/workflows/` |
 | Repository settings, releasing, and security fixes | `docs/maintaining.md` |
 | The website (plain HTML on modest-ui, no build, no JavaScript), published by `pages.yml` | `site/` |
 
@@ -46,7 +46,7 @@ README.md for what it promises, and docs/threat-model.md for how.
 npm test            # node --test, TypeScript run directly
 npm run typecheck   # tsc --noEmit (strict)
 npm run build       # dist/ for publishing
-npm run rules       # no dependencies, only node: imports, the size budget
+npm run rules       # no dependencies, only node: imports, no hidden characters
 npm run check       # all four
 node examples/node-http.ts
 ```

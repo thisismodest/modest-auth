@@ -5,8 +5,10 @@
 //   form (import, export from, import(), require, createRequire), in any code file;
 // - no invisible or direction-changing characters in any code file ("Trojan
 //   Source", CVE-2021-42574: code that reads one way and runs another); write
-//   them as escapes ("\u202e") instead;
-// - the library's source under 1,000 lines and 50,000 characters.
+//   them as escapes ("\u202e") instead.
+//
+// It also counts the library's lines. There's no limit: the rule is to write only
+// what's needed, which a reviewer judges and a number can't.
 //
 //   node scripts/check-rules.ts
 
@@ -29,14 +31,12 @@ async function files(dir: string): Promise<string[]> {
 
 const allowed = (spec: string) => spec.startsWith("node:") || spec.startsWith("./") || spec.startsWith("../");
 let lines = 0;
-let characters = 0;
 // This file names the patterns it looks for, so it isn't searched itself.
 const self = relative(root, import.meta.filename);
 for (const file of [...(await files("src")), ...(await files("examples")), ...(await files("scripts"))].filter((f) => f !== self)) {
   const code = await readFile(join(root, file), "utf8");
   if (file.startsWith("src") && !/\.test\.[a-z]+$/.test(file)) {
     lines += code.split("\n").length;
-    characters += code.length;
   }
   for (const [found] of code.matchAll(/[\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/gu)) {
     problems.push(`${file}: an invisible character (U+${found.codePointAt(0)!.toString(16).toUpperCase()}): write it as an escape`);
@@ -50,11 +50,9 @@ for (const file of [...(await files("src")), ...(await files("examples")), ...(a
     problems.push(`${file}: "${found}": load modules with a plain import of a fixed name`);
   }
 }
-if (lines >= 1000) problems.push(`src: ${lines} lines: the source stays under 1,000`);
-if (characters >= 50_000) problems.push(`src: ${characters} characters: the source stays under 50,000`);
 
 if (problems.length) {
   console.error(problems.join("\n"));
   process.exit(1);
 }
-console.log(`Rules kept: no dependencies; only node: and own imports; source ${lines} lines, ${characters} characters.`);
+console.log(`Rules kept: no dependencies; only node: and own imports; source ${lines} lines.`);

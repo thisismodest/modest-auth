@@ -26,7 +26,7 @@ library stays small enough to trust.
 2. **No options that change how secure it is.** If there's a safest way, it's the only way.
 3. **A test for every security property**, named for what it promises, and failing if
    the promise breaks. Show it failing without your fix.
-4. **Fewer lines is better.** The source stays under 1,000 lines. Prefer removing to adding.
+4. **Only what's needed.** Write no more than a change needs. Prefer removing to adding.
 5. **Plain, typed TypeScript** that Node runs directly: erasable syntax only (no enums,
    namespaces, or parameter properties), strict settings, relative imports with `.ts`.
 6. **Comments say why,** in plain English. Docs are written for someone in a hurry: short
@@ -42,7 +42,7 @@ npm ci            # development tools only; install scripts are off (.npmrc)
 npm test          # the tests
 npm run typecheck
 npm run build     # dist/, as it would be published
-npm run rules     # no dependencies, only Node's modules, no hidden characters, the size budget
+npm run rules     # no dependencies, only Node's modules, no hidden characters
 npm run check     # all four, as CI runs them
 ```
 

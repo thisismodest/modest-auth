@@ -44,8 +44,8 @@ wrong are still welcome, as ordinary issues.
 - No runtime dependencies, and development tools installed with their install scripts
   turned off (`.npmrc`).
 - CI fails if a runtime dependency is ever added, if anything but Node's own modules
-  is imported, if a code file holds an invisible or direction-changing character
-  ("Trojan Source"), or if the source passes 1,000 lines.
+  is imported, or if a code file holds an invisible or direction-changing character
+  ("Trojan Source").
 - CodeQL's security queries run on every change, and weekly.
 - Every security property has a test, which must pass before anything is merged.
 - GitHub Actions are pinned to exact commits.
