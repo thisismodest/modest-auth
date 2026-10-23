@@ -38,7 +38,7 @@ it brings. Nothing here is a promise of a date.
 - [x] **Signing in by an emailed link,** always offered beside the password: single-use,
       short-lived, and limited per address, so someone whose sign-in is paused by
       another's guessing can still get in.
-- [ ] **Seeing and ending single sessions** (ASVS Level 2).
+- [x] **Seeing and ending single sessions** (ASVS Level 2).
 - [x] **Telling people when their password changes,** by email (ASVS Level 2).
 - [ ] **Checking new passwords against a full breached-password set** (ASVS Level 2),
       through a function the app supplies, so modest-auth itself still makes no network calls.

@@ -22,6 +22,9 @@ import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGES
 
 export type User = { id: string; email: string };
 
+/** One of an account's sessions, as its owner sees it: `id` names it (it can't be used to sign in), and `current` is the one asking. */
+export type Session = { id: string; started: number; lastUsed: number; current: boolean };
+
 /** A session lasts this long from signing in, however much it's used. */
 export const SESSION_DAYS = 30;
 /** And ends sooner if it isn't used for this long. */
@@ -105,6 +108,13 @@ export type Auth = {
   endSession(token: string): void;
   /** Signing out everywhere: every session of the user ends. */
   endAllSessions(userId: string): void;
+  /**
+   * The user's sessions, the most recently used first (`lastUsed` is written down at most hourly). `token`: the
+   * session asking, marked `current`.
+   */
+  sessionsOf(userId: string, token: string): Session[];
+  /** Ends one of the user's sessions, by its `id`; false if it has none of that id. */
+  endSessionOf(userId: string, id: string): boolean;
   /** A new password, given the current one. Every session of the user ends. */
   changePassword(userId: string, current: string, next: string, from: string): Promise<User>;
   /** The account and its sessions, gone, given its password. */
@@ -140,6 +150,8 @@ const SCHEMA = `
 `;
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
+/** A session's name for its owner: a hash of its stored hash, so it can't be used to sign in. */
+const sessionId = (stored: string) => createHash("sha256").update(`session\0${stored}`).digest("base64url").slice(0, 22);
 /** What addressKey gives for a real address: IPv4, or an IPv6 /64. */
 const ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3}::\/64$/;
 const WRONG = () => new AuthError("wrong-credentials", "That email and password don't match.");
@@ -434,6 +446,22 @@ export function createAuth(db: DatabaseSync): Auth {
     },
 
     endAllSessions,
+
+    sessionsOf(userId, token) {
+      const now = Date.now();
+      const mine = typeof token === "string" && token ? tokenHash(token) : "";
+      const rows = db
+        .prepare("SELECT token, expires, seen FROM auth_sessions WHERE user = ? AND expires > ? AND seen > ? ORDER BY seen DESC")
+        .all(userId, now, now - IDLE_DAYS * DAY_MS) as { token: string; expires: number; seen: number }[];
+      return rows.map((row) => ({ id: sessionId(row.token), started: row.expires - SESSION_DAYS * DAY_MS, lastUsed: row.seen, current: row.token === mine }));
+    },
+
+    endSessionOf(userId, id) {
+      if (typeof id !== "string" || !/^[\w-]{22}$/.test(id)) return false;
+      const rows = db.prepare("SELECT token FROM auth_sessions WHERE user = ?").all(userId) as { token: string }[];
+      const found = rows.find((row) => sessionId(row.token) === id);
+      return !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
+    },
 
     async changePassword(userId, current, next, from) {
       const row = userRow("id", userId);

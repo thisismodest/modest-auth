@@ -8,6 +8,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ### Added
 
+- Seeing and ending single sessions: `GET /auth/sessions` and `POST /auth/end-session`;
+  `sessionsOf` and `endSessionOf`.
 - Changing an account's email: `POST /auth/change-email` (signed in, with the
   password) emails a link to the new address, and `POST /auth/confirm-email`, opened
   where the account is signed in, moves it and ends every session. The old address is

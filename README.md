@@ -64,7 +64,8 @@ this is for you.
   its owner signs in.
 - **Sessions:** a 256-bit random token in a cookie. The database keeps only a hash of
   it, so a copy of the database can't be used to sign in as anyone. A session lasts 30
-  days, or ends after 7 days unused. Sign out, or sign out everywhere.
+  days, or ends after 7 days unused. Sign out, sign out everywhere, or see the account's
+  sessions (when each started, and was last used) and end any one.
 - **The cookie:** `HttpOnly`, `SameSite=Lax`, and over HTTPS `Secure` with the
   `__Host-` prefix, so no script can read it and no other host can set or receive it.
 - **Emails:** normalised, so the same letters in compatibility forms (`ａｎｎ` and
@@ -152,6 +153,8 @@ The routes take and give JSON:
 | `POST /auth/sign-in` | `{ email, password }` | Signs in (a fresh session; any old one ends) |
 | `POST /auth/sign-out` | none, or `{}` | Ends this session |
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
+| `GET /auth/sessions` | | The account's sessions: `{ sessions: [{ id, started, lastUsed, current }] }` |
+| `POST /auth/end-session` | `{ id }` | Ends one of them |
 | `POST /auth/password` | `{ current, next }` | Changes the password, and ends every other session |
 | `POST /auth/change-email` | `{ password, email }` | Emails a link to the new address (signed in) |
 | `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session |
@@ -278,9 +281,8 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 - **OWASP ASVS 5.0:** written with its authentication and session requirements in
   mind, but not yet checked against them requirement by requirement (that mapping is
   on the roadmap), so it makes no claim to a level. Level 2 would also need
-  multi-factor sign-in, checking new passwords against a full breached-password set,
-  letting people see and end single sessions, and telling them when their password
-  changes (all but the first on the roadmap).
+  multi-factor sign-in, and checking new passwords against a full breached-password set
+  (on the roadmap).
 
 ## Deliberately not here
 

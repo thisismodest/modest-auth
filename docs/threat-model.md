@@ -62,6 +62,7 @@ round modest-auth.
 | Every IPv4 visitor sharing one allowance (through NAT64, or a forgotten `proxies`) | An IPv4 address carried in IPv6 counts as that IPv4 address; a forwarded address with no proxies declared is warned about | `limits.ts`, `handler.ts` |
 | Locking someone out by guessing at their account | The per-account-and-address limit only pauses that address; the per-account limit is high, and doesn't stop the signed-in owner changing the password or deleting the account; and a sign-in link, always offered, isn't paused by it | `auth.ts` |
 | A sign-in racing a password change (or an account's deletion) | A session starts only for a user whose password was just checked, and only if it's still the account's; upgrading an old hash only replaces the hash that was checked | `auth.ts` |
+| A session someone else started, left running | The owner sees every session (when each started and was last used) and can end any one, by a name that can't sign anyone in | `auth.ts`, `handler.ts` |
 | Piling up sessions for one account | 50 at most; the oldest ends | `auth.ts` |
 | A copy of the database | Passwords only as salted scrypt hashes; sessions and links only as SHA-256 hashes of 256-bit tokens; limit keys only as hashes | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Hashes that grow weaker as computers get faster | Each hash records its cost; an older one is replaced at the current cost at the next sign-in | `passwords.ts`, `auth.ts` |
@@ -155,6 +156,9 @@ round modest-auth.
 - **Letters from other alphabets that look alike** (a Cyrillic `а` in `аnn@example.org`)
   make a different address, and so a different account, that looks the same. An app
   that shows emails to other people should bear that in mind.
+- **A stolen session can end its owner's sessions one at a time** (and keep its own),
+  as fast as they start. A password link needs no session, and ends every other one,
+  the thief's too: that's the way out.
 - **A stolen session can use up its owner's 10 password checks an hour,** so for that
   hour the owner can't change the password. They can still sign out everywhere (no
   password needed), which ends the stolen session: that should be the first step.

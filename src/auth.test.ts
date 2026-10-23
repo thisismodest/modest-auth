@@ -823,3 +823,29 @@ test("a password link to an address its account was moved from says it chooses a
   assert.ok(made.id !== x.id && made.id !== y.id, "two accounts could come back: neither is chosen for the other's sake");
   assert.equal((await auth.signIn("elsewhere@example.org", PASSWORD, "192.0.2.156")).id, x.id, "x is untouched");
 });
+
+test("an account's sessions can be seen and ended one at a time, by names that can't sign anyone in", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const bob = await signUp(auth, "bob@example.org", PASSWORD, "192.0.2.160");
+  const laptop = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, HERE));
+  const phone = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.161"));
+  const bobs = auth.startSession(await auth.signIn("bob@example.org", PASSWORD, "192.0.2.162"));
+  const sessions = auth.sessionsOf(ann.id, laptop);
+  assert.equal(sessions.length, 2, "only Ann's");
+  assert.deepEqual(sessions.map((s) => s.current).sort(), [false, true]);
+  for (const s of sessions) {
+    assert.match(s.id, /^[\w-]{22}$/);
+    assert.equal(auth.userOf(s.id), null, "a session's name doesn't sign anyone in");
+    assert.ok(s.started <= Date.now() && s.lastUsed <= Date.now());
+  }
+  const other = sessions.find((s) => !s.current)!;
+  assert.equal(auth.endSessionOf(bob.id, other.id), false, "nobody else can end it");
+  assert.ok(auth.userOf(phone));
+  assert.equal(auth.endSessionOf(ann.id, other.id), true);
+  assert.equal(auth.userOf(phone), null, "the phone is signed out");
+  assert.ok(auth.userOf(laptop), "this one isn't");
+  assert.ok(auth.userOf(bobs));
+  assert.equal(auth.endSessionOf(ann.id, other.id), false, "already gone");
+  for (const made of ["", "x", "../../", "a".repeat(22)]) assert.equal(auth.endSessionOf(ann.id, made), false);
+});

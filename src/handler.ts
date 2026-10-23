@@ -14,6 +14,8 @@
 //   POST /auth/sign-in               { email, password }
 //   POST /auth/sign-out               (no fields: an empty body, or {})
 //   POST /auth/sign-out-everywhere    (no fields)
+//   GET  /auth/sessions              the account's sessions: { sessions: [{ id, started, lastUsed, current }] }
+//   POST /auth/end-session           { id }: ends one of them
 //   POST /auth/password              { current, next }: every other session ends
 //   POST /auth/change-email          { password, email }: a link to the new address
 //   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
@@ -224,6 +226,14 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (token) auth.endSession(token);
       return reply(200, {}, clearedCookie(origin));
     },
+    "end-session": (b, r) => {
+      const token = tokenOf(r);
+      const user = token ? auth.userOf(token) : null;
+      if (!user) return refuse(401, "signed-out", "Please sign in.");
+      const current = auth.sessionsOf(user.id, token!).find((session) => session.current)?.id === b.id;
+      if (!auth.endSessionOf(user.id, b.id ?? "")) return refuse(404, "not-found", "There's no such session.");
+      return reply(200, {}, current ? clearedCookie(origin) : undefined);
+    },
     "sign-out-everywhere": (_b, r) => {
       const user = userOf(r);
       if (user) auth.endAllSessions(user.id);
@@ -281,6 +291,12 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (request.method === "GET" && name === "session") {
         const user = userOf(request);
         return reply(200, { user: user ? { email: user.email } : null });
+      }
+      if (request.method === "GET" && name === "sessions") {
+        const token = tokenOf(request);
+        const user = token ? auth.userOf(token) : null;
+        if (!user) return refuse(401, "signed-out", "Please sign in.");
+        return reply(200, { sessions: auth.sessionsOf(user.id, token!) });
       }
       const route = Object.hasOwn(routes, name) ? routes[name] : undefined;
       if (!route) return refuse(404, "not-found", "Not found.");

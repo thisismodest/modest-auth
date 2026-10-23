@@ -528,3 +528,22 @@ test("confirming a move needs the account signed in; the notice to the old addre
   await linkTo("ann@example.org", "password");
   assert.match(emails.at(-1)!.subject, /Choose a new password/);
 });
+
+test("the sessions route lists the account's sessions, and ending this one signs this browser out", async () => {
+  const { auth, send, signUp, forget } = setup();
+  await signUp("ann@example.org");
+  const phone = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.170"));
+  const listed = await send("/auth/sessions");
+  assert.equal(listed.status, 200);
+  assert.equal(listed.json.sessions.length, 2);
+  const other = listed.json.sessions.find((s: { current: boolean }) => !s.current);
+  const ended = await send("/auth/end-session", { id: other.id });
+  assert.deepEqual([ended.status, ended.set], [200, null], "another session ended: this browser stays signed in");
+  assert.equal(auth.userOf(phone), null);
+  const mine = (await send("/auth/sessions")).json.sessions[0];
+  assert.match((await send("/auth/end-session", { id: mine.id })).set!, /Max-Age=0/);
+  assert.equal((await send("/auth/end-session", { id: mine.id })).status, 401, "signed out now");
+  forget();
+  assert.equal((await send("/auth/sessions")).status, 401);
+  assert.equal((await send("/auth/sessions", undefined, { origin: "https://evil.example" })).headers.get("access-control-allow-origin"), null, "no other site can read it");
+});
