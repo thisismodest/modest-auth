@@ -123,6 +123,9 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>POST /auth/sign-out</code></td><td>none</td><td>Ends this session</td></tr>
                 <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
                 <tr><td><code>POST /auth/password</code></td><td><code>{ current, next }</code></td><td>Changes the password, and ends every other session</td></tr>
+                <tr><td><code>POST /auth/change-email</code></td><td><code>{ password, email }</code></td><td>Signed in: emails a link to the new address</td></tr>
+                <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From that link, signed in to the account: moves it, and ends every session</td></tr>
+                <tr><td><code>POST /auth/undo-email</code></td><td><code>{ token }</code></td><td>From the notice to the old address (for 7 days): moves it back, ends every session, and emails a link to choose a new password</td></tr>
                 <tr><td><code>POST /auth/delete-account</code></td><td><code>{ password }</code></td><td>Deletes the account and its sessions</td></tr>
               </tbody>
             </table>
@@ -160,7 +163,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
           <h2 id="link-page">The link page</h2>
           <p>
             Emailed links open your page at <code>linkPage</code>, with the token after <code>#</code>:
-            <code>/account/link#password=…</code> or <code>/account/link#sign-in=…</code>. Browsers never
+            <code>/account/link#password=…</code>, <code>#sign-in=…</code>, <code>#email=…</code>, or <code>#undo=…</code>. Browsers never
             send what follows <code>#</code> to a server, so the token stays out of logs, and a mail
             service that opens links to check them can't use one up. The page:
           </p>
@@ -168,7 +171,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
             <li><strong>Reads the token first,</strong> before any other script runs, and takes it out of the address bar. Keep analytics and other sites' scripts off it.</li>
             <li><strong>Asks <code>/auth/link</code> which email it's for, and says so:</strong> "Choose a password for ann@example.org", or "Sign in as ann@example.org".</li>
             <li><strong>Waits for the person to act.</strong> It never acts by itself: someone could send a person their own link, to sign them in to the wrong account. Showing the email is what lets them notice.</li>
-            <li><strong>Sends the token</strong> with the password to <code>set-password</code>, or alone to <code>sign-in-with-link</code>.</li>
+            <li><strong>Sends the token</strong> with the password to <code>set-password</code>, or alone to <code>sign-in-with-link</code>, <code>confirm-email</code>, or <code>undo-email</code>.</li>
           </ol>
           <div class="window">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>link.js</span></div>
@@ -312,6 +315,9 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
                 <tr><td><code>endSession(token)</code>, <code>endAllSessions(userId)</code></td><td>Sign out, here or everywhere</td></tr>
                 <tr><td><code>changePassword(userId, current, next, from)</code></td><td>A new password; every session ends</td></tr>
+                <tr><td><code>requestEmailChange(userId, password, email, from)</code></td><td>An email to send to the new address, or null</td></tr>
+                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> token for it</td></tr>
+                <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, and makes its password useless</td></tr>
                 <tr><td><code>deleteAccount(userId, password, from)</code></td><td>The account and its sessions, gone</td></tr>
               </tbody>
             </table>

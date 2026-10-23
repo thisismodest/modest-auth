@@ -18,7 +18,10 @@ const PASSWORD = "a long enough password";
 const signUp = async (auth: Auth, email: string, password: string, from: string) => {
   const link = auth.requestLink("password", email, from);
   if (!link) throw new Error("no link was sent");
-  return auth.usePasswordLink(link.token!, password, from);
+  // The user alone (as signIn gives it), but the same object, so a session can still start from it once.
+  const user: { id: string; email: string; made?: boolean } = await auth.usePasswordLink(link.token!, password, from);
+  delete user.made;
+  return user;
 };
 
 test("an account is an email and a password of 15 to 200 characters, one per email", async () => {
@@ -648,4 +651,175 @@ test("a sign-in still checking when a password link is used gets no session", as
   await auth.usePasswordLink(link.token!, "a brand new long password", HERE);
   const user = await signingIn;
   assert.throws(() => auth.startSession(user), code("wrong-credentials"));
+});
+
+test("moving an account to a new email: needs the password, a link to the new address, and ends every session", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, HERE));
+  await assert.rejects(auth.requestEmailChange(ann.id, "a wrong password here", "ann@new.example", HERE), code("wrong-credentials"));
+  await assert.rejects(auth.requestEmailChange(ann.id, PASSWORD, "ANN@example.org", HERE), code("invalid-email"), "the email it has already");
+  await assert.rejects(auth.requestEmailChange(ann.id, PASSWORD, "not an email", HERE), code("invalid-email"));
+  const link = (await auth.requestEmailChange(ann.id, PASSWORD, "Ann@New.example", HERE))!;
+  assert.deepEqual([link.kind, link.to, link.account], ["email", "ann@new.example", false]);
+  assert.deepEqual(auth.lookUpLink(link.token!, HERE), { kind: "email", email: "ann@new.example" });
+  assert.throws(() => auth.useSignInLink(link.token!, HERE), code("invalid-link"), "an email link isn't a sign-in link");
+  const moved = auth.useEmailLink(link.token!, ann.id, HERE);
+  assert.deepEqual([moved.id, moved.email, moved.previous], [ann.id, "ann@new.example", "ann@example.org"]);
+  assert.match(moved.undo, /^[\w-]{43}$/, "a link to undo it, for the old address");
+  assert.equal(auth.userOf(session), null, "every session ended");
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, HERE), code("wrong-credentials"), "the old email no longer signs in");
+  assert.equal((await auth.signIn("ann@new.example", PASSWORD, HERE)).id, ann.id);
+  assert.throws(() => auth.useEmailLink(link.token!, ann.id, HERE), code("invalid-link"), "once only");
+});
+
+test("moving to an address with an account: the same work and answer, an email saying so, and nothing moves", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  await signUp(auth, "bob@example.org", PASSWORD, "192.0.2.110");
+  const count = () => (db.prepare("SELECT count(*) AS n FROM auth_links").get() as { n: number }).n;
+  const before = count();
+  const link = (await auth.requestEmailChange(ann.id, PASSWORD, "bob@example.org", "192.0.2.111"))!;
+  assert.deepEqual([link.token, link.account, count() - before], [null, true, 1], "a link stored that does nothing, and an email saying so");
+  const free = (await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", "192.0.2.112"))!;
+  assert.equal(count() - before, 2, "the same for a free address");
+  assert.ok(free.token);
+});
+
+test("a pending move ends if the password changes, the account goes, or the address is taken first", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const first = (await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", HERE))!;
+  await auth.changePassword(ann.id, PASSWORD, "a brand new long password", HERE);
+  assert.throws(() => auth.useEmailLink(first.token!, ann.id, HERE), code("invalid-link"), "a new password ends it");
+
+  const taken = (await auth.requestEmailChange(ann.id, "a brand new long password", "bob@example.org", "192.0.2.113"))!;
+  await signUp(auth, "bob@example.org", PASSWORD, "192.0.2.114");
+  assert.throws(() => auth.useEmailLink(taken.token!, ann.id, HERE), code("invalid-link"), "the address taken meanwhile");
+
+  const last = (await auth.requestEmailChange(ann.id, "a brand new long password", "ann@other.example", "192.0.2.115"))!;
+  await auth.deleteAccount(ann.id, "a brand new long password", HERE);
+  assert.throws(() => auth.useEmailLink(last.token!, ann.id, HERE), code("invalid-link"), "the account gone");
+});
+
+test("a password link says whether it made the account or replaced its password", async () => {
+  const { auth } = fresh();
+  const first = auth.requestLink("password", "ann@example.org", HERE)!;
+  assert.equal((await auth.usePasswordLink(first.token!, PASSWORD, HERE)).made, true);
+  const again = auth.requestLink("password", "ann@example.org", HERE)!;
+  assert.equal((await auth.usePasswordLink(again.token!, "a brand new long password", HERE)).made, false);
+});
+
+test("asking to move an account is limited like other links and password checks", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, "192.0.2.120");
+  for (let i = 0; i < 3; i++) assert.ok(await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", `198.51.100.${130 + i}`));
+  assert.equal(await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", "198.51.100.140"), null, "3 to one address in 15 minutes, quietly");
+  for (let i = 0; i < 10; i++) await auth.requestEmailChange(ann.id, "a wrong password here", `x${i}@new.example`, `198.51.100.${150 + i}`).catch(() => {});
+  await assert.rejects(auth.requestEmailChange(ann.id, PASSWORD, "ann@third.example", "198.51.100.170"), code("too-many-tries"), "the owner's 10 password checks an hour");
+});
+
+test("a move link does nothing for anyone but the account it moves, signed in, and isn't used up by trying", async () => {
+  const { auth } = fresh();
+  const mallory = await signUp(auth, "mallory@evil.example", PASSWORD, HERE);
+  const vic = await signUp(auth, "vic@example.org", PASSWORD, "192.0.2.130");
+  const link = (await auth.requestEmailChange(mallory.id, PASSWORD, "vic.new@example.org", HERE))!;
+  assert.throws(() => auth.useEmailLink(link.token!, vic.id, HERE), code("invalid-link"), "opened by someone else");
+  assert.throws(() => auth.useEmailLink(link.token!, "", HERE), code("invalid-link"), "opened signed out");
+  assert.equal(auth.useEmailLink(link.token!, mallory.id, HERE).email, "vic.new@example.org", "still works for its own account");
+});
+
+test("the address a move took the account from can undo it: back, every session out, its password useless, and a link to choose another", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  // Someone with Ann's password moves her account, then changes the password and moves it again.
+  const first = auth.useEmailLink((await auth.requestEmailChange(ann.id, PASSWORD, "thief@evil.example", HERE))!.token!, ann.id, HERE);
+  await auth.changePassword(ann.id, PASSWORD, "the thief's own long password", HERE);
+  const second = auth.useEmailLink((await auth.requestEmailChange(ann.id, "the thief's own long password", "thief2@evil.example", "192.0.2.131"))!.token!, ann.id, HERE);
+  const thiefSession = auth.startSession(await auth.signIn("thief2@evil.example", "the thief's own long password", HERE));
+  // The thief's own undo (to the address they moved it to first) can't cancel Ann's, which is earlier.
+  auth.useUndoLink(second.undo, "192.0.2.135");
+  assert.deepEqual(auth.lookUpLink(first.undo, HERE), { kind: "undo", email: "ann@example.org" });
+  const back = auth.useUndoLink(first.undo, "192.0.2.132");
+  assert.deepEqual([back.id, back.email], [ann.id, "ann@example.org"]);
+  assert.equal(auth.userOf(thiefSession), null, "everyone signed out");
+  await assert.rejects(auth.signIn("ann@example.org", "the thief's own long password", "192.0.2.133"), code("wrong-credentials"), "the thief's password no longer works");
+  assert.throws(() => auth.useUndoLink(first.undo, HERE), code("invalid-link"), "once only");
+  assert.equal((await auth.usePasswordLink(back.reset.token!, "ann's new long password", "192.0.2.134")).id, ann.id, "and Ann chooses a new one");
+});
+
+test("after a move, a password link to the old address takes the account back, rather than making a new one", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  auth.useEmailLink((await auth.requestEmailChange(ann.id, PASSWORD, "thief@evil.example", HERE))!.token!, ann.id, HERE);
+  const forgot = auth.requestLink("password", "ann@example.org", "192.0.2.136")!;
+  const user = await auth.usePasswordLink(forgot.token!, "ann's new long password", "192.0.2.136");
+  assert.deepEqual([user.id, user.email, user.made], [ann.id, "ann@example.org", false]);
+  await assert.rejects(auth.signIn("thief@evil.example", PASSWORD, "192.0.2.137"), code("wrong-credentials"));
+});
+
+test("the password link that follows an undo is sent whatever the limits", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const moved = auth.useEmailLink((await auth.requestEmailChange(ann.id, PASSWORD, "thief@evil.example", HERE))!.token!, ann.id, HERE);
+  for (let i = 0; i < 3; i++) auth.requestLink("password", "ann@example.org", `198.51.100.${180 + i}`);
+  assert.equal(auth.requestLink("password", "ann@example.org", "198.51.100.190"), null, "the address's allowance used up");
+  const back = auth.useUndoLink(moved.undo, "198.51.100.191");
+  assert.equal((await auth.usePasswordLink(back.reset.token!, "ann's new long password", HERE)).id, ann.id);
+});
+
+test("once the old address has taken its account back by a password link, the undo link is spent", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const moved = auth.useEmailLink((await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", HERE))!.token!, ann.id, HERE);
+  await signUp(auth, "ann@example.org", PASSWORD, "192.0.2.140");
+  assert.throws(() => auth.useUndoLink(moved.undo, HERE), code("invalid-link"));
+});
+
+test("a move asked for while a reset is under way isn't stored", async () => {
+  // However the two hashes finish, the move can't happen: refused if the reset came first, its link ended if not.
+  for (const resetFirst of [true, false]) {
+    const { auth } = fresh();
+    const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+    const reset = auth.requestLink("password", "ann@example.org", "192.0.2.141")!;
+    let asking: Promise<unknown>;
+    if (resetFirst) {
+      const using = auth.usePasswordLink(reset.token!, "ann's new long password", "192.0.2.141");
+      asking = auth.requestEmailChange(ann.id, PASSWORD, "thief@evil.example", "192.0.2.142");
+      await using;
+    } else {
+      asking = auth.requestEmailChange(ann.id, PASSWORD, "thief@evil.example", "192.0.2.142");
+      await auth.usePasswordLink(reset.token!, "ann's new long password", "192.0.2.141");
+    }
+    const link = (await asking.catch((e) => e)) as { token?: string } | AuthError;
+    if (link instanceof AuthError) assert.equal(link.code, "wrong-credentials");
+    else assert.throws(() => auth.useEmailLink(link.token!, ann.id, HERE), code("invalid-link"));
+  }
+});
+
+test("a sign-in still checking when the account moves gets no session, and a password change then tells the new address", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const link = (await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", HERE))!;
+  const signingIn = auth.signIn("ann@example.org", PASSWORD, "192.0.2.143");
+  const changing = auth.changePassword(ann.id, PASSWORD, "ann's new long password", "192.0.2.144");
+  auth.useEmailLink(link.token!, ann.id, HERE);
+  const late = await signingIn;
+  assert.throws(() => auth.startSession(late), code("wrong-credentials"));
+  assert.equal((await changing).email, "ann@new.example");
+});
+
+test("a password link to an address its account was moved from says it chooses a new password, and restores only when one account can come back", async () => {
+  const { auth } = fresh();
+  const x = await signUp(auth, "x@example.org", PASSWORD, HERE);
+  const y = await signUp(auth, "y@example.org", PASSWORD, "192.0.2.150");
+  auth.useEmailLink((await auth.requestEmailChange(x.id, PASSWORD, "shared@example.org", HERE))!.token!, x.id, HERE);
+  auth.useEmailLink((await auth.requestEmailChange(x.id, PASSWORD, "elsewhere@example.org", "192.0.2.151"))!.token!, x.id, HERE);
+  assert.equal(auth.requestLink("password", "shared@example.org", "192.0.2.152")!.account, true, "its email will say 'choose a new password'");
+  auth.useEmailLink((await auth.requestEmailChange(y.id, PASSWORD, "shared@example.org", "192.0.2.153"))!.token!, y.id, HERE);
+  auth.useEmailLink((await auth.requestEmailChange(y.id, PASSWORD, "y.elsewhere@example.org", "192.0.2.154"))!.token!, y.id, HERE);
+  const link = auth.requestLink("password", "shared@example.org", "192.0.2.155")!;
+  const made = await auth.usePasswordLink(link.token!, "a brand new long password", "192.0.2.155");
+  assert.ok(made.id !== x.id && made.id !== y.id, "two accounts could come back: neither is chosen for the other's sake");
+  assert.equal((await auth.signIn("elsewhere@example.org", PASSWORD, "192.0.2.156")).id, x.id, "x is untouched");
 });

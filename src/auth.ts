@@ -37,8 +37,13 @@ export const PASSWORD_LINK_MINUTES = 60;
 export const SIGN_IN_LINK_MINUTES = 15;
 const MINUTE_MS = 60_000;
 
-/** What an emailed link does: choose a password (making the account, if there isn't one), or sign in. */
-export type LinkKind = "password" | "sign-in";
+/**
+ * What an emailed link does: choose a password (making the account, if there isn't one), sign in, move an
+ * account to a new email, or undo a move (sent to the address it moved from).
+ */
+export type LinkKind = "password" | "sign-in" | "email" | "undo";
+/** How long the address an account moved from can undo the move. */
+export const UNDO_DAYS = 7;
 
 /**
  * An email to send. `token` goes in the link, and only `to` should get it; for a
@@ -59,13 +64,33 @@ export type Auth = {
    * address in 15 minutes, and 20 from one IPv6 /48. `from` is who's asking
    * (addressKey in limits.ts).
    */
-  requestLink(kind: LinkKind, email: string, from: string): Link | null;
+  requestLink(kind: "password" | "sign-in", email: string, from: string): Link | null;
   /** Which email a link is for, and its kind, without using it: for the page it opens to show, so nobody is signed in to someone else's account unawares. */
   lookUpLink(token: string, from: string): { kind: LinkKind; email: string };
-  /** The account, given a password link's token and the password chosen: made, or its password replaced (every session ending). */
-  usePasswordLink(token: string, password: string, from: string): Promise<User>;
+  /** The account, given a password link's token and the password chosen: made (`made`), or its password replaced (every session ending). */
+  usePasswordLink(token: string, password: string, from: string): Promise<User & { made: boolean }>;
   /** The account a sign-in link's token is for. */
   useSignInLink(token: string, from: string): User;
+  /**
+   * A link to email to `email`, to move the signed-in user's account to it, given the
+   * account's password; or null if none should be sent (3 to one address in 15
+   * minutes, as for other links). If the address already has an account, the email
+   * says so instead (`token` null): the same answer and work either way.
+   */
+  requestEmailChange(userId: string, password: string, email: string, from: string): Promise<Link | null>;
+  /**
+   * Moves the account to the email an email link was sent to, ending every session: only for `userId`, the
+   * account signed in where the link is opened (the one it moves), so a link sent to someone else does nothing.
+   * `previous` is the email it had; `undo`, a token for a link to it that undoes the move, for UNDO_DAYS.
+   */
+  useEmailLink(token: string, userId: string, from: string): User & { previous: string; undo: string };
+  /**
+   * Undoes a move, from the address it moved from: the account has that email again, every session ends, and
+   * its password stops working (whoever moved it may know it). `reset` is a password link to send there, made
+   * here so no limit can stop it. Every later move's undo link ends; an earlier one stays, so a thief's own
+   * undo can't cancel the owner's.
+   */
+  useUndoLink(token: string, from: string): User & { reset: Link };
   /** The account, if the password is right. A wrong email and a wrong password get the same answer. */
   signIn(email: string, password: string, from: string): Promise<User>;
   /**
@@ -106,9 +131,11 @@ const SCHEMA = `
     token TEXT PRIMARY KEY,
     kind TEXT NOT NULL,
     email TEXT NOT NULL,
-    expires INTEGER NOT NULL
+    expires INTEGER NOT NULL,
+    user TEXT REFERENCES auth_users(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS auth_links_email ON auth_links (email);
+  CREATE INDEX IF NOT EXISTS auth_links_user ON auth_links (user);
   CREATE INDEX IF NOT EXISTS auth_links_expires ON auth_links (expires);
 `;
 
@@ -195,16 +222,51 @@ export function createAuth(db: DatabaseSync): Auth {
   }
 
   const endAllSessions = (userId: string) => void db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId);
-  /** Every link to an email ends: once one is used, or the password changes, or the account goes. */
-  const endLinks = (email: string) => void db.prepare("DELETE FROM auth_links WHERE email = ?").run(email);
-  /** The email a link's token was sent to, ending the link: once only, while it lasts, and for its kind. */
+  /**
+   * Every link to an email ends, and every link to move the account `userId` to another: once one is used, or
+   * the password or email changes, or the account goes.
+   */
+  // Not an undo link: that stays with the address a move took the account from, whatever is done to the account.
+  const endLinks = (email: string, userId = "") => void db.prepare("DELETE FROM auth_links WHERE (email = ? OR user = ?) AND kind != 'undo'").run(email, userId);
+  /** The email a link's token was sent to (and the account it moves, for an email or undo link), ending the link: once only, while it lasts, and for its kind. */
   const takeLink = (token: string, kind: LinkKind) => {
     if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
-    const row = db.prepare("DELETE FROM auth_links WHERE token = ? AND kind = ? AND expires > ? RETURNING email").get(tokenHash(token), kind, Date.now()) as
-      | { email: string }
+    const row = db.prepare("DELETE FROM auth_links WHERE token = ? AND kind = ? AND expires > ? RETURNING email, user, expires").get(tokenHash(token), kind, Date.now()) as
+      | { email: string; user: string | null; expires: number }
       | undefined;
     if (!row) throw EXPIRED();
-    return row.email;
+    return row;
+  };
+  /**
+   * Moves an account back to the address a move took it from (an undo, ending at `undoExpires`), with `password`:
+   * every session ends, and every link of the account and of both addresses, but not an earlier move's undo link.
+   */
+  const moveBack = (userId: string, current: string, email: string, password: string, undoExpires: number) => {
+    try {
+      db.prepare("UPDATE auth_users SET email = ?, password = ? WHERE id = ?").run(email, password, userId);
+    } catch (error) {
+      // Taken by another process sharing the database, between the check and the move.
+      if (userRow("email", email)) throw EXPIRED();
+      throw error;
+    }
+    endAllSessions(userId);
+    // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
+    db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(userId, current, email, undoExpires, userId);
+  };
+  /**
+   * The account `email` can still take back by an undo (its oldest live one), if only one can: whoever reads
+   * that inbox moved it away. Several accounts moved away from one address is left to their undo links.
+   */
+  const undoTo = (email: string) => {
+    const rows = db
+      .prepare("SELECT l.user AS user, l.expires AS expires, u.email AS current FROM auth_links l JOIN auth_users u ON u.id = l.user WHERE l.kind = 'undo' AND l.email = ? AND l.expires > ? ORDER BY l.expires")
+      .all(email, Date.now()) as { user: string; expires: number; current: string }[];
+    return new Set(rows.map((row) => row.user)).size === 1 ? rows[0] : undefined;
+  };
+  const makeLink = (kind: LinkKind, email: string, expires: number, userId: string | null = null) => {
+    const token = randomBytes(32).toString("base64url");
+    db.prepare("INSERT INTO auth_links (token, kind, email, expires, user) VALUES (?, ?, ?, ?, ?)").run(tokenHash(token), kind, email, expires, userId);
+    return token;
   };
   // Whether the WAL may still hold rows that were removed (it couldn't be emptied last time).
   let unflushed = false;
@@ -244,7 +306,7 @@ export function createAuth(db: DatabaseSync): Auth {
 
   return {
     requestLink(kind, given, from) {
-      if (kind !== "password" && kind !== "sign-in") throw new Error('kind must be "password" or "sign-in".');
+      if (kind !== "password" && kind !== "sign-in") throw new Error('kind must be "password" or "sign-in" (an email link comes from requestEmailChange).');
       fromWhere(from);
       linksFrom(from);
       if (from.endsWith("::/64")) linksFromBlock(`${from.split(":").slice(0, 3).join(":")}::/48`);
@@ -252,7 +314,11 @@ export function createAuth(db: DatabaseSync): Auth {
       if (!email) throw new AuthError("invalid-email", "Please give your email address.");
       const now = Date.now();
       sweep(now);
-      const account = !!userRow("email", email);
+      // An account here, or one this address can take back (so a password link's email says what it will do).
+      // (Both looked up either way: the same work whether or not there's an account.)
+      const here = !!userRow("email", email);
+      const takeBack = kind === "password" && !!undoTo(email);
+      const account = here || takeBack;
       // Counted, a link stored, and an email sent, whether or not there's an account: the same work either way.
       try {
         perInbox(`${kind}\0${email}`);
@@ -271,7 +337,7 @@ export function createAuth(db: DatabaseSync): Auth {
     lookUpLink(token, from) {
       fromWhere(from);
       if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
-      const row = db.prepare("SELECT kind, email FROM auth_links WHERE token = ? AND kind IN ('password', 'sign-in') AND expires > ?").get(tokenHash(token), Date.now()) as
+      const row = db.prepare("SELECT kind, email FROM auth_links WHERE token = ? AND kind IN ('password', 'sign-in', 'email', 'undo') AND expires > ?").get(tokenHash(token), Date.now()) as
         | { kind: LinkKind; email: string }
         | undefined;
       if (!row) throw EXPIRED();
@@ -289,22 +355,32 @@ export function createAuth(db: DatabaseSync): Auth {
       if (!link) throw EXPIRED();
       checkNewPassword(password, link.email);
       const hashed = await hashPassword(password);
-      const email = takeLink(token, "password");
+      const { email } = takeLink(token, "password");
+      // An account moved away from this address that it can still take back: back it comes, with this password.
+      const back = !userRow("email", email) ? undoTo(email) : undefined;
+      if (back) {
+        moveBack(back.user, back.current, email, hashed, back.expires);
+        flush();
+        const user = { id: back.user, email, made: false };
+        checked.set(user, hashed);
+        return user;
+      }
+      const made = !userRow("email", email);
       // Made, or (if there's an account, or one was made meanwhile) its password replaced.
       const { id } = db
         .prepare("INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET password = excluded.password RETURNING id")
         .get(randomUUID(), email, hashed, Date.now()) as { id: string };
       endAllSessions(id);
-      endLinks(email);
+      endLinks(email, id);
       flush();
-      const user = { id, email };
+      const user = { id, email, made };
       checked.set(user, hashed);
       return user;
     },
 
     useSignInLink(token, from) {
       fromWhere(from);
-      const email = takeLink(token, "sign-in");
+      const { email } = takeLink(token, "sign-in");
       const row = userRow("email", email);
       if (!row) throw EXPIRED();
       endLinks(email);
@@ -329,10 +405,10 @@ export function createAuth(db: DatabaseSync): Auth {
       const hash = checked.get(user);
       if (hash === undefined) throw new Error("startSession needs a user just returned by signIn, a link, or changePassword, and starts one session for it.");
       checked.delete(user);
-      // Only while the account exists and still has the password that was checked.
+      // Only while the account exists and still has the password and email that were checked.
       const started = db
-        .prepare("INSERT INTO auth_sessions (token, user, expires, seen) SELECT ?, id, ?, ? FROM auth_users WHERE id = ? AND password = ?")
-        .run(tokenHash(token), now + SESSION_DAYS * DAY_MS, now, user.id, hash);
+        .prepare("INSERT INTO auth_sessions (token, user, expires, seen) SELECT ?, id, ?, ? FROM auth_users WHERE id = ? AND password = ? AND email = ?")
+        .run(tokenHash(token), now + SESSION_DAYS * DAY_MS, now, user.id, hash, user.email);
       if (started.changes === 0) throw WRONG();
       db.prepare(
         `DELETE FROM auth_sessions WHERE user = ? AND token NOT IN (SELECT token FROM auth_sessions WHERE user = ? ORDER BY expires DESC LIMIT ${MOST_SESSIONS})`,
@@ -365,14 +441,84 @@ export function createAuth(db: DatabaseSync): Auth {
       const hash = await verify(row, row.email, current, from, true);
       checkNewPassword(next, row.email);
       const fresh = await hashPassword(next);
-      const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ?").run(fresh, userId, hash);
-      if (done.changes === 0) throw WRONG();
+      // The email as it is now (it may have moved while the password was checked).
+      const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ? RETURNING email").get(fresh, userId, hash) as { email: string } | undefined;
+      if (!done) throw WRONG();
       endAllSessions(userId);
-      endLinks(row.email);
+      endLinks(done.email, userId);
       flush();
-      const user = { id: row.id, email: row.email };
+      const user = { id: row.id, email: done.email };
       checked.set(user, fresh);
       return user;
+    },
+
+    async requestEmailChange(userId, password, given, from) {
+      const row = userRow("id", userId);
+      if (!row) throw WRONG();
+      const hash = await verify(row, row.email, password, from, true);
+      linksFrom(from);
+      if (from.endsWith("::/64")) linksFromBlock(`${from.split(":").slice(0, 3).join(":")}::/48`);
+      const email = cleanEmail(given);
+      if (!email) throw new AuthError("invalid-email", "Please give your email address.");
+      if (email === row.email) throw new AuthError("invalid-email", "That's the account's email already.");
+      const taken = !!userRow("email", email);
+      try {
+        perInbox(`email\0${email}`);
+      } catch (error) {
+        if (error instanceof AuthError) return null;
+        throw error;
+      }
+      const token = randomBytes(32).toString("base64url");
+      const expires = Date.now() + PASSWORD_LINK_MINUTES * MINUTE_MS;
+      // To an address with an account already, one that does nothing (for the same work), and an email saying so.
+      // Only while the password just checked is still the account's: a reset meanwhile ends the request too.
+      const stored = db
+        .prepare("INSERT INTO auth_links (token, kind, email, expires, user) SELECT ?, ?, ?, ?, id FROM auth_users WHERE id = ? AND password = ?")
+        .run(tokenHash(token), taken ? "none" : "email", email, expires, userId, hash);
+      if (stored.changes === 0) throw WRONG();
+      return { kind: "email", to: email, token: taken ? null : token, account: taken, expires };
+    },
+
+    useEmailLink(token, signedIn, from) {
+      fromWhere(from);
+      // Only by the account it moves, signed in where it's opened: checked before the link is used up.
+      if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
+      const pending = db.prepare("SELECT user FROM auth_links WHERE token = ? AND kind = 'email' AND expires > ?").get(tokenHash(token), Date.now()) as { user: string } | undefined;
+      if (!pending || pending.user !== signedIn) throw EXPIRED();
+      const { email, user: userId } = takeLink(token, "email");
+      const row = userId ? userRow("id", userId) : undefined;
+      // Gone, or the address taken meanwhile: nothing to move.
+      if (!row || userRow("email", email)) throw EXPIRED();
+      try {
+        db.prepare("UPDATE auth_users SET email = ? WHERE id = ?").run(email, row.id);
+      } catch (error) {
+        // Taken by another process sharing the database, between the check and the change.
+        if (userRow("email", email)) throw EXPIRED();
+        throw error;
+      }
+      endAllSessions(row.id);
+      endLinks(row.email, row.id);
+      endLinks(email);
+      // An undo link for the address it moved from (each move its own: using one ends only later ones).
+      const undo = makeLink("undo", row.email, Date.now() + UNDO_DAYS * DAY_MS, row.id);
+      flush();
+      return { id: row.id, email, previous: row.email, undo };
+    },
+
+    useUndoLink(token, from) {
+      fromWhere(from);
+      const { email, user: userId, expires } = takeLink(token, "undo");
+      const row = userId ? userRow("id", userId) : undefined;
+      const holder = userRow("email", email);
+      // Gone, or the address since taken by another account: nothing to move back.
+      if (!row || (holder && holder.id !== row.id)) throw EXPIRED();
+      // A password that nothing matches (the form of a hash, so a stored one is never half-made).
+      const unusable = `$scrypt$ln=17,r=8,p=1$${randomBytes(16).toString("base64url")}$${randomBytes(32).toString("base64url")}`;
+      moveBack(row.id, row.email, email, unusable, expires);
+      const until = Date.now() + PASSWORD_LINK_MINUTES * MINUTE_MS;
+      const reset: Link = { kind: "password", to: email, token: makeLink("password", email, until), account: true, expires: until };
+      flush();
+      return { id: row.id, email, reset };
     },
 
     async deleteAccount(userId, password, from) {
@@ -381,7 +527,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const hash = await verify(row, row.email, password, from, true);
       const done = db.prepare("DELETE FROM auth_users WHERE id = ? AND password = ?").run(userId, hash);
       if (done.changes === 0) throw WRONG();
-      endLinks(row.email);
+      endLinks(row.email, userId);
       flush();
     },
   };

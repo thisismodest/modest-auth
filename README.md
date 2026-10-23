@@ -23,7 +23,7 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 1,100 lines of source: only what sign-in needs.
+- **Small.** About 1,350 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, or passkeys today, use a
@@ -37,6 +37,13 @@ this is for you.
   email. Change the password (which ends every other session), or delete the account.
 - **Forgotten passwords:** the same link, sent to an email that has an account, chooses
   a new password, and signs out everywhere else.
+- **Changing the email,** with the password and a link to the new address, opened where
+  the account is signed in. Every session ends, and the old address is told, with a
+  link that undoes the move for 7 days (and makes the password useless, in case it was
+  stolen); "forgotten password" at the old address does the same. So for 7 days the old
+  address can take the account back, even one handed on to someone else.
+- **Notices:** an email to the account when its password changes, and to the old
+  address when its email does.
 - **Signing in** with the password, or with a link emailed on request, always offered:
   so someone whose sign-in is paused by another's guessing can still get in.
 - **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
@@ -146,6 +153,9 @@ The routes take and give JSON:
 | `POST /auth/sign-out` | none, or `{}` | Ends this session |
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
 | `POST /auth/password` | `{ current, next }` | Changes the password, and ends every other session |
+| `POST /auth/change-email` | `{ password, email }` | Emails a link to the new address (signed in) |
+| `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session |
+| `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to choose a new password |
 | `POST /auth/delete-account` | `{ password }` | Deletes the account and its sessions |
 
 The two that send a link answer `202` and `{}` whatever happens, so nobody can tell
@@ -160,17 +170,18 @@ for an app that needs its own; see "Using the parts" below.
 ### The link page
 
 Emailed links open your page at `linkPage`, with the token after `#`:
-`/account/link#password=…` or `/account/link#sign-in=…`. The example has one. The page:
+`/account/link#password=…`, `#sign-in=…`, `#email=…`, or `#undo=…`. The example has one. The page:
 
 1. **Reads the token first,** before any other script runs, and takes it out of the
    address bar (`history.replaceState`). Keep analytics and other sites' scripts off it.
 2. **Asks `POST /auth/link` which email it's for, and says so:** "Choose a password for
-   ann@example.org", or "Sign in as ann@example.org".
+   ann@example.org", "Sign in as ann@example.org", "Use this address for your account:
+   ann@new.example", or "Move your account back to ann@example.org".
 3. **Waits for the person to act:** a password and a button, or just a button. It never
    acts by itself, because someone could send a person their own link, to sign them in
    to the wrong account unawares; showing the email is what lets them notice.
 4. **Sends the token** with the password to `set-password`, or alone to
-   `sign-in-with-link`.
+   `sign-in-with-link`, `confirm-email`, or `undo-email`.
 
 Because the token is after `#`, a mail service that opens links to check them can't
 use one up.

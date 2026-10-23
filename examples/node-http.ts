@@ -33,6 +33,8 @@ const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><ti
 <form method="post" data-route="sign-in"><input name="email" type="email" required> <input name="password" type="password" required> <button>Sign in</button></form>
 <form method="post" data-route="send-sign-in-link"><input name="email" type="email" required> <button>Email me a sign-in link</button></form>
 <form method="post" data-route="sign-out"><button>Sign out</button></form>
+<h2>Change your email</h2>
+<form method="post" data-route="change-email"><input name="email" type="email" required> <input name="password" type="password" required placeholder="Your password"> <button>Email the new address a link</button></form>
 <p id="status" role="status"></p>
 <script src="/app.js"></script>`;
 
@@ -42,6 +44,8 @@ const linkPage = `<!doctype html><meta charset="utf-8"><title>modest-auth exampl
 <h1 id="for">Checking the link…</h1>
 <form method="post" data-route="set-password" hidden><input name="password" type="password" required minlength="15"> <button>Save and sign in</button></form>
 <form method="post" data-route="sign-in-with-link" hidden><button>Sign in</button></form>
+<form method="post" data-route="confirm-email" hidden><button>Use this address</button></form>
+<form method="post" data-route="undo-email" hidden><button>Move it back</button></form>
 <p id="status" role="status"></p>
 <script src="/link.js"></script>`;
 
@@ -70,16 +74,19 @@ history.replaceState(null, "", location.pathname);
 const heading = document.getElementById("for");
 post("link", { token }).then(({ res, json }) => {
   if (!res.ok) return (heading.textContent = json.error.message);
-  heading.textContent = (json.kind === "password" ? "Choose a password for " : "Sign in as ") + json.email;
-  const form = document.querySelector(json.kind === "password" ? "[data-route=set-password]" : "[data-route=sign-in-with-link]");
+  const [words, route] = { password: ["Choose a password for ", "set-password"], "sign-in": ["Sign in as ", "sign-in-with-link"], email: ["Use this address for your account: ", "confirm-email"], undo: ["Move your account back to ", "undo-email"] }[json.kind];
+  heading.textContent = words + json.email;
+  const form = document.querySelector("[data-route=" + route + "]");
   form.hidden = false;
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const { res, json } = await post(form.dataset.route, { ...Object.fromEntries(new FormData(form)), token });
-    if (res.ok) location.href = "/";
+    if (res.ok && route === "undo-email") status("It's back, and everyone is signed out. Check your email for a link to choose a new password.");
+    else if (res.ok) location.href = "/";
     else status(json.error.message);
   });
 });`;
+// (Once an email changes, every session ends: the browser lands on the home page signed out, to sign in again.)
 
 function send(res: ServerResponse, type: string, body: string): void {
   res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'", "referrer-policy": "no-referrer" });

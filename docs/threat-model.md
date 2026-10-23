@@ -45,6 +45,12 @@ round modest-auth.
 | Emailing strangers in bulk through sign-up | At most 5 links asked for from one address, and 20 from one IPv6 /48, in 15 minutes | `auth.ts` |
 | A stuck or slow email service | 10 sends at once, 1,000 waiting, the rest dropped and logged; an email whose link has run out while it waited isn't sent; failures logged without the email's text | `handler.ts` |
 | An address a mail program would read as an option or a pipe (`-X/file@…`, `\|cmd@…`) | Refused | `emails.ts` |
+| Moving someone's account to your address | Needs the account's password and a session, and a link to the new address, opened where the account is signed in (so a link sent to anyone else does nothing); a move asked for while the password changed isn't stored | `auth.ts`, `handler.ts` |
+| Attaching your account to someone else's address (sending them your own move link) | Only the account being moved, signed in, can use its link | `auth.ts`, `handler.ts` |
+| A stolen password used to move an account away for good | The old address is told, with a link (for 7 days) that moves it back, signs everyone out, makes the password useless, and sends a link to choose a new one (made by the undo itself, so no limit can stop it); a password link to that address does the same. Every move gets one; nothing done to the account (a new password, another move) ends it, and using one ends only the same account's later moves' undo links, so a thief's own can't cancel the owner's; a password link restores the account only when just one account was moved away from that address | `auth.ts`, `handler.ts` |
+| Learning who has an account by asking to move yours to their address | The same answer and work either way, and an email either way (to an address with an account, one saying so) | `auth.ts`, `handler.ts` |
+| A change its owner didn't make, unnoticed | A notice to the account's email when its password changes, and to the old address when its email does | `handler.ts` |
+| A session started by a sign-in still checking when the account moves | A session starts only while the account has the email and password that were checked | `auth.ts` |
 | Guessing a password | scrypt at OWASP's cost (about 50ms a guess); limits per account and address, per account, and per address, counted before hashing so tries sent at once count too | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Easily guessed passwords, sprayed across many accounts | At least 15 characters; 5,500 common passwords that long refused, compared as letters and digits only and without trailing numbers (so adding spaces, punctuation, capitals, or a year doesn't get one through); ones made from the email, or a few characters repeated, refused too | `passwords.ts`, `common-passwords.txt` |
 | A password that differs from another only in broken Unicode | Passwords that aren't well-formed text are refused, not quietly changed | `passwords.ts` |
@@ -81,7 +87,13 @@ round modest-auth.
 ## Known limits
 
 - **Whoever reads an inbox can take over its account,** by choosing a new password or
-  signing in by link, as on most sites. Email is the way back in.
+  signing in by link, as on most sites. Email is the way back in. After a move, the old
+  address has 7 days to undo it; after that, the account belongs to its new address.
+  So an account handed on to someone else (sold, or given to a colleague) can be taken
+  back by its old address for 7 days.
+- **Someone with an account's password and a session can move it,** and has the
+  account until its old address undoes the move (and, if they also read the old
+  inbox, for good). That's why the undo link also makes the password useless.
 - **A determined attacker can pause signing in with the password to one account for up
   to an hour** by spending 100 guesses at it from several addresses. Its owner can still
   sign in by an emailed link (unless someone on the same address, or the same IPv6 /48,
@@ -91,6 +103,8 @@ round modest-auth.
   /64, and 20 from one IPv6 /48, every 15 minutes; with many addresses, more. The text is
   fixed (it says who sent it, and offers a link or says there's no account), but it's
   mail the address's owner didn't ask for, and it costs the site's sending reputation.
+- **One inbox can get 3 links of each kind (password, sign-in, email move) in 15
+  minutes,** so 9 in all, besides notices of changes to its own account.
 - **One inbox can get more than 3 links of a kind in 15 minutes** through spellings
   that reach it (`ann+x@`, and Gmail's dots), each counted as its own address: bounded
   by the limits on senders above.

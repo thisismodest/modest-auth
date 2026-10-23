@@ -87,6 +87,8 @@
                 <tr><td>Guessing or reusing a link</td><td>256-bit tokens, single-use, 60 minutes to choose a password and 15 to sign in; using one, or a new password, ends the rest</td></tr>
                 <tr><td>A link leaking from its URL</td><td>The token follows <code>#</code>, which browsers never send to a server; a mail service checking links can't use one</td></tr>
                 <tr><td>Sending someone your own link</td><td>The link page shows which email it's for, and acts only when the person does</td></tr>
+                <tr><td>Moving someone's account away</td><td>Needs its password, a session, and a link to the new address opened where the account is signed in; the old address is told, and can undo it for 7 days, which also makes the password useless</td></tr>
+                <tr><td>Changes nobody noticed</td><td>An email when the password changes, and to the old address when the email does</td></tr>
                 <tr><td>Flooding an inbox</td><td>3 links of each kind to one address in 15 minutes, the rest quietly not sent; each one sent still works, so nobody can stop its owner getting one</td></tr>
                 <tr><td>Stealing a session</td><td>A cookie scripts can't read, sent only to this exact site over HTTPS; a session ends after 7 days unused, and 30 at most</td></tr>
                 <tr><td>Other sites acting for someone</td><td>Every change must come from the site's own pages, as JSON</td></tr>

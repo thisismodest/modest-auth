@@ -8,6 +8,15 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ### Added
 
+- Changing an account's email: `POST /auth/change-email` (signed in, with the
+  password) emails a link to the new address, and `POST /auth/confirm-email`, opened
+  where the account is signed in, moves it and ends every session. The old address is
+  told, with a link (`POST /auth/undo-email`, for 7 days) that moves it back, signs
+  everyone out, and makes the password useless; a link to choose a new one follows.
+- Notices: an email when an account's password changes, and to the old address when
+  its email does.
+- `requestEmailChange`, `useEmailLink`, `useUndoLink`, `UNDO_DAYS`; `usePasswordLink`
+  says whether it `made` the account.
 - Emailed links. `POST /auth/send-password-link` emails a link to choose a password,
   which makes the account, or replaces a forgotten password (signing out everywhere
   else); `POST /auth/send-sign-in-link` emails a link to sign in, always offered beside
@@ -23,6 +32,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ### Changed
 
+- A session starts only while the account still has the email, as well as the
+  password, that was checked.
 - Sign-up is email first: an account is made only by a link emailed to the address,
   so nobody can sign up with someone else's email, and sign-up no longer says whether
   an email has an account.

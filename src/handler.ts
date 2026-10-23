@@ -15,9 +15,12 @@
 //   POST /auth/sign-out               (no fields: an empty body, or {})
 //   POST /auth/sign-out-everywhere    (no fields)
 //   POST /auth/password              { current, next }: every other session ends
+//   POST /auth/change-email          { password, email }: a link to the new address
+//   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
+//   POST /auth/undo-email            { token }: from the notice to the old address
 //   POST /auth/delete-account        { password }
 
-import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, type User } from "./auth.ts";
+import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
 import { atMost } from "./limits.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
@@ -113,6 +116,17 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
 
 /** The email for a link, in plain text. */
 function linkEmail(link: Link, site: string, url: string, origin: string): { subject: string; text: string } {
+  if (link.kind === "email") {
+    return link.token === null
+      ? {
+          subject: `Your email address on ${site}`,
+          text: `Someone asked to use this email address for an account on ${site}, but it has an account of its own already, so nothing has changed.\n\nIf it wasn't you, you can ignore this email.\n`,
+        }
+      : {
+          subject: `Confirm your new email address on ${site}`,
+          text: `To use this email address for your account on ${site}, open this link within ${PASSWORD_LINK_MINUTES} minutes, in a browser where you're signed in to that account:\n\n${url}\n\nUsing it signs you out everywhere. If you didn't ask, you can ignore this email: nothing changes without it.\n`,
+        };
+  }
   if (link.token === null) {
     return {
       subject: `Sign in to ${site}`,
@@ -147,17 +161,23 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const sending = atMost(10, 1000);
   // Why, but never the email's text (it holds the link) nor the service's own message (which may repeat it).
   const why = (error: unknown) => (error instanceof AuthError ? "too many waiting" : error instanceof Error ? error.name : typeof error);
-  /** Sent after the answer, so a slow email service doesn't hold it up. */
+  /** Sent after the answer, so a slow email service doesn't hold it up; not at all if it's no use by then. */
+  const queue = (to: string, subject: string, text: string, until: number) =>
+    setImmediate(() => {
+      sending(async () => {
+        if (Date.now() >= until) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
+        await sendEmail(to, subject, text);
+      }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
+    });
   const send = (link: Link | null) => {
     if (!link) return;
     const { subject, text } = linkEmail(link, site, `${origin}${linkPage}#${link.kind}=${link.token}`, origin);
-    setImmediate(() => {
-      sending(async () => {
-        if (Date.now() >= link.expires) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
-        await sendEmail(link.to, subject, text);
-      }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
-    });
+    queue(link.to, subject, text, link.expires);
   };
+  /** A notice of a change to an account, to its email: so its owner hears of a change they didn't make. */
+  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${site}`, `${text}\n`, Date.now() + 86_400_000);
+  const passwordChanged = (to: string) =>
+    notify(to, "Your password was changed", `The password for your account on ${site} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.`);
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
   const proxies = options.proxies ?? 0;
@@ -191,7 +211,12 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     "send-password-link": (b, _r, from) => (send(auth.requestLink("password", b.email ?? "", from)), reply(202, {})),
     "send-sign-in-link": (b, _r, from) => (send(auth.requestLink("sign-in", b.email ?? "", from)), reply(202, {})),
     link: (b, _r, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
-    "set-password": async (b, r, from) => signedIn(await auth.usePasswordLink(b.token ?? "", b.password ?? "", from), tokenOf(r)),
+    "set-password": async (b, r, from) => {
+      const user = await auth.usePasswordLink(b.token ?? "", b.password ?? "", from);
+      const answer = signedIn(user, tokenOf(r));
+      if (!user.made) passwordChanged(user.email);
+      return answer;
+    },
     "sign-in-with-link": (b, r, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r)),
     "sign-in": async (b, r, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r)),
     "sign-out": (_b, r) => {
@@ -207,7 +232,35 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     password: async (b, r, from) => {
       const user = userOf(r);
       if (!user) return refuse(401, "signed-out", "Please sign in.");
-      return signedIn(await auth.changePassword(user.id, b.current ?? "", b.next ?? "", from), null);
+      const changed = await auth.changePassword(user.id, b.current ?? "", b.next ?? "", from);
+      const answer = signedIn(changed, null);
+      passwordChanged(changed.email);
+      return answer;
+    },
+    "change-email": async (b, r, from) => {
+      const user = userOf(r);
+      if (!user) return refuse(401, "signed-out", "Please sign in.");
+      send(await auth.requestEmailChange(user.id, b.password ?? "", b.email ?? "", from));
+      return reply(202, {});
+    },
+    "confirm-email": (b, r, from) => {
+      // Only by the account it moves, signed in here: someone could send a person their own link.
+      const user = userOf(r);
+      if (!user) return refuse(401, "signed-out", "Please sign in, then open the link again.");
+      const moved = auth.useEmailLink(b.token ?? "", user.id, from);
+      notify(
+        moved.previous,
+        "Your email address was changed",
+        `The email address for your account on ${site} was just changed from this one to ${moved.email}, and every session ended.\n\nIf it wasn't you, undo it within ${UNDO_DAYS} days at this link, which moves the account back to this address, signs everyone out, and sends you a link to choose a new password:\n\n${origin}${linkPage}#undo=${moved.undo}`,
+      );
+      // Every session ended, this one too.
+      return reply(200, { email: moved.email }, clearedCookie(origin));
+    },
+    "undo-email": (b, _r, from) => {
+      const back = auth.useUndoLink(b.token ?? "", from);
+      // Its password no longer works: a link to choose a new one, to the address it's back at.
+      send(back.reset);
+      return reply(200, { email: back.email });
     },
     "delete-account": async (b, r, from) => {
       const user = userOf(r);

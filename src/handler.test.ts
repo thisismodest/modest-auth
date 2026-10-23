@@ -32,7 +32,7 @@ const setup = () => {
     return { status: response.status, json: (await response.json()) as Record<string, any>, set, headers: response.headers };
   };
   /** The token in the last link emailed to `to`. */
-  const linkTo = async (to: string, kind: "password" | "sign-in") => {
+  const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
     await afterwards();
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
     const token = new RegExp(`^${ORIGIN}/account/link#${kind}=([\\w-]{43})$`, "m").exec(text)?.[1];
@@ -471,4 +471,60 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
   assert.equal(sent.length, 10, "the 10 already sending finish");
   assert.ok(!sent.includes("p10@example.org"), "the one that waited past its link's life isn't sent");
   assert.match(String(logged[0]), /ran out/);
+});
+
+test("changing the email: a link to the new address, the same answer either way, and a notice to the old one", async () => {
+  const { send, emails, linkTo, signUp, forget } = setup();
+  await signUp("ann@example.org");
+  assert.equal((await send("/auth/change-email", { password: "a wrong password here", email: "ann@new.example" })).status, 401);
+  const free = await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
+  const token = await linkTo("ann@new.example", "email");
+  const answer = await send("/auth/confirm-email", { token });
+  assert.deepEqual([answer.status, answer.json], [200, { email: "ann@new.example" }]);
+  assert.match(answer.set!, /Max-Age=0/, "signs nobody in: every session ended, this one too");
+  assert.deepEqual((await send("/auth/session")).json, { user: null });
+  await afterwards();
+  const notice = emails.findLast((e) => e.to === "ann@example.org")!;
+  assert.match(notice.subject, /email address was changed/);
+  assert.match(notice.text, /ann@new\.example/);
+  forget();
+  await signUp("bob@example.org");
+  const taken = await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
+  assert.deepEqual([taken.status, taken.json], [free.status, free.json], "the same answer when the address has an account");
+  await afterwards();
+  assert.match(emails.findLast((e) => e.to === "ann@new.example")!.text, /has an account of its own already/);
+  forget();
+  assert.equal((await send("/auth/change-email", { password: PASSWORD, email: "x@example.org" })).status, 401, "signed out");
+});
+
+test("a changed password is told to the account's email, by either route, but signing up isn't", async () => {
+  const { send, emails, linkTo, signUp } = setup();
+  await signUp("ann@example.org");
+  await afterwards();
+  assert.ok(!emails.some((e) => /password was changed/.test(e.subject)), "a new account gets no notice");
+  await send("/auth/password", { current: PASSWORD, next: "a brand new long password" });
+  await afterwards();
+  assert.equal(emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length, 1);
+  await send("/auth/send-password-link", { email: "ann@example.org" });
+  await send("/auth/set-password", { token: await linkTo("ann@example.org", "password"), password: "a third long password here" });
+  await afterwards();
+  assert.equal(emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length, 2);
+});
+
+test("confirming a move needs the account signed in; the notice to the old address can undo it, and a password link follows", async () => {
+  const { send, emails, linkTo, signUp, forget } = setup();
+  await signUp("ann@example.org");
+  await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
+  const token = await linkTo("ann@new.example", "email");
+  forget();
+  assert.equal((await send("/auth/confirm-email", { token })).status, 401, "signed out: nothing happens");
+  await send("/auth/sign-in", { email: "ann@example.org", password: PASSWORD });
+  assert.equal((await send("/auth/confirm-email", { token })).status, 200, "the link wasn't used up");
+  const undo = await linkTo("ann@example.org", "undo");
+  forget();
+  const back = await send("/auth/undo-email", { token: undo });
+  assert.deepEqual([back.status, back.json], [200, { email: "ann@example.org" }]);
+  assert.equal(back.set, null, "it signs nobody in");
+  await linkTo("ann@example.org", "password");
+  assert.match(emails.at(-1)!.subject, /Choose a new password/);
 });
