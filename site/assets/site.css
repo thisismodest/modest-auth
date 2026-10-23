@@ -62,6 +62,13 @@ a {
   color: var(--ink);
 }
 
+/* On a phone, the name has the first line, and the links share the second. */
+@media (max-width: 30rem) {
+  .site-nav .name {
+    flex-basis: 100%;
+  }
+}
+
 .mark {
   width: 1.5rem;
   height: 1.5rem;
@@ -150,6 +157,23 @@ a {
 
 .actions .mdst-button {
   text-decoration: none;
+}
+
+/* The install line, under the buttons. */
+.hero .install {
+  margin: var(--mdst-space-4) 0 0;
+}
+
+.hero .install code {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  font-size: var(--mdst-text-sm);
+}
+
+.hero .install span {
+  color: var(--muted);
 }
 
 /* ----------------------------------------------------- Code, as an editor -- */
