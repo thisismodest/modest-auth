@@ -1,8 +1,7 @@
 {
   "name": "modest-auth",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Simple, effective authentication for Node: email and password, sessions, and nothing you don't need. No dependencies.",
+  "version": "0.1.0",
+  "description": "Email and password authentication for Node.js, with sessions. No dependencies.",
   "license": "MIT",
   "author": "Modest Industries Ltd",
   "type": "module",

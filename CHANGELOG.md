@@ -6,6 +6,10 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.1.0] - 2026-10-23
+
+The first release.
+
 ### Added
 
 - Accounts: an email and a password; change the password

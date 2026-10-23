@@ -31,7 +31,11 @@ code that was reviewed. Do these once, when the repository goes public.
   the checks: `.npmrc` turns off `prepublishOnly` along with every other script.)
 - **Two-factor authentication** on every maintainer's npm account, for publishing
   and settings changes.
-- Remove `"private": true` from package.json only when it's ready to publish.
+- **The first release** (0.1.0) is published by hand, because npm sets up trusted
+  publishing only for a package that already exists: on a clean clone of main, with
+  Node 24, `npm ci`, `npm run check`, then `npm publish --provenance=false` (provenance
+  needs CI). Then set up trusted publishing as above. Every later release follows the
+  steps below.
 
 ## A release
 

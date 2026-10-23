@@ -18,7 +18,7 @@ named.
 
 ## Supported versions
 
-There are no releases yet. Until 1.0, only the latest release will get fixes. From 1.0, the latest minor version of
+Until 1.0, only the latest release gets fixes. From 1.0, the latest minor version of
 each supported major version does.
 
 ## In scope

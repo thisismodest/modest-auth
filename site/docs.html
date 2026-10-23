@@ -66,7 +66,15 @@
       <main class="article">
         <section aria-labelledby="start">
           <h2 id="start">Getting started</h2>
-          <p>Node 24 or later. It isn't on npm yet; for now, use it from the repository.</p>
+          <div class="window terminal">
+            <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>terminal</span></div>
+            <pre><code><span class="c">$</span> npm install modest-auth</code></pre>
+          </div>
+          <p>
+            Node 24 or later. The first time <code>node:sqlite</code> is used, Node 24 prints a
+            warning that SQLite is experimental: that's Node's own notice about its built-in
+            module, not an error.
+          </p>
           <div class="window">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
             <pre><code><span class="k">import</span> { createServer } <span class="k">from</span> <span class="s">"node:http"</span>;

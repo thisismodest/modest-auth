@@ -475,6 +475,21 @@ section h2 {
   color: #b8b8b2;
 }
 
+.closing .install code {
+  display: inline-block;
+  margin-block: var(--mdst-space-2);
+  padding: 0.5rem 1rem;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.06);
+  color: var(--code-fg);
+  font-size: var(--mdst-text-sm);
+}
+
+.closing .install span {
+  color: #7d807b;
+}
+
 .closing .actions {
   justify-content: center;
 }

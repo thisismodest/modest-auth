@@ -1,9 +1,8 @@
 # modest-auth
 
-Simple, effective authentication for Node: email and password, sessions, and
-nothing you don't need. No dependencies.
+Email and password authentication for Node.js, with sessions. No dependencies.
 
-> **Status: early, and not yet published.** The core
+> **Status: early (0.x).** The core
 > works and is tested; see [ROADMAP.md](ROADMAP.md) for what comes next, and don't
 > use it for anything real until it has had an independent security audit. (So far it
 > has had repeated rounds of internal adversarial review, by AI reviewers each given one
@@ -80,7 +79,12 @@ this is for you.
 
 ## Quick start
 
-Node 24 or later.
+```sh
+npm install modest-auth
+```
+
+Node 24 or later. The first time `node:sqlite` is used, Node 24 prints a warning that
+SQLite is experimental: that's Node's own notice about its built-in module, not an error.
 
 ```ts
 import { createServer } from "node:http";

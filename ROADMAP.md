@@ -23,7 +23,7 @@ it brings. Nothing here is a promise of a date.
       (cryptography and sessions, web and HTTP, abuse and supply chain, a lead
       auditor, an exploit developer, a final check), and their findings fixed. Not
       independent.
-- [ ] A name (and its npm package and domain)
+- [x] A name: modest-auth, on npm, at modest-auth.com
 
 ## Next: less for the app to get right
 
