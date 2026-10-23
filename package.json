@@ -1,0 +1,57 @@
+{
+  "name": "modest-auth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Simple, effective authentication for Node: email and password, sessions, and nothing you don't need. No dependencies.",
+  "license": "MIT",
+  "author": "Marcus Michaels",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "authentication",
+    "auth",
+    "login",
+    "sessions",
+    "passwords",
+    "sqlite",
+    "zero-dependency"
+  ],
+  "scripts": {
+    "test": "node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/common-passwords.txt dist/",
+    "check": "npm run rules && npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run check",
+    "rules": "node scripts/check-rules.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thisismodest/modest-auth.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thisismodest/modest-auth/issues"
+  },
+  "homepage": "https://github.com/thisismodest/modest-auth#readme"
+}
