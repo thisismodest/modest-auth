@@ -1,7 +1,8 @@
 # Publishes to npm when a version tag (v1.2.3) is pushed: from CI, never from a
 # laptop, so each release is built from the tagged commit and carries npm
 # provenance linking it there. Uses npm's trusted publishing (no token stored):
-# see docs/maintaining.md for setting it up.
+# see docs/maintaining.md for setting it up. Then a GitHub Release, with the
+# version's notes from CHANGELOG.md.
 
 name: Release
 
@@ -35,3 +36,24 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - run: npm run check
       - run: npm publish --provenance --access public
+
+  # A GitHub Release for the tag, once it's on npm, with that version's notes from
+  # CHANGELOG.md. In a job of its own: the write access it needs is never held
+  # while dependencies are installed or the package is published.
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The release, with the changelog's notes for this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {f=1; next} /^## /{if (f) exit} f' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag

@@ -45,7 +45,9 @@ code that was reviewed. Do these once, when the repository goes public.
 2. Set the version: `npm version <patch|minor|major> --no-git-tag-version`.
 3. Commit, then tag the commit, signed: `git tag -s v1.2.3 -m "v1.2.3"`.
 4. Push the commit and the tag. The release workflow checks the tag matches the
-   version, runs every check, and publishes with provenance.
+   version, runs every check, and publishes with provenance. Then it makes a GitHub
+   Release from the tag, with that version's section of CHANGELOG.md as its notes
+   (so the section's heading must be `## [1.2.3] - date`).
 5. Check the provenance on npmjs.com links to the tagged commit.
 
 ## A security fix
