@@ -26,8 +26,10 @@ code that was reviewed. Do these once, when the repository goes public.
 
 - **Trusted publishing** (npmjs.com → the package → Settings → Trusted publishing):
   GitHub Actions, this repository, workflow `release.yml`, environment `npm`. No npm
-  token is stored anywhere. Then, in the package's publishing access, disallow tokens,
-  so the workflow is the only way to publish. (Publishing from a laptop would also skip
+  token is stored anywhere. Under "Allowed actions", tick `npm publish` only (not
+  `npm dist-tag`): a pushed tag publishes straight to npm, with no approval step.
+  Then, in the package's publishing access, disallow tokens, so the workflow is the
+  only way to publish. (Publishing from a laptop would also skip
   the checks: `.npmrc` turns off `prepublishOnly` along with every other script.)
 - **Two-factor authentication** on every maintainer's npm account, for publishing
   and settings changes.
@@ -43,8 +45,7 @@ code that was reviewed. Do these once, when the repository goes public.
 2. Set the version: `npm version <patch|minor|major> --no-git-tag-version`.
 3. Commit, then tag the commit, signed: `git tag -s v1.2.3 -m "v1.2.3"`.
 4. Push the commit and the tag. The release workflow checks the tag matches the
-   version, runs every check, and (once approved in the `npm` environment) publishes
-   with provenance.
+   version, runs every check, and publishes with provenance.
 5. Check the provenance on npmjs.com links to the tagged commit.
 
 ## A security fix
