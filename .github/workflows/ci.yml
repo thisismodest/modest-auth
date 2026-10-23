@@ -25,8 +25,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest supported (package.json's engines), and the latest.
-        node: ["24", "node"]
+        # Both supported long-term releases (24 is the oldest, as in package.json's
+        # engines), and the latest, to hear early of anything a new one breaks.
+        node: ["24", "26", "node"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
