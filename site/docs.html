@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Docs: modest-auth</title>
+    <meta name="description" content="How to use modest-auth: the routes, the errors, the settings, and what your app does round it." />
+    <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body class="mdst-ui">
+    <div class="wrap">
+      <nav class="site-nav" aria-label="Site">
+        <a class="name" href="./">modest-auth</a>
+        <a href="./">Home</a>
+        <a href="docs.html" aria-current="page">Docs</a>
+        <a href="security.html">Security</a>
+        <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
+      </nav>
+
+      <main>
+        <header class="hero">
+          <h1>Docs</h1>
+          <p class="lead">Everything you need, on one page.</p>
+        </header>
+
+        <nav aria-label="On this page">
+          <ol>
+            <li><a href="#start">Getting started</a></li>
+            <li><a href="#routes">The routes</a></li>
+            <li><a href="#pages">From your pages</a></li>
+            <li><a href="#own">Your own routes</a></li>
+            <li><a href="#errors">Errors</a></li>
+            <li><a href="#settings">Settings</a></li>
+            <li><a href="#app">What your app does</a></li>
+            <li><a href="#servers">Other servers</a></li>
+            <li><a href="#parts">Using the parts</a></li>
+            <li><a href="#limits">Limits</a></li>
+          </ol>
+        </nav>
+
+        <section aria-labelledby="start">
+          <h2 id="start">Getting started</h2>
+          <p>Node 24 or later. It isn't on npm yet; for now, use it from the repository.</p>
+          <pre><code>import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
+
+// Its tables (auth_users, auth_sessions, auth_limits) can live in your app's own database.
+const auth = createAuth(new DatabaseSync("app.db"));
+// Your site's address (HTTPS), and how many reverse proxies are in front of it.
+const handler = createHandler(auth, { origin: "https://example.org", proxies: 0 });
+
+const server = createServer(async (req, res) =&gt; {
+  if (await handleNode(handler, req, res)) return; // /auth/*, answered; anything else untouched
+  const user = handler.userOf(toRequest(req)); // who's signed in, or null
+  res.end(user ? `Hello, ${user.email}` : "Hello");
+});
+server.requestTimeout = 10_000; // slow clients get ten seconds, not five minutes
+server.headersTimeout = 10_000;
+server.listen(3000);</code></pre>
+        </section>
+
+        <section aria-labelledby="routes">
+          <h2 id="routes">The routes</h2>
+          <p>Every <code>POST</code> takes JSON, and must come from your site's own pages.</p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
+              <tbody>
+                <tr><td><code>GET /auth/session</code></td><td></td><td><code>{ user: { email } }</code>, or <code>{ user: null }</code></td></tr>
+                <tr><td><code>POST /auth/sign-up</code></td><td><code>{ email, password }</code></td><td>Makes the account, and signs in</td></tr>
+                <tr><td><code>POST /auth/sign-in</code></td><td><code>{ email, password }</code></td><td>Signs in, with a fresh session (any old one ends)</td></tr>
+                <tr><td><code>POST /auth/sign-out</code></td><td>none</td><td>Ends this session</td></tr>
+                <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
+                <tr><td><code>POST /auth/password</code></td><td><code>{ current, next }</code></td><td>Changes the password, and ends every other session</td></tr>
+                <tr><td><code>POST /auth/delete-account</code></td><td><code>{ password }</code></td><td>Deletes the account and its sessions</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            New passwords are 15 to 200 characters, any characters at all, but not a common password,
+            not made from the email, and not with fewer than four different characters. A session lasts
+            30 days, or ends after 7 days unused.
+          </p>
+        </section>
+
+        <section aria-labelledby="pages">
+          <h2 id="pages">From your pages</h2>
+          <p>
+            Send each route JSON with <code>fetch</code>, which another site's page can't do without
+            the browser asking first. (A plain HTML form can't send JSON.)
+          </p>
+          <pre><code>const res = await fetch("/auth/sign-in", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ email, password }),
+});
+if (!res.ok) showError((await res.json()).error.message); // fit to show as it is</code></pre>
+        </section>
+
+        <section aria-labelledby="own">
+          <h2 id="own">Your own routes</h2>
+          <p>Ask who's signed in, and check that anything that changes something came from your own pages:</p>
+          <pre><code>const request = toRequest(req); // headers only: your own reading of the body is undisturbed
+const user = handler.userOf(request); // { id, email }, or null
+if (req.method === "POST" &amp;&amp; !handler.fromSite(request)) return res.writeHead(403).end();</code></pre>
+          <p>Link your own tables to accounts, so they go when an account is deleted:</p>
+          <pre><code>CREATE TABLE notes (id INTEGER PRIMARY KEY, user TEXT REFERENCES auth_users(id) ON DELETE CASCADE, text TEXT);</code></pre>
+        </section>
+
+        <section aria-labelledby="errors">
+          <h2 id="errors">Errors</h2>
+          <p>
+            A refusal is <code>{ error: { code, message } }</code>, with the status below. The message
+            is fit to show. When paused or busy, <code>Retry-After</code> says how many seconds until
+            it's worth trying again.
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Code</th><th scope="col">Status</th><th scope="col">Means</th></tr></thead>
+              <tbody>
+                <tr><td><code>invalid-email</code></td><td>422</td><td>Not an email address</td></tr>
+                <tr><td><code>short-password</code></td><td>422</td><td>Fewer than 15 characters</td></tr>
+                <tr><td><code>long-password</code></td><td>422</td><td>More than 200 characters</td></tr>
+                <tr><td><code>common-password</code></td><td>422</td><td>Too easy to guess</td></tr>
+                <tr><td><code>invalid-password</code></td><td>422</td><td>Broken text (not valid Unicode)</td></tr>
+                <tr><td><code>email-taken</code></td><td>409</td><td>An account already has that email</td></tr>
+                <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
+                <tr><td><code>signed-out</code></td><td>401</td><td>That needs a signed-in browser</td></tr>
+                <tr><td><code>too-many-tries</code></td><td>429</td><td>Paused: wait, then try again</td></tr>
+                <tr><td><code>busy</code></td><td>503</td><td>Too many sign-ins at once</td></tr>
+                <tr><td><code>cross-site</code></td><td>403</td><td>Not from the site's own pages</td></tr>
+                <tr><td><code>json-only</code></td><td>415</td><td>Not sent as JSON</td></tr>
+                <tr><td><code>too-large</code></td><td>413</td><td>Over 4KB</td></tr>
+                <tr><td><code>bad-json</code></td><td>400</td><td>Not a JSON object</td></tr>
+                <tr><td><code>incomplete</code></td><td>400</td><td>The request didn't arrive whole</td></tr>
+                <tr><td><code>no-address</code></td><td>400</td><td>Where it came from isn't known</td></tr>
+                <tr><td><code>not-found</code>, <code>post-only</code></td><td>404, 405</td><td>No such route, or not a POST</td></tr>
+                <tr><td><code>failed</code></td><td>500</td><td>Something went wrong on the server</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section aria-labelledby="settings">
+          <h2 id="settings">Settings</h2>
+          <p>Three, each a fact about your site rather than a choice of how secure to be. Get them right:</p>
+          <dl>
+            <dt><code>origin</code></dt>
+            <dd>Your site's address, such as <code>"https://example.org"</code>. HTTPS, except <code>localhost</code> for development. The cookie is worked out from it.</dd>
+            <dt><code>proxies</code></dt>
+            <dd>How many reverse proxies are in front of your server (0 if none). Only then is <code>X-Forwarded-For</code> believed, read from the right.</dd>
+            <dt><code>base</code></dt>
+            <dd>Where the routes live. <code>"/auth"</code> unless you say otherwise.</dd>
+          </dl>
+        </section>
+
+        <section aria-labelledby="app">
+          <h2 id="app">What your app does</h2>
+          <ul>
+            <li><strong>Serves the site over HTTPS.</strong></li>
+            <li><strong>Declares its proxies,</strong> and lets nothing reach the server, or any proxy but the outermost, any other way.</li>
+            <li><strong>Checks its own changing routes</strong> with <code>handler.fromSite(request)</code>.</li>
+            <li><strong>Sets short timeouts</strong> for slow clients.</li>
+            <li><strong>Keeps scripts out of its pages</strong> (a content security policy helps).</li>
+            <li><strong>Keeps passwords out of its logs,</strong> and its proxy's.</li>
+            <li><strong>Keeps the database on a local disk,</strong> backs it up, and keeps the backups private.</li>
+            <li><strong>Watches for refusals:</strong> a run of 429 or 503 is someone guessing.</li>
+            <li><strong>Leaves <code>/auth</code> to the handler:</strong> every path under it is the handler's.</li>
+            <li><strong>Tells people who think their session was stolen</strong> to sign out everywhere first: it needs no password.</li>
+          </ul>
+        </section>
+
+        <section aria-labelledby="servers">
+          <h2 id="servers">Other servers</h2>
+          <p><code>handler.handle(request, remoteAddress)</code> takes a Web-standard <code>Request</code> and gives a <code>Response</code>, or <code>null</code> for paths that aren't its own.</p>
+          <pre><code>// Bun
+Bun.serve({ fetch: async (req, server) =&gt; (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) });
+
+// Deno
+Deno.serve(async (req, info) =&gt; (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req));
+
+// Express: first, before any body parser
+app.use(async (req, res, next) =&gt; (await handleNode(handler, req, res)) || next());</code></pre>
+        </section>
+
+        <section aria-labelledby="parts">
+          <h2 id="parts">Using the parts</h2>
+          <p>
+            <code>createAuth</code> gives the accounts, sessions, and limits without the routes. Your app
+            then does what the handler would: checks <code>Origin</code>, starts a fresh session at each
+            sign-in, and passes where each request came from.
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col"><code>auth.</code></th><th scope="col">Does</th></tr></thead>
+              <tbody>
+                <tr><td><code>signUp(email, password, from)</code></td><td>A new account</td></tr>
+                <tr><td><code>signIn(email, password, from)</code></td><td>The account, if the password's right</td></tr>
+                <tr><td><code>startSession(user)</code></td><td>A session token, for a user just returned by the calls above</td></tr>
+                <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
+                <tr><td><code>endSession(token)</code>, <code>endAllSessions(userId)</code></td><td>Sign out, here or everywhere</td></tr>
+                <tr><td><code>changePassword(userId, current, next, from)</code></td><td>A new password; every session ends</td></tr>
+                <tr><td><code>deleteAccount(userId, password, from)</code></td><td>The account and its sessions, gone</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <code>from</code> is <code>addressKey({ remoteAddress, forwardedFor }, proxies)</code>; refuse a request
+            whose address comes back <code>"unknown"</code>. Cookies come from
+            <code>sessionCookie(token, origin)</code>, <code>clearedCookie(origin)</code>, and
+            <code>readSessionCookie(header, origin)</code>.
+          </p>
+        </section>
+
+        <section aria-labelledby="limits">
+          <h2 id="limits">Limits</h2>
+          <p>Counted before any password is checked, and kept in the database (so a restart doesn't reset them).</p>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Of</th><th scope="col">At most</th></tr></thead>
+              <tbody>
+                <tr><td>Tries at one account, from one address</td><td>10 in 15 minutes</td></tr>
+                <tr><td>Tries at one account, from anywhere</td><td>100 an hour</td></tr>
+                <tr><td>Sign-ins, sign-ups, and password checks from one address</td><td>20 in 15 minutes</td></tr>
+                <tr><td>The same, from one IPv6 /48</td><td>200 in 15 minutes</td></tr>
+                <tr><td>Password checks by an account's own sessions</td><td>10 an hour</td></tr>
+                <tr><td>Passwords being checked at once</td><td>2, with 50 waiting</td></tr>
+                <tr><td>Sessions per account</td><td>50</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>MIT License. <a href="security.html#report">Report a vulnerability</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

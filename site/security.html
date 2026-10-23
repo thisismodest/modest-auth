@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Security: modest-auth</title>
+    <meta name="description" content="What modest-auth protects, from whom, and how; what it doesn't yet; and how to report a vulnerability." />
+    <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body class="mdst-ui">
+    <div class="wrap">
+      <nav class="site-nav" aria-label="Site">
+        <a class="name" href="./">modest-auth</a>
+        <a href="./">Home</a>
+        <a href="docs.html">Docs</a>
+        <a href="security.html" aria-current="page">Security</a>
+        <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
+      </nav>
+
+      <main>
+        <header class="hero">
+          <h1>Security</h1>
+          <p class="lead">What it protects, from whom, and how. And, just as plainly, what it doesn't yet.</p>
+          <p class="mdst-banner mdst-banner--warning" role="note">
+            Not yet independently audited. It has had repeated rounds of internal adversarial review (by AI
+            reviewers, each given one area), and every finding is fixed. That helps, but it isn't an
+            audit: please don't rely on it until it has had one.
+          </p>
+        </header>
+
+        <section aria-labelledby="promises">
+          <h2 id="promises">What it promises</h2>
+          <ol>
+            <li><strong>Nobody signs in as someone else.</strong></li>
+            <li><strong>Nobody learns a password,</strong> from it or from a copy of its database.</li>
+            <li><strong>A session works only in the browser it was given to,</strong> and ends when it should.</li>
+            <li><strong>Signing in doesn't reveal who has an account.</strong></li>
+            <li><strong>It stays usable under ordinary attack.</strong></li>
+          </ol>
+          <p>Each is kept by the measures below, and each measure has a test that fails if it stops working.</p>
+        </section>
+
+        <section aria-labelledby="how">
+          <h2 id="how">How</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Against</th><th scope="col">What it does</th></tr></thead>
+              <tbody>
+                <tr><td>Guessing passwords</td><td>scrypt at OWASP's cost; 15 characters or more; 5,500 common passwords refused; limits per account, per address, and per IPv6 block, counted before any password is checked</td></tr>
+                <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions only as hashes of 256-bit tokens</td></tr>
+                <tr><td>Stealing a session</td><td>A cookie scripts can't read, sent only to this exact site over HTTPS; a session ends after 7 days unused, and 30 at most</td></tr>
+                <tr><td>Other sites acting for someone</td><td>Every change must come from the site's own pages, as JSON</td></tr>
+                <tr><td>Planting a session</td><td>A fresh session at every sign-in; two session cookies in one request mean nobody</td></tr>
+                <tr><td>Racing a password change</td><td>A session starts only if the password just checked is still the account's</td></tr>
+                <tr><td>Finding who has an account</td><td>A wrong email and a wrong password get the same answer, after the same work</td></tr>
+                <tr><td>Swamping the server</td><td>Two passwords checked at once, with a short queue; small bodies; malformed requests answered, never crashing</td></tr>
+                <tr><td>Lookalike or invisible characters</td><td>Emails normalised, and invisible characters refused</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The <a href="https://github.com/thisismodest/modest-auth/blob/main/docs/threat-model.md">threat model</a> has every threat, its measure, and where in the code it lives.</p>
+        </section>
+
+        <section aria-labelledby="limits">
+          <h2 id="limits">What it doesn't do yet</h2>
+          <ul>
+            <li><strong>Sign-up says when an email already has an account.</strong> Hiding it needs email confirmation, which is on the roadmap.</li>
+            <li><strong>No password reset yet.</strong> That needs email too.</li>
+            <li><strong>Someone with many addresses can pause sign-in to an account for up to an hour.</strong> Its owner, already signed in, can still change the password.</li>
+            <li><strong>Letters from other alphabets that look alike</strong> (a Cyrillic "а") make a different account that looks the same.</li>
+            <li><strong>One factor only:</strong> NIST's Authenticator Assurance Level 1. Two-step sign-in is on the roadmap.</li>
+          </ul>
+        </section>
+
+        <section aria-labelledby="practices">
+          <h2 id="practices">How the project stays secure</h2>
+          <ul>
+            <li>No runtime dependencies, and CI fails if one is added, or if anything but Node's own modules is imported.</li>
+            <li>CI refuses invisible or direction-changing characters in code ("Trojan Source").</li>
+            <li>The source stays under 1,000 lines, so it can always be read whole.</li>
+            <li>CodeQL checks every change, OpenSSF Scorecard grades the project weekly, and GitHub Actions are pinned to exact commits.</li>
+            <li>Releases are to be published only by CI, from a tag on main, with provenance linking each to its source.</li>
+          </ul>
+        </section>
+
+        <section aria-labelledby="report">
+          <h2 id="report">Reporting a vulnerability</h2>
+          <p>
+            Please don't describe it in public. Use the repository's <strong>Security</strong> tab, then
+            <strong>Report a vulnerability</strong>, with what you found, how to make it happen, and what an
+            attacker could do with it. You'll hear back within 5 working days.
+          </p>
+        </section>
+      </main>
+
+      <footer>
+        <p>MIT License. <a href="https://github.com/thisismodest/modest-auth/blob/main/SECURITY.md">SECURITY.md</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

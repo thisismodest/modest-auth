@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+    <meta name="referrer" content="no-referrer" />
+    <title>modest-auth: sign-in for Node, simple and secure</title>
+    <meta name="description" content="Email and password sign-in for Node, with sessions. No dependencies, no settings that weaken it, and small enough to read in one sitting." />
+    <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body class="mdst-ui">
+    <div class="wrap">
+      <nav class="site-nav" aria-label="Site">
+        <a class="name" href="./">modest-auth</a>
+        <a href="./" aria-current="page">Home</a>
+        <a href="docs.html">Docs</a>
+        <a href="security.html">Security</a>
+        <a href="https://github.com/thisismodest/modest-auth">GitHub</a>
+      </nav>
+
+      <main>
+        <header class="hero">
+          <h1>Sign-in for Node.<br />Simple, and secure.</h1>
+          <p class="lead">
+            Email and password, sessions, and nothing you don't need. No dependencies, no settings
+            that weaken it, and small enough to read in one sitting.
+          </p>
+          <p class="mdst-banner mdst-banner--warning" role="note">
+            Early: not yet on npm, and not yet independently audited. Please don't use it for
+            anything real yet.
+          </p>
+        </header>
+
+        <ul class="facts" aria-label="In numbers">
+          <li><strong>0</strong><span>dependencies</span></li>
+          <li><strong>~900</strong><span>lines of source</span></li>
+          <li><strong>7</strong><span>routes, ready-made</span></li>
+          <li><strong>1</strong><span>SQLite file</span></li>
+        </ul>
+
+        <section aria-labelledby="start">
+          <h2 id="start">Getting started</h2>
+          <p>Node 24 or later. Sign-up, sign-in, and sign-out for a whole site:</p>
+          <pre><code>import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
+
+const auth = createAuth(new DatabaseSync("app.db"));
+const handler = createHandler(auth, { origin: "https://example.org" });
+
+createServer(async (req, res) =&gt; {
+  if (await handleNode(handler, req, res)) return; // the /auth routes
+  const user = handler.userOf(toRequest(req)); // who's signed in, or null
+  res.end(user ? `Hello, ${user.email}` : "Hello");
+}).listen(3000);</code></pre>
+          <p>Your pages send JSON:</p>
+          <pre><code>await fetch("/auth/sign-in", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ email, password }),
+});</code></pre>
+          <p><a href="docs.html">The docs</a> have the rest: every route, the errors, and what your app does round it.</p>
+        </section>
+
+        <div class="pair">
+          <section aria-labelledby="simple">
+            <h2 id="simple">Simple</h2>
+            <ul>
+              <li><strong>No dependencies.</strong> Only Node's own <code>crypto</code> and <code>node:sqlite</code>: nothing else to trust, update, or have compromised.</li>
+              <li><strong>No settings that weaken it.</strong> The secure way is the only way.</li>
+              <li><strong>The routes come ready-made,</strong> with the checks an app could forget built in.</li>
+              <li><strong>About 900 lines,</strong> and a promise to stay under 1,000. Read all of it in an afternoon.</li>
+            </ul>
+          </section>
+          <section aria-labelledby="secure">
+            <h2 id="secure">Secure</h2>
+            <ul>
+              <li><strong>Passwords</strong> hashed with scrypt at OWASP's cost, and chosen by NIST's rules: 15 characters or more, and not one of 5,500 common ones.</li>
+              <li><strong>Sessions</strong> in a cookie scripts can't read, kept only as hashes, ended when unused.</li>
+              <li><strong>Guessing is slowed</strong> per account and per address, before any password is checked.</li>
+              <li><strong>Other sites can't act</strong> for someone who's signed in.</li>
+              <li><strong>Every promise has a test</strong> that fails if it stops being true.</li>
+            </ul>
+          </section>
+        </div>
+
+        <section aria-labelledby="why">
+          <h2 id="why">Why so little?</h2>
+          <p>
+            Most authentication breaches aren't in the cryptography. They're logic bugs in features:
+            two options that interact in a way nobody tested, or a flow added for one case that opens
+            a door in another. The more an auth library does, and the more it can be configured, the
+            more of those there are to find.
+          </p>
+          <p>
+            So modest-auth does the least that sign-in needs, the same way every time. If you need
+            social sign-in, single sign-on, or passkeys today, use a larger library. If you need people
+            to sign in with an email and a password, safely, this is for you.
+          </p>
+        </section>
+
+        <section aria-labelledby="not">
+          <h2 id="not">Deliberately not here</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th scope="col">Not here</th><th scope="col">Why</th></tr></thead>
+              <tbody>
+                <tr><td>JWTs</td><td>A session in the database can be ended at once; a JWT lasts until it expires.</td></tr>
+                <tr><td>Plugins and hooks</td><td>Every extension point is a way to break the guarantees.</td></tr>
+                <tr><td>Other databases</td><td>SQLite is built into Node: one database is one thing to get right.</td></tr>
+                <tr><td>Social sign-in, single sign-on</td><td>Perhaps later, one at a time, if they can be made as small and certain as the rest.</td></tr>
+                <tr><td>A user interface</td><td>Your forms, your words.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>MIT License. <a href="security.html#report">Report a vulnerability</a>. Styled with <a href="https://modest-ui.com">modest-ui</a>.</p>
+      </footer>
+    </div>
+  </body>
+</html>
