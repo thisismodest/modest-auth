@@ -4,7 +4,7 @@
   "private": true,
   "description": "Simple, effective authentication for Node: email and password, sessions, and nothing you don't need. No dependencies.",
   "license": "MIT",
-  "author": "Marcus Michaels",
+  "author": "Modest Industries Ltd",
   "type": "module",
   "engines": {
     "node": ">=24"

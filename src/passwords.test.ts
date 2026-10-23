@@ -90,8 +90,8 @@ test("a common password isn't made acceptable by spaces, punctuation, capitals, 
 });
 
 test("made from the email: caught in other forms, but short addresses don't block ordinary words", () => {
-  for (const p of ["marcusmichaels123", "Marcus Michaels 1!", "my login is marcus.michaels"]) {
-    assert.throws(() => checkNewPassword(p, "marcus.michaels@example.org"), code("common-password"), p);
+  for (const p of ["adalovelace12345", "Ada Lovelace 1815!", "my login is ada.lovelace"]) {
+    assert.throws(() => checkNewPassword(p, "ada.lovelace@example.org"), code("common-password"), p);
   }
   assert.doesNotThrow(() => checkNewPassword("information superhighway", "info@example.org"));
   assert.doesNotThrow(() => checkNewPassword("glove compartment rain", "love@example.org"));
