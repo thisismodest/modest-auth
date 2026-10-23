@@ -35,8 +35,9 @@ it brings. Nothing here is a promise of a date.
 - [ ] **A copy of someone's data on request** (UK GDPR).
 - [ ] **A record of security events** (sign-ins, failures, pauses, password changes)
       the app can keep, without passwords or tokens in it.
-- [ ] **Gentler ways round an account pause,** such as confirming a sign-in from a new
-      address by email.
+- [ ] **Signing in by an emailed link,** always offered beside the password: single-use,
+      short-lived, and limited per account, so someone whose sign-in is paused by
+      another's guessing can still get in.
 - [ ] **Seeing and ending single sessions** (ASVS Level 2).
 - [ ] **Telling people when their password changes,** by email (ASVS Level 2).
 - [ ] **Checking new passwords against a full breached-password set** (ASVS Level 2),
