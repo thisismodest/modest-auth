@@ -6,7 +6,7 @@
 
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { SHORTEST_PASSWORD, LONGEST_PASSWORD } from "../src/passwords.ts";
+import { LONGEST_PASSWORD, SHORTEST_PASSWORD } from "../src/passwords.ts";
 
 const COMMIT = "a61e8f503c54bf3c399b8f9e4da97e7059a8437e";
 const MIT = [

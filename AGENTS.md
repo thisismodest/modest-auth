@@ -47,6 +47,7 @@ npm test            # node --test, TypeScript run directly
 npm run typecheck   # tsc --noEmit (strict)
 npm run build       # dist/ for publishing
 npm run rules       # no dependencies, only node: imports, no hidden characters
+npx @biomejs/biome check .  # lint and format: keep it clean
 npm run check       # all four
 node examples/node-http.ts
 ```

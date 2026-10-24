@@ -77,7 +77,10 @@ test("a crafted address can't make it slow", () => {
 test("fuzzed: it never throws, and anything it keeps it keeps unchanged when given again", () => {
   const alphabet = "aZ09@.-_+ \t\n\"<>()[]\\,;:`'é\u202e\u200bａ\u0000";
   let seed = 7;
-  const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2 ** 31;
+    return seed / 2 ** 31;
+  };
   for (let i = 0; i < 20_000; i++) {
     const input = Array.from({ length: Math.floor(random() * 40) }, () => alphabet[Math.floor(random() * alphabet.length)]).join("");
     const kept = cleanEmail(input);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
-import { afterwards, captureErrors, captureWarnings, fresh, HERE, openSession, PASSWORD, wait, watchCrashes, withClock } from "../test/helpers.ts";
+import { afterwards, captureErrors, captureWarnings, fresh, HERE, must, openSession, PASSWORD, wait, watchCrashes, withClock } from "../test/helpers.ts";
 import { createHandler, type Handler } from "./handler.ts";
 import { handleNode, toRequest } from "./node.ts";
 
@@ -40,6 +40,16 @@ const withServer = async (
 /** An app that answers "app" to whatever the handler leaves to it. */
 const plainApp = (_req: IncomingMessage, res: ServerResponse) => res.end("app");
 
+/** What the routes answer, as the tests read it. */
+type Json = {
+  error: { code: string; message: string };
+  user: { email: string } | null;
+  email: string;
+  kind: string;
+  sessions: { id: string; current: boolean; started: number; lastUsed: number }[];
+  [key: string]: unknown;
+};
+
 const setup = () => {
   const { auth } = fresh();
   const emails: { to: string; subject: string; text: string }[] = [];
@@ -55,8 +65,8 @@ const setup = () => {
     const response = await handler.handle(request, HERE);
     assert.ok(response, `${path} is one of the routes`);
     const set = response.headers.get("set-cookie");
-    if (set) cookie = set.split(";")[0]!;
-    return { status: response.status, json: (await response.json()) as Record<string, any>, set, headers: response.headers };
+    if (set) cookie = must(set.split(";")[0]);
+    return { status: response.status, json: (await response.json()) as Json, set, headers: response.headers };
   };
   /** The token in the last link emailed to `to`. */
   const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
@@ -71,7 +81,7 @@ const setup = () => {
     await send("/auth/send-password-link", { email });
     return send("/auth/set-password", { token: await linkTo(email, "password"), password });
   };
-  return { auth, handler, send, emails, linkTo, signUp, token: () => cookie.split("=")[1]!, forget: () => (cookie = "") };
+  return { auth, handler, send, emails, linkTo, signUp, token: () => must(cookie.split("=")[1]), forget: () => (cookie = "") };
 };
 
 test("sign up, see who's signed in, sign out", async () => {
@@ -79,10 +89,10 @@ test("sign up, see who's signed in, sign out", async () => {
   assert.deepEqual((await send("/auth/session")).json, { user: null });
   const up = await signUp("ann@example.org");
   assert.equal(up.status, 200);
-  assert.match(up.set!, /^__Host-session=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/);
+  assert.match(must(up.set), /^__Host-session=[\w-]{43}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+; Secure$/);
   assert.equal(up.headers.get("cache-control"), "no-store");
   assert.deepEqual((await send("/auth/session")).json, { user: { email: "ann@example.org" } });
-  assert.match((await send("/auth/sign-out", {})).set!, /Max-Age=0/);
+  assert.match(must((await send("/auth/sign-out", {})).set), /Max-Age=0/);
   assert.deepEqual((await send("/auth/session")).json, { user: null });
 });
 
@@ -169,7 +179,13 @@ test("it won't run on plain HTTP, except on this machine, nor with an origin tha
 
 test("with Node's own http server: the same routes, and the app's own requests left alone", async () => {
   let mail = "";
-  const handler = createHandler(fresh().auth, { origin: DEV, linkPage: "/link", sendEmail: (_to, _subject, text) => void (mail = text) });
+  const handler = createHandler(fresh().auth, {
+    origin: DEV,
+    linkPage: "/link",
+    sendEmail: (_to, _subject, text) => {
+      mail = text;
+    },
+  });
   const app = (req: IncomingMessage, res: ServerResponse) => {
     const user = handler.userOf(toRequest(req));
     res.end(user ? `hello ${user.email}` : "hello stranger");
@@ -179,9 +195,9 @@ test("with Node's own http server: the same routes, and the app's own requests l
       fetch(`${base}/auth/${route}`, { method: "POST", headers: { origin: DEV, "content-type": "application/json" }, body });
     assert.equal((await send("send-password-link", JSON.stringify({ email: "ann@example.org" }))).status, 202);
     await afterwards();
-    const up = await send("set-password", JSON.stringify({ token: /#password=([\w-]{43})/.exec(mail)![1], password: PASSWORD }));
+    const up = await send("set-password", JSON.stringify({ token: must(/#password=([\w-]{43})/.exec(mail))[1], password: PASSWORD }));
     assert.equal(up.status, 200);
-    const cookie = up.headers.getSetCookie()[0]!.split(";")[0]!;
+    const cookie = must(must(up.headers.getSetCookie()[0]).split(";")[0]);
     assert.equal(await (await fetch(`${base}/page`, { headers: { cookie } })).text(), "hello ann@example.org");
     assert.equal(await (await fetch(`${base}/page`)).text(), "hello stranger");
     const big = await send("sign-in", "x".repeat(100_000));
@@ -192,7 +208,7 @@ test("with Node's own http server: the same routes, and the app's own requests l
 test("a request with no Origin header at all is refused, and fromSite says so for the app's own routes", async () => {
   const { handler } = setup();
   const bare = new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-  assert.equal((await handler.handle(bare, HERE))!.status, 403);
+  assert.equal(must(await handler.handle(bare, HERE)).status, 403);
   assert.equal(handler.fromSite(bare), false);
   assert.equal(handler.fromSite(new Request(`${ORIGIN}/my/route`, { method: "POST", headers: { origin: ORIGIN } })), true);
   assert.equal(handler.fromSite(new Request(`${ORIGIN}/my/route`, { method: "POST", headers: { origin: ORIGIN, "sec-fetch-site": "same-site" } })), false);
@@ -214,7 +230,7 @@ test("signing up ends any session the browser had", async () => {
 
 test("without knowing where a request came from, it's refused rather than sharing everyone's allowance", async () => {
   const handler = createHandler(fresh().auth, { origin: ORIGIN, ...EMAIL });
-  assert.equal((await post(handler, "sign-in", {}, undefined))!.status, 400);
+  assert.equal(must(await post(handler, "sign-in", {}, undefined)).status, 400);
 });
 
 test("base must be a plain path", () => {
@@ -230,15 +246,28 @@ test("with Node's own http server, nothing a client sends can crash the app", as
     const raw = (text: string, hangUp = false) =>
       new Promise<string>((done) => {
         // A server that has fallen over never answers: give up after a moment, so the test fails rather than hangs.
-        const timer = setTimeout(() => (socket.destroy(), done("no answer")), 2000);
+        const timer = setTimeout(() => {
+          socket.destroy();
+          done("no answer");
+        }, 2000);
         const socket = connect(port, "127.0.0.1", () => {
           socket.write(text);
-          if (hangUp) setTimeout(() => (socket.destroy(), done("")), 50);
+          if (hangUp)
+            setTimeout(() => {
+              socket.destroy();
+              done("");
+            }, 50);
         });
         let got = "";
         socket.on("data", (d) => (got += d));
-        socket.on("end", () => (clearTimeout(timer), done(got)));
-        socket.on("error", () => (clearTimeout(timer), done(got)));
+        socket.on("end", () => {
+          clearTimeout(timer);
+          done(got);
+        });
+        socket.on("error", () => {
+          clearTimeout(timer);
+          done(got);
+        });
       });
     await watchCrashes(async (crashed) => {
       await raw("TRACE /auth/sign-out HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
@@ -302,7 +331,7 @@ test("signing out everywhere, from the route, ends every session of the account 
   const { auth, send, signUp } = setup();
   await signUp("ann@example.org");
   const phone = await openSession(auth, "ann@example.org", "192.0.2.60");
-  await auth.usePasswordLink(auth.requestLink("password", "bob@example.org", "192.0.2.61")!.token!, PASSWORD, "192.0.2.61");
+  await auth.usePasswordLink(must(must(auth.requestLink("password", "bob@example.org", "192.0.2.61")).token), PASSWORD, "192.0.2.61");
   const bobs = await openSession(auth, "bob@example.org", "192.0.2.61");
   assert.equal((await send("/auth/sign-out-everywhere", "")).status, 200);
   assert.equal(auth.userOf(phone), null);
@@ -328,7 +357,7 @@ test("a forwarded address with no proxies declared is warned about once, naming 
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.51" });
   });
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0]![0] as string, /proxies/);
+  assert.match(must(warnings[0])[0] as string, /proxies/);
 });
 
 test("asking for a link gets the same answer whether or not there's an account, and the email goes only after the answer", async () => {
@@ -344,7 +373,7 @@ test("asking for a link gets the same answer whether or not there's an account, 
     ["send-password-link", "nobody@example.org"],
   ] as const) {
     const sentBefore = emails.length;
-    const answer = (await ask(route, email, "198.51.100.60"))!;
+    const answer = must(await ask(route, email, "198.51.100.60"));
     assert.equal(emails.length, sentBefore, "nothing sent before the answer");
     answers.push([answer.status, await answer.text(), answer.headers.get("set-cookie")]);
     await afterwards();
@@ -360,10 +389,10 @@ test("asking for a link gets the same answer whether or not there's an account, 
     ],
     "an email every time, so the work after the answer is the same too",
   );
-  assert.doesNotMatch(emails[1]!.text, /#/, "with no link where there's no account");
-  assert.match(emails[1]!.text, /no account/);
+  assert.doesNotMatch(must(emails[1]).text, /#/, "with no link where there's no account");
+  assert.match(must(emails[1]).text, /no account/);
   for (const i of [1, 2]) await ask("send-sign-in-link", "ann@example.org", `198.51.100.${60 + i}`);
-  const capped = (await ask("send-sign-in-link", "ann@example.org", "198.51.100.70"))!;
+  const capped = must(await ask("send-sign-in-link", "ann@example.org", "198.51.100.70"));
   assert.deepEqual([capped.status, await capped.text(), capped.headers.get("set-cookie")], answers[0], "past the limit for that inbox, still the same answer");
 });
 
@@ -371,8 +400,8 @@ test("a link's token is after the #, which browsers never send to a server, on t
   const { send, emails } = setup();
   await send("/auth/send-password-link", { email: "ann@example.org" });
   await afterwards();
-  assert.match(emails[0]!.text, /^https:\/\/app\.example\.org\/account\/link#password=[\w-]{43}$/m);
-  assert.doesNotMatch(emails[0]!.text, /\?/, "nothing in a query string, which servers log and pages pass on");
+  assert.match(must(emails[0]).text, /^https:\/\/app\.example\.org\/account\/link#password=[\w-]{43}$/m);
+  assert.doesNotMatch(must(emails[0]).text, /\?/, "nothing in a query string, which servers log and pages pass on");
 });
 
 test("a sign-in link signs this browser in with a fresh session, ending the one it had", async () => {
@@ -407,7 +436,7 @@ test("an email that can't be sent is logged without its text, and changes nothin
     sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")),
   });
   const logged = await captureErrors(async () => {
-    assert.equal((await post(handler, "send-password-link", { email: "ann@example.org" }, HERE))!.status, 202);
+    assert.equal(must(await post(handler, "send-password-link", { email: "ann@example.org" }, HERE)).status, 202);
     await afterwards();
     await afterwards();
   });
@@ -436,7 +465,14 @@ test("the link page can ask which email a link is for, so nobody is signed in to
 
 test("a stuck email service can't pile up sends without end", async () => {
   let started = 0;
-  const stuck = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/l", sendEmail: () => (started++, new Promise(() => {})) as Promise<void> });
+  const stuck = createHandler(fresh().auth, {
+    origin: ORIGIN,
+    linkPage: "/l",
+    sendEmail: () => {
+      started++;
+      return new Promise<void>(() => {});
+    },
+  });
   const logged = await captureErrors(async () => {
     for (let i = 0; i < 1015; i++) await post(stuck, "send-password-link", { email: `p${i}@example.org` }, `10.${i >> 8}.${i & 255}.1`);
     await afterwards();
@@ -449,8 +485,10 @@ test("a stuck email service can't pile up sends without end", async () => {
 
 test("an email whose link runs out while it waits to be sent isn't sent", async () => {
   const sent: string[] = [];
-  let release!: () => void;
-  const blocked = new Promise<void>((done) => (release = done));
+  let release = () => {};
+  const blocked = new Promise<void>((done) => {
+    release = done;
+  });
   let calls = 0;
   const handler = createHandler(fresh().auth, {
     origin: ORIGIN,
@@ -484,10 +522,10 @@ test("changing the email: a link to the new address, the same answer either way,
   const token = await linkTo("ann@new.example", "email");
   const answer = await send("/auth/confirm-email", { token });
   assert.deepEqual([answer.status, answer.json], [200, { email: "ann@new.example" }]);
-  assert.match(answer.set!, /Max-Age=0/, "signs nobody in: every session ended, this one too");
+  assert.match(must(answer.set), /Max-Age=0/, "signs nobody in: every session ended, this one too");
   assert.deepEqual((await send("/auth/session")).json, { user: null });
   await afterwards();
-  const notice = emails.findLast((e) => e.to === "ann@example.org")!;
+  const notice = must(emails.findLast((e) => e.to === "ann@example.org"));
   assert.match(notice.subject, /email address was changed/);
   assert.match(notice.text, /ann@new\.example/);
   forget();
@@ -495,7 +533,7 @@ test("changing the email: a link to the new address, the same answer either way,
   const taken = await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
   assert.deepEqual([taken.status, taken.json], [free.status, free.json], "the same answer when the address has an account");
   await afterwards();
-  assert.match(emails.findLast((e) => e.to === "ann@new.example")!.text, /has an account of its own already/);
+  assert.match(must(emails.findLast((e) => e.to === "ann@new.example")).text, /has an account of its own already/);
   forget();
   assert.equal((await send("/auth/change-email", { password: PASSWORD, email: "x@example.org" })).status, 401, "signed out");
 });
@@ -530,7 +568,7 @@ test("confirming a move needs the account signed in; the notice to the old addre
   assert.deepEqual([back.status, back.json], [200, { email: "ann@example.org" }]);
   assert.equal(back.set, null, "it signs nobody in");
   await linkTo("ann@example.org", "password");
-  assert.match(emails.at(-1)!.subject, /Choose a new password/);
+  assert.match(must(emails.at(-1)).subject, /Choose a new password/);
 });
 
 test("the sessions route lists the account's sessions, and ending this one signs this browser out", async () => {
@@ -540,12 +578,15 @@ test("the sessions route lists the account's sessions, and ending this one signs
   const listed = await send("/auth/sessions");
   assert.equal(listed.status, 200);
   assert.equal(listed.json.sessions.length, 2);
-  const other = listed.json.sessions.find((s: { current: boolean }) => !s.current);
+  const other = must(
+    listed.json.sessions.find((s) => !s.current),
+    "another session",
+  );
   const ended = await send("/auth/end-session", { id: other.id });
   assert.deepEqual([ended.status, ended.set], [200, null], "another session ended: this browser stays signed in");
   assert.equal(auth.userOf(phone), null);
-  const mine = (await send("/auth/sessions")).json.sessions[0];
-  assert.match((await send("/auth/end-session", { id: mine.id })).set!, /Max-Age=0/);
+  const mine = must((await send("/auth/sessions")).json.sessions[0], "this session");
+  assert.match(must((await send("/auth/end-session", { id: mine.id })).set), /Max-Age=0/);
   assert.equal((await send("/auth/end-session", { id: mine.id })).status, 401, "signed out now");
   forget();
   assert.equal((await send("/auth/sessions")).status, 401);
@@ -562,7 +603,7 @@ test("my data comes as a file to save, only to the account itself", async () => 
   const copy = await send("/auth/my-data");
   assert.equal(copy.status, 200);
   assert.equal(copy.json.email, "ann@example.org");
-  assert.match(copy.headers.get("content-disposition")!, /attachment; filename="my-data.json"/);
+  assert.match(must(copy.headers.get("content-disposition")), /attachment; filename="my-data.json"/);
   assert.equal(copy.headers.get("cache-control"), "no-store");
   forget();
   assert.equal((await send("/auth/my-data")).status, 401);

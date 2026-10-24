@@ -39,11 +39,11 @@ for (const file of [...(await files("src")), ...(await files("examples")), ...(a
     lines += code.split("\n").length;
   }
   for (const [found] of code.matchAll(/[\p{Cf}\p{Default_Ignorable_Code_Point}\u2800]/gu)) {
-    problems.push(`${file}: an invisible character (U+${found.codePointAt(0)!.toString(16).toUpperCase()}): write it as an escape`);
+    problems.push(`${file}: an invisible character (U+${(found.codePointAt(0) ?? 0).toString(16).toUpperCase()}): write it as an escape`);
   }
   // Every module named: `from "x"` (across lines), `import "x"`, `import("x")`, `import(`x`)`, `require("x")`.
-  for (const [, , spec] of code.matchAll(/(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\()\s*(["'`])([^"'`\s]{1,200})\1/g)) {
-    if (!allowed(spec!) || spec!.includes("${")) problems.push(`${file}: imports "${spec}": only node: modules and the project's own files`);
+  for (const [, , spec = ""] of code.matchAll(/(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\()\s*(["'`])([^"'`\s]{1,200})\1/g)) {
+    if (!allowed(spec) || spec.includes("${")) problems.push(`${file}: imports "${spec}": only node: modules and the project's own files`);
   }
   // Anything that loads code another way, or from a name worked out at run time.
   for (const [found] of code.matchAll(/\bcreateRequire\b|\brequire\s*\(|\bimport\s*\(\s*(?!["'`])|process\.binding|\bmodule\.constructor/g)) {

@@ -24,11 +24,10 @@
 //   POST /auth/delete-account        { password }
 
 import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
-import { atMost } from "./limits.ts";
-import { DAY } from "./time.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
-import { addressKey } from "./limits.ts";
+import { addressKey, atMost } from "./limits.ts";
+import { DAY } from "./time.ts";
 
 export type HandlerOptions = {
   /** The site's origin, such as "https://example.org". Over HTTPS, except on this machine. */

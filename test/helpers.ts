@@ -1,5 +1,6 @@
 // What the tests share. Kept out of src/, so it's never published or counted as the library.
 
+import assert from "node:assert/strict";
 import { scryptSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -93,4 +94,10 @@ export const watchCrashes = async (run: (crashed: unknown[]) => Promise<void>) =
   } finally {
     process.off("unhandledRejection", onRejection);
   }
+};
+
+/** The value, which the test expects to be there: fails the test, saying so, if it isn't. */
+export const must = <T>(value: T, what = "a value"): NonNullable<T> => {
+  assert.ok(value !== null && value !== undefined, `expected ${what}`);
+  return value as NonNullable<T>;
 };

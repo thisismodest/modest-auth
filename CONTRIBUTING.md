@@ -43,6 +43,7 @@ npm test          # the tests
 npm run typecheck
 npm run build     # dist/, as it would be published
 npm run rules     # no dependencies, only Node's modules, no hidden characters
+npx @biomejs/biome check .   # lint and format (biome.json), with nothing installed
 npm run check     # all four, as CI runs them
 ```
 

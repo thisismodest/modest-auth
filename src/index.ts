@@ -2,19 +2,19 @@
 // Everything public is here; see README.md for how the pieces fit.
 
 export {
-  createAuth,
-  IDLE_DAYS,
-  PASSWORD_LINK_MINUTES,
-  SESSION_DAYS,
-  SIGN_IN_LINK_MINUTES,
-  UNDO_DAYS,
   type AccountData,
   type Auth,
   type AuthEvent,
   type AuthOptions,
+  createAuth,
+  IDLE_DAYS,
   type Link,
   type LinkKind,
+  PASSWORD_LINK_MINUTES,
+  SESSION_DAYS,
   type Session,
+  SIGN_IN_LINK_MINUTES,
+  UNDO_DAYS,
   type User,
 } from "./auth.ts";
 export { clearedCookie, readSessionCookie, sessionCookie } from "./cookies.ts";

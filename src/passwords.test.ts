@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { code, oldHash } from "../test/helpers.ts";
+import { code, must, oldHash } from "../test/helpers.ts";
 import { checkNewPassword, checkPassword, hashPassword } from "./passwords.ts";
 
 test("a password is kept only as a salted scrypt hash, which records its cost", async () => {
@@ -14,7 +14,7 @@ test("a password is checked against its hash, and nothing else matches", async (
   const stored = await hashPassword("correct horse battery");
   assert.deepEqual(await checkPassword("correct horse battery", stored), { ok: true, outdated: false });
   assert.equal((await checkPassword("correct horse batterY", stored)).ok, false);
-  for (const bad of ["", "not-a-hash", "scrypt$x$y", "$bcrypt$ln=17,r=8,p=1$aaaaaaaaaaaaaaaaaaaaaa$" + "a".repeat(43)])
+  for (const bad of ["", "not-a-hash", "scrypt$x$y", `$bcrypt$ln=17,r=8,p=1$aaaaaaaaaaaaaaaaaaaaaa$${"a".repeat(43)}`])
     assert.equal((await checkPassword("correct horse battery", bad)).ok, false);
 });
 
@@ -76,7 +76,7 @@ test("a wrong password takes the current cost's work even against an older, chea
   const median = async (stored: string) => {
     const times = [];
     for (let i = 0; i < 5; i++) times.push(await time(stored));
-    return times.sort((a, b) => a - b)[2]!;
+    return must(times.sort((a, b) => a - b)[2]);
   };
   const [againstOld, againstCurrent] = [await median(old), await median(current)];
   assert.ok(againstOld >= againstCurrent * 0.6, `old ${Math.round(againstOld)}ms, current ${Math.round(againstCurrent)}ms`);
