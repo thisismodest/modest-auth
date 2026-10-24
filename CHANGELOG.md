@@ -6,6 +6,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.3.0] - 2026-10-24
+
 Nothing to get quietly wrong: what can be set wrong now is safe when left out, and says
 in the log what to set.
 

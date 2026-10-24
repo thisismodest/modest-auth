@@ -1,6 +1,6 @@
 {
   "name": "modest-auth",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Email and password authentication for Node.js, with sessions. No dependencies.",
   "license": "MIT",
   "author": "Modest Industries Ltd",
