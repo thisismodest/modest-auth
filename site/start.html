@@ -32,6 +32,7 @@
           <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#151515" /><circle cx="12" cy="10" r="3" fill="#fff" /><path d="M10.6 12.2 9.8 17h4.4l-.8-4.8" fill="#fff" /></svg>
           modest-auth
         </a>
+        <a href="start.html">Start</a>
         <a href="start.html" aria-current="page">Start</a>
         <a href="docs.html">Docs</a>
         <a href="security.html">Security</a>
@@ -193,18 +194,18 @@ server.<span class="f">listen</span>(3000, () =&gt; console.<span class="f">log<
     &lt;div id="signed-out" hidden&gt;
       &lt;h2&gt;Sign up, or forgot your password?&lt;/h2&gt;
       &lt;form method="post" data-route="send-password-link"&gt;
-        &lt;input name="email" type="email" autocomplete="email" required /&gt;
+        &lt;label&gt;Email &lt;input name="email" type="email" autocomplete="email" required /&gt;&lt;/label&gt;
         &lt;button&gt;Email me a link&lt;/button&gt;
       &lt;/form&gt;
 
       &lt;h2&gt;Sign in&lt;/h2&gt;
       &lt;form method="post" data-route="sign-in"&gt;
-        &lt;input name="email" type="email" autocomplete="username" required /&gt;
-        &lt;input name="password" type="password" autocomplete="current-password" required /&gt;
+        &lt;label&gt;Email &lt;input name="email" type="email" autocomplete="username" required /&gt;&lt;/label&gt;
+        &lt;label&gt;Password &lt;input name="password" type="password" autocomplete="current-password" required /&gt;&lt;/label&gt;
         &lt;button&gt;Sign in&lt;/button&gt;
       &lt;/form&gt;
       &lt;form method="post" data-route="send-sign-in-link"&gt;
-        &lt;input name="email" type="email" autocomplete="email" required /&gt;
+        &lt;label&gt;Email &lt;input name="email" type="email" autocomplete="email" required /&gt;&lt;/label&gt;
         &lt;button&gt;Email me a sign-in link instead&lt;/button&gt;
       &lt;/form&gt;
     &lt;/div&gt;
@@ -215,8 +216,8 @@ server.<span class="f">listen</span>(3000, () =&gt; console.<span class="f">log<
 
       &lt;h2&gt;Change your password&lt;/h2&gt;
       &lt;form method="post" data-route="password"&gt;
-        &lt;input name="current" type="password" autocomplete="current-password" required placeholder="Your password" /&gt;
-        &lt;input name="next" type="password" autocomplete="new-password" required minlength="15" placeholder="A new one" /&gt;
+        &lt;label&gt;Current password &lt;input name="current" type="password" autocomplete="current-password" required /&gt;&lt;/label&gt;
+        &lt;label&gt;New password &lt;input name="next" type="password" autocomplete="new-password" required minlength="15" /&gt;&lt;/label&gt;
         &lt;button&gt;Change it&lt;/button&gt;
       &lt;/form&gt;
     &lt;/div&gt;
@@ -284,7 +285,7 @@ document.<span class="f">getElementById</span>(user ? <span class="s">"signed-in
     &lt;p id="status" role="status"&gt;&lt;/p&gt;
 
     &lt;form method="post" data-route="set-password" hidden&gt;
-      &lt;input name="password" type="password" autocomplete="new-password" required minlength="15" /&gt;
+      &lt;label&gt;New password &lt;input name="password" type="password" autocomplete="new-password" required minlength="15" /&gt;&lt;/label&gt;
       &lt;button&gt;Save and sign in&lt;/button&gt;
     &lt;/form&gt;
     &lt;form method="post" data-route="sign-in-with-link" hidden&gt;
@@ -396,7 +397,7 @@ history.<span class="f">replaceState</span>(null, <span class="s">""</span>, loc
           <div class="window">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>public/index.html</span></div>
             <pre><code>&lt;form method="post" data-route="delete-account"&gt;
-  &lt;input name="password" type="password" autocomplete="current-password" required placeholder="Your password" /&gt;
+  &lt;label&gt;Password &lt;input name="password" type="password" autocomplete="current-password" required /&gt;&lt;/label&gt;
   &lt;button&gt;Delete my account&lt;/button&gt;
 &lt;/form&gt;</code></pre>
           </div>
