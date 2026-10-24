@@ -551,7 +551,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const email = cleanEmail(given) ?? "";
       const row = email ? userRow("email", email) : undefined;
       const hash = await verify(row, email || "invalid", password, from);
-      const user = { id: row!.id, email: row!.email };
+      // (verify throws without an account: this only tells the type checker so.)
+      if (!row) throw WRONG();
+      const user = { id: row.id, email: row.email };
       checked.set(user, { hash, by: "password", from });
       return user;
     },

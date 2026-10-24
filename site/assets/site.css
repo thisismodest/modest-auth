@@ -42,6 +42,10 @@ a {
   padding-block: var(--mdst-space-4);
 }
 
+footer a {
+  color: inherit;
+}
+
 .site-nav a {
   color: var(--muted);
   text-decoration: none;
@@ -176,11 +180,11 @@ a {
 }
 
 /* The install line, under the buttons. */
-.hero .install {
+:where(.hero) .install {
   margin: var(--mdst-space-4) 0 0;
 }
 
-.hero .install code {
+:where(.hero) .install code {
   padding: 0.4rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -188,7 +192,7 @@ a {
   font-size: var(--mdst-text-sm);
 }
 
-.hero .install span {
+:where(.hero) .install span {
   color: var(--muted);
 }
 
@@ -196,6 +200,7 @@ a {
 
 .window {
   position: relative;
+  margin: 0;
   border-radius: 12px;
   background: var(--code-bg);
   color: var(--code-fg);
@@ -241,7 +246,7 @@ a {
   .window pre { font-size: 0.7rem; padding: 1rem 1rem 2.25rem; }
 }
 
-.window pre code {
+.window :where(pre) code {
   white-space: pre;
   background: none;
   color: inherit;
@@ -276,7 +281,7 @@ a {
   margin: 0;
 }
 
-.status p + p {
+.status .detail {
   margin-block-start: 0.3rem;
   color: var(--muted);
   font-family: var(--mdst-font-mono);
@@ -393,7 +398,7 @@ section h2 {
   content: "×";
 }
 
-.compare > div:last-child li::before {
+.compare > :where(div:last-child) li::before {
   color: var(--accent);
   content: "✓";
 }
@@ -515,7 +520,7 @@ section h2 {
   color: #b8b8b2;
 }
 
-.closing .install code {
+:where(.closing) .install code {
   display: inline-block;
   margin-block: var(--mdst-space-2);
   padding: 0.5rem 1rem;
@@ -526,7 +531,7 @@ section h2 {
   font-size: var(--mdst-text-sm);
 }
 
-.closing .install span {
+:where(.closing) .install span {
   color: #7d807b;
 }
 
@@ -690,25 +695,25 @@ section h2 {
   line-height: 1.65;
 }
 
-.article .window,
-.article .table-card,
-.article .cards,
-.article .steps {
+:where(.article) .window,
+:where(.article) .table-card,
+:where(.article) .cards,
+:where(.article) .steps {
   margin-block: var(--mdst-space-4);
 }
 
-.article .closing {
+:where(.article) .closing {
   margin-block: var(--mdst-space-6) 0;
   padding: var(--mdst-space-8) var(--mdst-space-6);
   border: 0;
 }
 
-.article .closing p {
+:where(.article) .closing p {
   max-width: 34rem;
   margin-inline: auto;
 }
 
-.article .closing strong {
+:where(.article) .closing strong {
   color: #fff;
 }
 
@@ -865,6 +870,3 @@ footer .wrap {
   gap: var(--mdst-space-3);
 }
 
-footer a {
-  color: inherit;
-}

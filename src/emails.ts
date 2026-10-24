@@ -40,7 +40,7 @@ export function cleanEmail(given: string): string | null {
   const labels = ascii.split(".");
   if (labels.length < 2 || labels.some((label) => label.length === 0 || label.length > 63 || label.startsWith("-") || label.endsWith("-") || !/^[a-z0-9_-]+$/.test(label))) return null;
   // A name, not a number: the last label has a letter, so an IP address (in any of its spellings) isn't a domain here.
-  if (!/[a-z]/.test(labels.at(-1)!)) return null;
+  if (!/[a-z]/.test(labels.at(-1) ?? "")) return null;
   const kept = `${local}@${ascii}`;
   return kept.length <= LONGEST ? kept : null;
 }

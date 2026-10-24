@@ -100,9 +100,10 @@ const memory = ({ ln, r }: Cost) => 2 ** ln * r;
 function parse(stored: string): { cost: Cost; salt: Buffer; hash: Buffer } | null {
   const match = /^\$scrypt\$ln=(\d{1,2}),r=(\d{1,2}),p=(\d{1,2})\$([A-Za-z0-9_-]{16,64})\$([A-Za-z0-9_-]{43})$/.exec(stored);
   if (!match) return null;
-  const cost = { ln: Number(match[1]), r: Number(match[2]), p: Number(match[3]) };
+  const [, ln = "", r = "", p = "", salt = "", hash = ""] = match;
+  const cost = { ln: Number(ln), r: Number(r), p: Number(p) };
   if (cost.ln < 10 || cost.r < 1 || cost.p < 1 || work(cost) > work(CURRENT) || memory(cost) > memory(CURRENT)) return null;
-  return { cost, salt: Buffer.from(match[4]!, "base64url"), hash: Buffer.from(match[5]!, "base64url") };
+  return { cost, salt: Buffer.from(salt, "base64url"), hash: Buffer.from(hash, "base64url") };
 }
 
 const isCurrent = ({ ln, r, p }: Cost) => ln === CURRENT.ln && r === CURRENT.r && p === CURRENT.p;
@@ -118,5 +119,5 @@ export async function checkPassword(password: string, stored: string): Promise<{
   const given = parsed ? await derive(password, parsed.salt, parsed.cost) : null;
   const ok = !!parsed && !!given && timingSafeEqual(given, parsed.hash);
   if (!ok && (!parsed || !isCurrent(parsed.cost))) await derive(password, randomBytes(SALT_BYTES), CURRENT);
-  return { ok, outdated: ok && !isCurrent(parsed!.cost) };
+  return { ok, outdated: ok && !!parsed && !isCurrent(parsed.cost) };
 }

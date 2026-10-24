@@ -17,7 +17,7 @@ function plainPath(url: string | undefined): string | null {
   // The path alone: what follows "?" (a query, which may well hold "%2F") is the app's business.
   const path = url?.split(/[?#]/)[0] ?? "";
   // Nor whitespace or control characters, which the URL standard drops (Node's own parser refuses them, unless set to be lenient).
-  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /%2e|%2f|%5c/i.test(path) || /[\s\x00-\x1f\x7f]/.test(path)) return null;
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\") || /%2e|%2f|%5c/i.test(path) || /[\s\p{Cc}]/u.test(path)) return null;
   // No "." or ".." segments: a path is taken as written, not worked out.
   if (path.split("/").some((segment) => segment === "." || segment === "..")) return null;
   try {

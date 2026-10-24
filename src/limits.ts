@@ -30,7 +30,8 @@ export function settingUp(step: () => void): void {
   const until = Date.now() + 2000;
   for (;;) {
     try {
-      return step();
+      step();
+      return;
     } catch (error) {
       if (!/locked|busy/i.test(String(error)) || Date.now() > until) throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 + Math.random() * 40);
@@ -112,7 +113,10 @@ function ipv6(text: string): number[] | null {
   const last = (halves.length === 2 ? right : left).at(-1);
   const embedded = last?.includes(".") ? ipv4(last) : null;
   if (last?.includes(".") && !embedded) return null;
-  if (embedded) (halves.length === 2 ? right : left).splice(-1, 1, ((embedded[0]! << 8) | embedded[1]!).toString(16), ((embedded[2]! << 8) | embedded[3]!).toString(16));
+  if (embedded) {
+    const [a = 0, b = 0, c = 0, d = 0] = embedded;
+    (halves.length === 2 ? right : left).splice(-1, 1, ((a << 8) | b).toString(16), ((c << 8) | d).toString(16));
+  }
   const missing = 8 - left.length - right.length;
   if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
   const all = [...left, ...Array<string>(halves.length === 2 ? missing : 0).fill("0"), ...right];
@@ -135,9 +139,9 @@ export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxi
   let address = ((proxies > 0 ? forwarded[forwarded.length - proxies] : undefined) ?? remoteAddress ?? "").trim().toLowerCase();
   // "[2001:db8::1]:443" and "203.0.113.9:51234": the address without its port.
   const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(address);
-  if (bracketed) address = bracketed[1]!;
+  if (bracketed) address = bracketed[1] ?? "";
   else if (/^[\d.]+:\d+$/.test(address)) address = address.slice(0, address.indexOf(":"));
-  address = address.split("%")[0]!;
+  address = address.split("%")[0] ?? "";
   const v4 = ipv4(address);
   if (v4) return v4.join(".");
   const v6 = address.includes(":") ? ipv6(address) : null;
@@ -146,10 +150,12 @@ export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxi
   // mapped (::ffff:a.b.c.d), compatible (::a.b.c.d), and through NAT64 (64:ff9b::a.b.c.d, RFC 6052,
   // and the local-use 64:ff9b:1::/48, RFC 8215, with the usual /96 prefix).
   const zeros = (from: number, to: number) => v6.slice(from, to).every((n) => n === 0);
+  // The last two groups: where an IPv4 address is carried.
+  const [g6 = 0, g7 = 0] = v6.slice(6);
   const carriesIpv4 =
     (zeros(0, 5) && v6[5] === 0xffff) ||
-    (zeros(0, 6) && (v6[6]! > 0 || v6[7]! > 1)) ||
+    (zeros(0, 6) && (g6 > 0 || g7 > 1)) ||
     (v6[0] === 0x64 && v6[1] === 0xff9b && (v6[2] === 0 || v6[2] === 1) && zeros(3, 6));
-  if (carriesIpv4) return [v6[6]! >> 8, v6[6]! & 255, v6[7]! >> 8, v6[7]! & 255].join(".");
+  if (carriesIpv4) return [g6 >> 8, g6 & 255, g7 >> 8, g7 & 255].join(".");
   return `${v6.slice(0, 4).map((n) => n.toString(16)).join(":")}::/64`;
 }

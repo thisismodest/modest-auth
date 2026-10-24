@@ -59,7 +59,7 @@
             </div>
 
             <div>
-              <div class="window" role="figure" aria-label="Adding sign-in to a Node server">
+              <figure class="window" aria-label="Adding sign-in to a Node server">
                 <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
                 <pre><code><span class="k">import</span> { createAuth, createHandler } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 <span class="k">import</span> { handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
@@ -77,10 +77,10 @@
   <span class="k">const</span> user = handler.<span class="f">userOf</span>(<span class="f">toRequest</span>(req));
   res.<span class="f">end</span>(user ? <span class="s">`Hello, ${user.email}`</span> : <span class="s">"Hello"</span>);
 }).<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
-              </div>
-              <div class="status" aria-label="The session cookie">
+              </figure>
+              <div class="status">
                 <p><span class="dot" aria-hidden="true"></span><strong>Signed in: new session</strong></p>
-                <p>HttpOnly · Secure · __Host- · SameSite=Lax</p>
+                <p class="detail">HttpOnly · Secure · __Host- · SameSite=Lax</p>
               </div>
             </div>
           </div>
@@ -171,13 +171,13 @@
             </div>
           </div>
 
-          <div class="window terminal" role="figure" aria-label="Output of npm run check">
+          <figure class="window terminal" aria-label="Output of npm run check">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>terminal</span></div>
             <pre><code><span class="c">$</span> npm run check
 <span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 1552 lines.
 <span class="ok">ℹ pass 137</span>
 ℹ fail 0</code></pre>
-          </div>
+          </figure>
         </section>
 
         <section aria-labelledby="where">

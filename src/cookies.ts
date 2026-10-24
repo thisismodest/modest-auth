@@ -51,5 +51,6 @@ export function readSessionCookie(header: string | undefined | null, origin: str
     const at = part.indexOf("=");
     if (at >= 0 && trimmed(part.slice(0, at)) === wanted) found.push(trimmed(part.slice(at + 1)));
   }
-  return found.length === 1 && TOKEN.test(found[0]!) ? found[0]! : null;
+  const [only] = found;
+  return found.length === 1 && only !== undefined && TOKEN.test(only) ? only : null;
 }

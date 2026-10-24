@@ -94,10 +94,10 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
   let size = 0;
   const reader = request.body?.getReader();
   try {
-    for (let part = await reader?.read(); part && !part.done; part = await reader!.read()) {
+    for (let part = await reader?.read(); reader && part && !part.done; part = await reader.read()) {
       size += part.value.byteLength;
       if (size > BODY_LIMIT) {
-        await reader!.cancel().catch(() => {});
+        await reader.cancel().catch(() => {});
         return refuse(413, "too-large", "That's too large.");
       }
       chunks.push(part.value);
@@ -208,7 +208,10 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     return reply(200, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
   };
   /** Sends the email (after the answer), and answers the same whatever happened. */
-  const sent = (link: Link | null) => (send(link), reply(202, {}));
+  const sent = (link: Link | null) => {
+    send(link);
+    return reply(202, {});
+  };
 
   // Only the site's own pages may change anything (browsers always send Origin on a POST).
   const fromSite = (request: Request) => {
