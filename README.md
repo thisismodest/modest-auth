@@ -23,7 +23,7 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 1,500 lines of source: only what sign-in needs.
+- **Small.** About 1,650 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, or passkeys today, use a
