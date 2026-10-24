@@ -22,11 +22,11 @@ const handler = createHandler(auth, {
   sendEmail: (to, subject, text) => console.log(`\nEmail to ${to}: ${subject}\n${text}`),
 });
 
-const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 // Every form is method="post": should the script fail to load, a password still never ends up in a URL.
 const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><title>modest-auth example</title>
-<h1>${email ? `Signed in as ${escape(email)}` : "Not signed in"}</h1>
+<h1>${email ? `Signed in as ${escapeHtml(email)}` : "Not signed in"}</h1>
 <h2>Sign up, or choose a new password</h2>
 <form method="post" data-route="send-password-link"><input name="email" type="email" required> <button>Email me a link</button></form>
 <h2>Sign in</h2>

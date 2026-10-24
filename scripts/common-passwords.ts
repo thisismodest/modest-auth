@@ -30,7 +30,7 @@ for (const list of LISTS) {
   for (const raw of (await res.text()).split(/\r?\n/)) {
     // Some lists write awkward passwords in hashcat's "$HEX[...]" form: decode them.
     const hex = /^\$hex\[([0-9a-f]+)\]$/i.exec(raw);
-    const line = hex ? new TextDecoder("utf-8", { fatal: false }).decode(Buffer.from(hex[1]!, "hex")) : raw;
+    const line = hex ? new TextDecoder("utf-8", { fatal: false }).decode(Buffer.from(hex[1] ?? "", "hex")) : raw;
     all.push(line.normalize("NFKC").toLowerCase());
   }
 }
@@ -40,7 +40,7 @@ const kept = [...new Set(all.filter((p) => length(p) >= SHORTEST_PASSWORD && len
 const head = [
   "# Common passwords of 15 characters or more, refused at sign-up and on changing a password.",
   '# Normalised (NFKC) and lowercase. Lines starting "#" are notes.',
-  "# From SecLists, at commit " + COMMIT + ":",
+  `# From SecLists, at commit ${COMMIT}:`,
   "#   Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt (the UK National Cyber Security Centre),",
   "#   Passwords/Common-Credentials/Pwdb_top-1000000.txt.",
   "# Made by scripts/common-passwords.ts. SecLists' licence:",
