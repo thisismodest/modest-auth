@@ -369,22 +369,89 @@ test("answers carry no CORS headers, so another site's page can't read them; pau
   assert.ok(wait > 890 && wait <= 900, `until this pause (15 minutes) lifts: ${wait}s`);
 });
 
-test("X-Forwarded-For from an address that isn't trusted is warned about once, naming the setting; from a trusted proxy, not at all", async () => {
+test("a proxy passing X-Forwarded-For but not trusted is said once, naming what to set", async () => {
   const { send } = setup();
-  const warnings = await captureWarnings(async () => {
+  const sign = (address: string, forwardedFor: string, trustedProxies?: string[]) =>
+    createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN, ...(trustedProxies ? { trustedProxies } : {}) }).handle(
+      new Request(`${ORIGIN}/auth/sign-out`, {
+        method: "POST",
+        headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": forwardedFor },
+      }),
+      address,
+    );
+  const fromCdn = await captureWarnings(async () => {
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.50" });
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.51" });
   });
-  assert.equal(warnings.length, 1);
-  assert.match(must(warnings[0])[0] as string, /trustedProxies/);
-  const fromProxy = await captureWarnings(async () => {
-    const request = new Request(`${ORIGIN}/auth/sign-out`, {
-      method: "POST",
-      headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": "203.0.113.52" },
-    });
-    await setup().handler.handle(request, "10.0.0.1");
+  assert.equal(fromCdn.length, 1, "once for that address");
+  assert.match(String(fromCdn), /add its address ranges to trustedProxies/);
+  assert.match(String(await captureWarnings(() => sign("127.0.0.1", "203.0.113.9"))), /trustedProxies: \["loopback"\]/);
+  assert.match(String(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9"))), /trustedProxies: \["private"\]/);
+  assert.deepEqual(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9", ["private"])), [], "named: nothing to say");
+  // Behind a private load balancer, a CDN that isn't named is found where the trail stops.
+  assert.match(String(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9, 173.245.48.5", ["private"]))), /173\.245\.48\.5.*trustedProxies/);
+});
+
+test("a proxy in front that passes no address on is said once, with what to add, on a real (HTTPS) site", async () => {
+  const sign = (origin: string) =>
+    createHandler(fresh().auth, { ...EMAIL, origin }).handle(
+      new Request(`${origin}/auth/sign-out`, { method: "POST", headers: { origin, "content-type": "application/json" } }),
+      "127.0.0.1",
+    );
+  assert.match(String(await captureWarnings(() => sign(ORIGIN))), /no X-Forwarded-For.*proxy_set_header X-Forwarded-For/);
+  assert.deepEqual(await captureWarnings(() => sign(DEV)), [], "in development, a request from this machine is just that");
+});
+
+test("a page whose origin isn't the one set is said once, naming both; another site's request isn't", async () => {
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
+  const from = (origin: string, site: string) =>
+    handler.handle(
+      new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { origin, "sec-fetch-site": site, "content-type": "application/json" } }),
+      HERE,
+    );
+  const said = await captureWarnings(async () => {
+    assert.equal((await from("https://www.app.example.org", "same-origin"))?.status, 403);
   });
-  assert.equal(fromProxy.length, 0);
+  assert.match(String(said), /www\.app\.example\.org.*origin is https:\/\/app\.example\.org/);
+  assert.deepEqual(await captureWarnings(() => from("https://evil.example", "cross-site")), [], "another site's: refused, and nothing to say");
+});
+
+test("a handler given no address says how to give it", async () => {
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
+  const said = await captureWarnings(async () => {
+    const request = new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" } });
+    assert.equal((await handler.handle(request, undefined))?.status, 400);
+  });
+  assert.match(String(said), /given no address.*Bun.*Deno.*Hono/);
+});
+
+test("a sendEmail that ignores its signal is let go when it's up, and said why, so email doesn't stop", async () => {
+  const realTimeout = AbortSignal.timeout;
+  // The 30 seconds, up at once.
+  AbortSignal.timeout = () => {
+    const stop = new AbortController();
+    setImmediate(() => stop.abort());
+    return stop.signal;
+  };
+  let started = 0;
+  try {
+    const handler = createHandler(fresh().auth, {
+      ...EMAIL,
+      origin: ORIGIN,
+      sendEmail: () => {
+        started++;
+        return new Promise<void>(() => {});
+      },
+    });
+    const logged = await captureErrors(async () => {
+      for (let i = 0; i < 12; i++) await post(handler, "send-password-link", { email: `p${i}@example.org` }, `10.6.0.${i}`);
+      for (let i = 0; i < 6; i++) await afterwards();
+    });
+    assert.equal(started, 12, "every send started: none held a place for good");
+    assert.match(String(logged), /didn't finish in 30 seconds: pass its signal on/);
+  } finally {
+    AbortSignal.timeout = realTimeout;
+  }
 });
 
 test("asking for a link gets the same answer whether or not there's an account, and the email goes only after the answer", async () => {
@@ -664,7 +731,13 @@ test("a body read before the handler (a body parser mounted in front) is said pl
 
 test("sendEmail is given a signal that aborts after 30 seconds, so a stuck service can be let go", async () => {
   let signal: AbortSignal | undefined;
-  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN, sendEmail: (_to, _subject, _text, options) => void (signal = options.signal) });
+  const handler = createHandler(fresh().auth, {
+    ...EMAIL,
+    origin: ORIGIN,
+    sendEmail: (_to, _subject, _text, options) => {
+      signal = options.signal;
+    },
+  });
   await post(handler, "send-password-link", { email: "ann@example.org" }, HERE);
   await afterwards();
   assert.ok(signal instanceof AbortSignal && !signal.aborted);

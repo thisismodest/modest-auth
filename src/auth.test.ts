@@ -1073,3 +1073,12 @@ test("breached passwords: the range can be the fetch Response itself; one that i
   });
   assert.match(String(logged), /503/);
 });
+
+test("breached passwords: a range answer over 1MB isn't read to the end; the password is allowed, and that said", async () => {
+  const { auth } = fresh({ breachedRange: () => new Response("A".repeat(2_000_000)) });
+  const link = must(auth.requestLink("password", "ann@example.org", HERE));
+  const logged = await captureErrors(async () => {
+    assert.ok(await auth.usePasswordLink(must(link.token), PASSWORD, HERE));
+  });
+  assert.match(String(logged), /over 1MB/);
+});

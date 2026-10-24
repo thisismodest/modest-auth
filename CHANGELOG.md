@@ -6,26 +6,34 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
-Nothing to fine-tune: settings that could quietly go wrong now work without being set,
-or say plainly what to change.
+Nothing to get quietly wrong: what can be set wrong now is safe when left out, and says
+in the log what to set.
 
 ### Changed
 
-- **Proxies are found, not counted.** `proxies` is gone (passing it says what replaced
-  it): a proxy on this machine or a private network (nginx, Caddy, a hosting platform's
-  load balancer) is trusted by itself, however many there are and on whatever path, and
-  `X-Forwarded-For` is read from the right to the first address that isn't a trusted
-  proxy. A CDN with public addresses is listed in the new `trustedProxies`; left out,
-  its visitors share its address (safe), and the handler says so once.
-  `addressKey(client, trustedProxies?)` takes the list in place of a count.
-- `sendEmail` is given `{ signal }`, which aborts after 30 seconds: passed to `fetch`,
-  a stuck email service can't hold up the others.
+- **Proxies are named, not counted.** `proxies` is gone (passing it says what replaced
+  it): name the proxies in front in `trustedProxies` instead, as `["loopback"]` (nginx or
+  Caddy on the same machine), `["private"]` (a hosting platform's load balancer), a
+  CDN's ranges, or addresses. `X-Forwarded-For` is read from the right past however
+  many named proxies there are, on any path, to the first address that isn't one.
+  Nothing named is safe (visitors share the proxy's address), and the log says what to
+  set: a proxy passing addresses that isn't named, or one in front passing none. Ranges
+  wide enough to be much of the internet are refused. `addressKey(client,
+  trustedProxies?)` takes the list in place of a count.
+- `sendEmail` is given `{ signal }`, which aborts after 30 seconds, and a send is let go
+  of then whether or not it stops (and that's logged), so a stuck email service can't
+  hold up the others.
 - `breachedRange` is given `{ signal }` too, and may give the fetch `Response` itself;
   one that isn't OK counts as a failed check (the password is allowed, and that logged)
-  rather than as an empty range.
+  rather than as an empty range. It's read to 1MB at most, and let go of at 5 seconds.
 
 ### Added
 
+- Setup mistakes said in the log, once each: an `origin` that isn't where the pages
+  are (`www.`, a port, `http`), a handler given no address (with how, for Bun, Deno, and
+  Hono), and the proxy cases above. An `origin` that isn't an address says so.
+- The development cookie's name has the port in it, so two apps on localhost don't sign
+  each other out.
 - A body read before the handler (a body parser mounted in front of it) is an error
   that says so, rather than a request with no fields.
 

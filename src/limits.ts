@@ -168,30 +168,40 @@ function inRange(address: Address, range: { at: Address; prefix: number }): bool
   return true;
 }
 
-/** A range as written ("10.0.0.0/8", "2400:cb00::/32", or one address), or why not. */
-function readRange(written: string): { at: Address; prefix: number } {
-  const [address = "", prefix, ...more] = String(written).split("/");
-  const at = readAddress(address);
+/** A range as written ("10.0.0.0/8", "2400:cb00::/32", or one address), or why not. `own`: one of the named sets', not checked for width. */
+function readRange(written: string, own = false): { at: Address; prefix: number } {
+  const text = String(written);
+  const [address = "", prefix, ...more] = text.split("/");
+  // Just an address and a length: a port, a zone, or brackets mean it was copied from somewhere else.
+  const plain = !/[[\]%\s]/.test(address) && !/^\d+\.\d+\.\d+\.\d+:/.test(address);
+  const at = plain ? readAddress(address) : null;
   const most = at && "v4" in at ? 32 : 128;
   const length = prefix === undefined ? most : /^\d{1,3}$/.test(prefix) ? Number(prefix) : Number.NaN;
   if (!at || more.length || !(length >= 0 && length <= most))
-    throw new Error(`trustedProxies: "${written}" isn't an address or a range such as "203.0.113.0/24".`);
+    throw new Error(`trustedProxies: "${text}" isn't an address or a range such as "203.0.113.0/24".`);
+  // IPv4 written as IPv6 (::ffff:a.b.c.d/96 and the like) is read as IPv4, so its length would mean something else.
+  if ("v4" in at && address.includes(":")) throw new Error(`trustedProxies: write "${text}" as an IPv4 address or range.`);
+  // Wider than any one network's proxies: it would trust much of the internet to say who it is.
+  if (!own && length < ("v4" in at ? 8 : 16)) throw new Error(`trustedProxies: "${text}" is too wide to be a network's proxies.`);
   return { at, prefix: length };
 }
 
-/**
- * Where a proxy you can trust connects from, without being told: this machine (loopback), and private
- * networks (where a hosting platform's load balancer, or your own, sits). Someone on the internet can't
- * connect from one of these.
- */
-const PRIVATE = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "::1", "fc00::/7", "fe80::/10"];
+const LOOPBACK = ["127.0.0.0/8", "::1"];
+/** Private networks: where a hosting platform's load balancer, or your own, connects from. */
+const PRIVATE = [...LOOPBACK, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "fe80::/10"];
+/** Names for the usual cases: "loopback" (a proxy on this machine), "private" (one on a private network). */
+const NAMED: Record<string, string[]> = { loopback: LOOPBACK, private: PRIVATE };
 
-/** Whether an address is a proxy you trust: on a private network, or in one of `extra`'s ranges (a CDN's, say). */
-export function trusting(extra: readonly string[] = []): (address: Address) => boolean {
-  if (!Array.isArray(extra)) throw new Error('trustedProxies must be a list of address ranges, such as ["173.245.48.0/20"].');
-  const ranges = [...PRIVATE, ...extra].map(readRange);
+/** Whether an address is a proxy you trust: in one of `trustedProxies`' ranges ("loopback", "private", or a CDN's, say). */
+export function trusting(trustedProxies: readonly string[] = []): (address: Address) => boolean {
+  if (!Array.isArray(trustedProxies)) throw new Error('trustedProxies must be a list, such as ["loopback"] or ["173.245.48.0/20"].');
+  const ranges = trustedProxies.flatMap((entry) =>
+    Object.hasOwn(NAMED, entry) ? (NAMED[entry] ?? []).map((range) => readRange(range, true)) : [readRange(entry)],
+  );
   return (address) => ranges.some((range) => inRange(address, range));
 }
+const isPrivate = trusting(["private"]);
+const isLoopback = trusting(["loopback"]);
 
 /** The address a limit counts: IPv4 as it is, IPv6 by its /64 (the block one household or server is given). */
 const keyOf = (address: Address) =>
@@ -202,29 +212,39 @@ const keyOf = (address: Address) =>
         .map((n) => n.toString(16))
         .join(":")}::/64`;
 
+/** The whole address, as it's written in a message. */
+const written = (address: Address) => ("v4" in address ? address.v4.join(".") : address.v6.map((n) => n.toString(16)).join(":"));
+
 /**
- * Who a request came from, for limits. Starting from the connection, each address that's a proxy you
- * trust passes on the next one along X-Forwarded-For, from the right (each proxy adds the address it
- * saw); the first that isn't a trusted proxy is the client. So any number of proxies, on any path, is
- * read rightly with nothing to set, and a connection from anyone else has its header ignored, whatever
- * it says. Anything that isn't an address counts as "unknown".
+ * Who a request came from, for limits, and any sign that the proxies in front aren't set up as they
+ * should be. Starting from the connection, each address that's a proxy you trust passes on the next one
+ * along X-Forwarded-For, from the right (each proxy adds the address it saw); the first that isn't a
+ * trusted proxy is the client. So any number of trusted proxies, on any path, is read rightly, and a
+ * connection from anyone else has its header ignored, whatever it says.
+ *
+ * - `untrustedProxy`: the client found still passed addresses on, so it may be a proxy of yours that
+ *   isn't in trustedProxies (or a visitor's own, which is harmless): its address, and whether it's on
+ *   this machine or a private network.
+ * - `quietProxy`: the request came from this machine or a private network with no X-Forwarded-For at
+ *   all, so a proxy in front may not be passing the client's address on.
  */
-export function clientOf({ remoteAddress, forwardedFor }: ClientAddress, trusted: (address: Address) => boolean): string {
+export function traceClient(
+  { remoteAddress, forwardedFor }: ClientAddress,
+  trusted: (address: Address) => boolean,
+): { key: string; untrustedProxy: { address: string; where: "loopback" | "private" | "public" } | null; quietProxy: boolean } {
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(",") : (forwardedFor ?? "");
   const hops = header
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
-  let client = readAddress(remoteAddress ?? "");
+  const connection = readAddress(remoteAddress ?? "");
+  const quietProxy = !!connection && hops.length === 0 && isPrivate(connection);
+  let client = connection;
   while (client && trusted(client) && hops.length) client = readAddress(hops.pop() ?? "");
-  return client ? keyOf(client) : "unknown";
+  if (!client) return { key: "unknown", untrustedProxy: null, quietProxy };
+  const where = isLoopback(client) ? "loopback" : isPrivate(client) ? "private" : "public";
+  return { key: keyOf(client), untrustedProxy: hops.length && !trusted(client) ? { address: written(client), where } : null, quietProxy };
 }
 
-/** Whether a connection comes from a proxy you trust (so its X-Forwarded-For is read). */
-export const fromTrusted = (remoteAddress: string | undefined, trusted: (address: Address) => boolean): boolean => {
-  const address = readAddress(remoteAddress ?? "");
-  return !!address && trusted(address);
-};
-
-/** Who a request came from, for limits (see clientOf), trusting proxies on private networks and in `trustedProxies`' ranges. */
-export const addressKey = (client: ClientAddress, trustedProxies: readonly string[] = []): string => clientOf(client, trusting(trustedProxies));
+/** Who a request came from, for limits (see traceClient), trusting the proxies in `trustedProxies` and no others. */
+export const addressKey = (client: ClientAddress, trustedProxies: readonly string[] = []): string => traceClient(client, trusting(trustedProxies)).key;

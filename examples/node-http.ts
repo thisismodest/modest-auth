@@ -5,7 +5,7 @@
 // The handler answers /auth/*; everything else is the app's, which asks the
 // handler who's signed in. Emails are printed here rather than sent: a real app
 // sends them with its email service. On a real site, ORIGIN is its https://
-// address; a proxy on the same machine or a private network needs nothing set.
+// address, and behind a proxy, trustedProxies names it (see the README).
 
 import { createServer, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";

@@ -68,7 +68,7 @@ export const withClock = async (run: (ahead: (ms: number) => void, real: () => n
   }
 };
 
-const capture = async (kind: "error" | "warn", run: () => Promise<void> | void) => {
+const capture = async (kind: "error" | "warn", run: () => unknown) => {
   const logged: unknown[][] = [];
   const real = console[kind];
   console[kind] = (...parts: unknown[]) => void logged.push(parts);
@@ -80,9 +80,9 @@ const capture = async (kind: "error" | "warn", run: () => Promise<void> | void) 
   return logged;
 };
 /** What `run` passed to console.error, each call's arguments. */
-export const captureErrors = (run: () => Promise<void> | void) => capture("error", run);
+export const captureErrors = (run: () => unknown) => capture("error", run);
 /** What `run` passed to console.warn, each call's arguments. */
-export const captureWarnings = (run: () => Promise<void> | void) => capture("warn", run);
+export const captureWarnings = (run: () => unknown) => capture("warn", run);
 
 /** Runs `run` with every unhandled rejection meanwhile gathered in `crashed`. */
 export const watchCrashes = async (run: (crashed: unknown[]) => Promise<void>) => {

@@ -19,6 +19,7 @@ import { cleanEmail } from "./emails.ts";
 import { AuthError } from "./errors.ts";
 import { databaseLimits, type Limit, settingUp } from "./limits.ts";
 import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGEST_TYPED, unmatchableHash } from "./passwords.ts";
+import { readAtMost } from "./streams.ts";
 import { DAY, HOUR, MINUTE } from "./time.ts";
 
 export type User = { id: string; email: string };
@@ -278,15 +279,21 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
           fail(new Error("took over 5 seconds"));
         }, 5000);
       });
-      /** The range as text: given as text, or read from a Response (one that isn't OK is a failure). */
+      /**
+       * The range as text: given as text, or read from a Response (one that isn't OK is a failure), at most 1MB
+       * (a padded range is about 40KB), and let go of when 5 seconds pass, so it can't keep sending.
+       */
       const fetchRange = async () => {
         const given = await breachedRange(sha1.slice(0, 5), { signal: stop.signal });
         if (typeof given === "string") return given;
-        if (given instanceof Response) {
-          if (!given.ok) throw new Error(`the range answered ${given.status}`);
-          return given.text();
+        if (!(given instanceof Response)) throw new Error("breachedRange gave neither text nor a Response: give the fetch Response itself, or its text");
+        if (!given.ok) {
+          await given.body?.cancel().catch(() => {});
+          throw new Error(`the range answered ${given.status}`);
         }
-        throw new Error("breachedRange gave neither text nor a Response");
+        const bytes = await readAtMost(given.body, 1_000_000, stop.signal);
+        if (bytes === "too-large") throw new Error("the range was over 1MB");
+        return bytes.toString("utf8");
       };
       const range = await Promise.race([fetchRange(), late]);
       for (const line of range.split("\n")) {

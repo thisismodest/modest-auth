@@ -98,9 +98,9 @@ this is for you.
     password, deleting the account), so a stolen session can't be used to guess it.
 
   IPv6 addresses count by their /64; a port added by a proxy is ignored; and
-  `X-Forwarded-For` is only believed from a proxy you trust: one on this machine or a
-  private network, found by itself, or a CDN you list. There's no count of proxies to
-  get right.
+  `X-Forwarded-For` is only believed from the proxies you name, read past however
+  many there are. Name none and it's ignored, which is always safe; get it wrong and
+  the log says what to set.
 - **No telling who has an account:** signing in, signing up, and asking for a link
   each give the same answer, after the same work, whether or not the email has one;
   and an email goes either way (for a sign-in link to an email with no account, one
@@ -129,7 +129,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
 
 // Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
-const auth = createAuth(new DatabaseSync("app.db"), {
+// The path is beside this file, not wherever the server happens to be started from.
+const auth = createAuth(new DatabaseSync(new URL("app.db", import.meta.url)), {
   // Optional: a record of who did what (no passwords, tokens, or emails in it).
   onEvent: (event) => console.log(JSON.stringify(event)),
   // Optional: refuse passwords from known breaches. Only 5-character prefixes of hashes leave.
@@ -140,11 +141,11 @@ const handler = createHandler(auth, {
   origin: "https://example.org",
   // Your page that emailed links open (see "The link page" below).
   linkPage: "/account/link",
-  // Your way of sending email (see "Sending email" below). Pass the signal on.
+  // Your way of sending email (see "Sending email" below). Pass the signal on, and return or
+  // await the send, so a failure is caught and logged.
   sendEmail: (to, subject, text, { signal }) => sendWithYourService({ to, subject, text, signal }),
-  // Only with a CDN in front (Cloudflare and the like): its address ranges. A proxy on this
-  // machine or a private network (nginx, Caddy, a hosting platform's) needs nothing.
-  // trustedProxies: ["173.245.48.0/20", …],
+  // Only behind a proxy (see "Behind a proxy" below), such as:
+  // trustedProxies: ["loopback"],
 });
 
 const server = createServer(async (req, res) => {
@@ -216,7 +217,8 @@ use one up.
 - **Bun:** `Bun.serve({ fetch: async (req, server) => (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) })`
 - **Deno:** `Deno.serve(async (req, info) => (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req))`
 - **Express:** mount it first, before any body parser (which would read the body
-  first; if one does, the handler says so, rather than reading no fields):
+  first; if one does, the handler says so, rather than reading no fields; in Next.js,
+  turn its own off for the route: `export const config = { api: { bodyParser: false } }`):
   `app.use(async (req, res, next) => (await handleNode(handler, req, res)) || next())`
 - **Fastify:** in an `onRequest` hook (before Fastify reads the body), take over the
   handler's own paths:
@@ -231,6 +233,25 @@ use one up.
 
 On a Unix socket there's no client address: put it behind a proxy (which then passes the
 client's on).
+
+### Behind a proxy
+
+Rate limits count each visitor's address. Behind a proxy (nginx, Caddy, a hosting
+platform's load balancer, a CDN), every connection comes from the proxy, so name it and
+have it pass the visitor's address on in `X-Forwarded-For`:
+
+| In front | `trustedProxies` |
+| --- | --- |
+| Nothing (Node faces the internet) | leave it out |
+| nginx or Caddy on the same machine | `["loopback"]` |
+| A hosting platform's load balancer (Render, Fly, Railway, and the like) | `["private"]` |
+| A CDN such as Cloudflare | its published address ranges, as well |
+
+nginx doesn't pass the address on unless told:
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (Caddy does by itself).
+Any number of proxies, on any path, is read past. Name nothing, or the wrong thing, and
+it's safe (at worst, visitors share the proxy's address for limits), and the log says
+what to set: a proxy passing addresses that isn't named, or one that passes none.
 
 ### Sending email
 
@@ -267,10 +288,9 @@ land in spam. Keep the API key in an environment variable. In development,
   except `localhost` for development.
 - **Leaves its routes' path to the handler:** everything under `/auth` (or `base`) is
   the handler's.
-- **Lists a CDN in front, if there is one,** as `trustedProxies` (its published address
-  ranges). Proxies on this machine or a private network are trusted without it. If you
-  forget, its visitors share its address for limits, and the handler says so once in
-  the log, naming the setting.
+- **Names the proxies in front, if any,** as `trustedProxies`, and has them add the
+  client's address (see "Behind a proxy"). If it doesn't, its visitors share the
+  proxy's address for limits (safe, if shared), and the log says what to set.
 - **Sends JSON from its pages,** with `fetch` (a plain HTML form can't send JSON; see
   the example).
 - **Keeps its pages free of injected scripts** (a content security policy helps). No
@@ -297,8 +317,9 @@ Worth knowing:
   network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
   shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one
   organisation) shares 200, and 20 links.
-- **Someone on your own private network** (for an app used on an intranet) is trusted as
-  a proxy would be, so could write their own address into `X-Forwarded-For`.
+- **With `trustedProxies: ["private"]`,** anyone on your own private network is trusted
+  as a proxy would be, so could write their own address into `X-Forwarded-For`: name
+  the proxy's address instead if strangers can reach that network.
 
 ## Using the parts
 
@@ -309,7 +330,7 @@ work out the caller's address with `addressKey`; and for links, send the email
 email saying there's no account), and answer the same either way.
 
 ```ts
-// Who's asking (proxies on private networks are trusted; list a CDN's ranges as a second argument).
+// Who's asking (behind a proxy, name it as a second argument, such as ["loopback"]).
 // Refuse a request whose address isn't known.
 const from = addressKey({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"] });
 if (from === "unknown") return res.writeHead(400).end();

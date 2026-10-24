@@ -247,7 +247,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>trustedProxies</code></h3>
-              <p>Only with a CDN in front: its address ranges. Proxies on this machine or a private network (nginx, Caddy, a hosting platform's) are trusted without it, however many there are.</p>
+              <p>Only behind a proxy: <code>["loopback"]</code> for nginx or Caddy on the same machine, <code>["private"]</code> for a hosting platform's load balancer, or a CDN's ranges. Left out, it's safe, and the log says what to set.</p>
             </div>
             <div>
               <h3><code>linkPage</code></h3>
@@ -277,7 +277,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
           <ul class="checks">
             <li><strong>Serves the site over HTTPS.</strong></li>
             <li><strong>Has a link page</strong> that shows which email a link is for, and acts only when the person does.</li>
-            <li><strong>Lists a CDN in front, if there is one,</strong> as <code>trustedProxies</code>. Other proxies need nothing.</li>
+            <li><strong>Names the proxies in front, if any,</strong> as <code>trustedProxies</code>, and has them add the client's address (nginx: <code>proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;</code>).</li>
             <li><strong>Checks its own changing routes</strong> with <code>handler.fromSite(request)</code>.</li>
             <li><strong>Sets short timeouts</strong> for slow clients.</li>
             <li><strong>Keeps scripts out of its pages</strong> (a content security policy helps).</li>
