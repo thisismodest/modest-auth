@@ -6,6 +6,13 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.2.0] - 2026-10-24
+
+Emailed links, changing an account's email (with an undo), notices, single
+sessions, a record of events, breached passwords refused, and a copy of an
+account's data. Sign-up is now email first, which changes the routes and
+`createHandler`'s options: see Changed and Removed.
+
 ### Added
 
 - A copy of an account's data for its owner: `GET /auth/my-data`, and `dataOf`.
