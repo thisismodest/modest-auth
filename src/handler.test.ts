@@ -6,6 +6,7 @@ import {
   afterwards,
   captureErrors,
   captureWarnings,
+  count,
   fresh,
   HERE,
   must,
@@ -800,6 +801,16 @@ test("setup messages can't be used up: this site's origin only, a few of each ki
     // Other sites' origins, however many, and this site's at other ports: nothing new to say past the first.
     for (let i = 0; i < 20; i++) await ask({ origin: `https://site${i}.example`, "sec-fetch-site": "same-origin" }, HERE);
     for (let port = 1; port < 20; port++) await ask({ origin: `https://app.example.org:${port}`, "sec-fetch-site": "same-origin" }, HERE);
+    // Other spellings of the same: capitals, a path, other schemes.
+    for (const origin of [
+      "https://APP.example.org",
+      "https://aPP.example.org:9",
+      "https://app.example.org/x",
+      "ftp://app.example.org",
+      "javascript://app.example.org",
+    ]) {
+      await ask({ origin, "sec-fetch-site": "same-origin" }, HERE);
+    }
     await ask({ origin: "https://www.app.example.org", "sec-fetch-site": "same-origin" }, HERE);
     // Many addresses in one IPv6 /64 passing X-Forwarded-For: one message.
     for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `2001:db8:1:2::${i}`);
@@ -818,20 +829,77 @@ test("setup messages can't be used up: this site's origin only, a few of each ki
   );
 });
 
-test("an address that isn't one is said, like a missing one; on a Unix socket behind a named proxy, all is well", async () => {
+test("an address that isn't one is said, like a missing one", async () => {
   const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
-  const request = () =>
-    new Request(`${ORIGIN}/auth/sign-out`, {
-      method: "POST",
-      headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
-    });
+  const request = new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" } });
   const said = await captureWarnings(async () => {
-    assert.equal((await handler.handle(request(), "81.2.69.160, 10.0.0.1"))?.status, 400);
+    assert.equal((await handler.handle(request, "81.2.69.160, 10.0.0.1"))?.status, 400);
   });
   assert.match(String(said), /something that isn't one.*not a header/);
-  const socket = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN, trustedProxies: ["loopback"] });
-  const quiet = await captureWarnings(async () => {
-    assert.equal((await socket.handle(request(), undefined))?.status, 200);
+});
+
+test("on a Unix socket, the Node adapter counts the connection as this machine's, so a proxy named as loopback is read past", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { request: send } = await import("node:http");
+  const dir = mkdtempSync(join(tmpdir(), "modest-auth-"));
+  const socketPath = join(dir, "app.sock");
+  const { db, auth } = fresh();
+  const handler = createHandler(auth, { ...EMAIL, origin: ORIGIN, trustedProxies: ["loopback"] });
+  const server = createServer(async (req, res) => {
+    if (!(await handleNode(handler, req, res))) res.end("app");
   });
-  assert.deepEqual(quiet, []);
+  await new Promise<void>((ready) => server.listen(socketPath, ready));
+  try {
+    const status = await new Promise<number>((done) => {
+      const body = JSON.stringify({ email: "a@example.org", password: PASSWORD });
+      const req = send(
+        {
+          socketPath,
+          path: "/auth/sign-in",
+          method: "POST",
+          headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+        },
+        (res) => {
+          res.resume();
+          done(res.statusCode ?? 0);
+        },
+      );
+      req.end(body);
+    });
+    assert.equal(status, 401, "answered, not refused for want of an address");
+    assert.ok(count(db, "auth_limits") > 0, "and counted (as the visitor the proxy named)");
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a connection reset as its request arrives is never taken for this machine's (nor counted as whoever it named)", async () => {
+  const { connect: open } = await import("node:net");
+  const { db, auth } = fresh();
+  const handler = createHandler(auth, { ...EMAIL, origin: DEV, trustedProxies: ["loopback"] });
+  await withServer(
+    handler,
+    (_req, res) => res.end("app"),
+    async (_base, port) => {
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>((done) => {
+          const socket = open(port, "127.0.0.1", () => {
+            const body = JSON.stringify({ email: "a@example.org", password: PASSWORD });
+            socket.write(
+              `POST /auth/send-sign-in-link HTTP/1.1\r\nhost: localhost\r\norigin: ${DEV}\r\ncontent-type: application/json\r\nx-forwarded-for: 6.6.6.${i}\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
+            );
+            socket.resetAndDestroy();
+            setTimeout(done, 20);
+          });
+          socket.on("error", () => {});
+        });
+      }
+      await wait(50);
+      const keys = (db.prepare("SELECT key FROM auth_limits").all() as { key: string }[]).length;
+      assert.ok(keys <= 3, `forged addresses aren't counted as different visitors (${keys} keys)`);
+    },
+  );
 });

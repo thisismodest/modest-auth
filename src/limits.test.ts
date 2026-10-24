@@ -175,8 +175,9 @@ test("an IPv4 address carried in IPv6 counts as that IPv4 address, so IPv4 visit
   assert.equal(addressKey({ remoteAddress: "64:ff9b:2::1" }), "64:ff9b:2:0::/64", "outside the NAT64 ranges, an ordinary /64");
 });
 
-test("on a Unix socket (no address), a proxy named as loopback is read past; with nothing named, there's no address", () => {
-  assert.equal(addressKey({ remoteAddress: undefined, forwardedFor: "203.0.113.9" }, ["loopback"]), "203.0.113.9");
-  assert.equal(addressKey({ remoteAddress: undefined, forwardedFor: "203.0.113.9" }), "unknown");
-  assert.equal(addressKey({ remoteAddress: "", forwardedFor: "203.0.113.9" }, ["loopback"]), "unknown", "an empty address isn't a socket: it's a mistake");
+test("no address is no address, whatever's named: it's never taken for this machine's", () => {
+  for (const trustedProxies of [[], ["loopback"], ["private"]]) {
+    assert.equal(addressKey({ remoteAddress: undefined, forwardedFor: "203.0.113.9" }, trustedProxies), "unknown", String(trustedProxies));
+  }
+  assert.equal(addressKey({ remoteAddress: "", forwardedFor: "203.0.113.9" }, ["loopback"]), "unknown");
 });

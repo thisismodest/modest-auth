@@ -238,9 +238,7 @@ export function traceClient(
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
-  // No address at all is a Unix socket (or a mistake): this machine, if a proxy on it is named.
-  const local: Address = { v4: [127, 0, 0, 1] };
-  const connection = remoteAddress === undefined && trusted(local) ? local : readAddress(remoteAddress ?? "");
+  const connection = readAddress(remoteAddress ?? "");
   const quietProxy = !!connection && hops.length === 0 && isPrivate(connection);
   let client = connection;
   while (client && trusted(client) && hops.length) client = readAddress(hops.pop() ?? "");

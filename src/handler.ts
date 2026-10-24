@@ -84,10 +84,15 @@ export const BODY_READ =
 
 /** How nginx adds the client's address, which it doesn't by default. */
 const NGINX = "nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
-/** An origin's host, without a "www." or a port: what two addresses of one site have in common. Null if it isn't an origin. */
-const pageHost = (origin: string | null) => {
+/**
+ * A web page's origin, read: its host without "www." or a port (what two addresses of one site have in
+ * common), a key without the port, and the origin as the URL standard writes it. Null unless http or https.
+ */
+const pageOf = (origin: string | null) => {
   try {
-    return origin ? new URL(origin).hostname.replace(/^www\./, "") : null;
+    const url = new URL(origin ?? "");
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return { host: url.hostname.replace(/^www\./, ""), key: `${url.protocol}//${url.hostname}`, origin: url.origin };
   } catch {
     return null;
   }
@@ -392,13 +397,13 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (!fromSite(request)) {
         // This site's own pages at another address (www., or a port) than the one set: the setting, not an attack.
         // Only this site's host is said, so nobody can fill the log, or use the message up, with others.
-        const page = pageHost(request.headers.get("origin"));
-        if (page !== null && page === pageHost(origin)) {
-          const came = request.headers.get("origin") ?? "";
-          // Keyed without the port: at most four (http or https, with or without www.), all this site's.
+        const page = pageOf(request.headers.get("origin"));
+        if (page && page.host === pageOf(origin)?.host) {
+          const came = page.origin;
+          // Keyed by scheme and host, without the port: at most four (http or https, with or without www.), all this site's.
           sayOnce(
             "origin",
-            came.replace(/:\d+$/, ""),
+            page.key,
             `a request from a page at ${came} was refused, as origin is ${origin}. If that's this site (www., or a port), set origin to the address its pages are served from.`,
           );
         }
