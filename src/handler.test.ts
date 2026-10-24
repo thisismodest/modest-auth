@@ -547,3 +547,15 @@ test("the sessions route lists the account's sessions, and ending this one signs
   assert.equal((await send("/auth/sessions")).status, 401);
   assert.equal((await send("/auth/sessions", undefined, { origin: "https://evil.example" })).headers.get("access-control-allow-origin"), null, "no other site can read it");
 });
+
+test("my data comes as a file to save, only to the account itself", async () => {
+  const { send, signUp, forget } = setup();
+  await signUp("ann@example.org");
+  const copy = await send("/auth/my-data");
+  assert.equal(copy.status, 200);
+  assert.equal(copy.json.email, "ann@example.org");
+  assert.match(copy.headers.get("content-disposition")!, /attachment; filename="my-data.json"/);
+  assert.equal(copy.headers.get("cache-control"), "no-store");
+  forget();
+  assert.equal((await send("/auth/my-data")).status, 401);
+});

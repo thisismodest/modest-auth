@@ -66,6 +66,17 @@ export type AuthOptions = {
 /** One of an account's sessions, as its owner sees it: `id` names it (it can't be used to sign in), and `current` is the one asking. */
 export type Session = { id: string; started: number; lastUsed: number; current: boolean };
 
+/** Everything kept about an account, for its owner (as UK GDPR asks): nothing in it can be used to sign in. */
+export type AccountData = {
+  email: string;
+  created: number;
+  /** Kept only as a slow hash, which isn't given. */
+  password: "set";
+  sessions: { started: number; lastUsed: number }[];
+  /** Emailed links not yet used: what each does, where it went, and when it runs out. */
+  links: { kind: LinkKind; email: string; expires: number }[];
+};
+
 /** A session lasts this long from signing in, however much it's used. */
 export const SESSION_DAYS = 30;
 /** And ends sooner if it isn't used for this long. */
@@ -156,6 +167,8 @@ export type Auth = {
   sessionsOf(userId: string, token: string): Session[];
   /** Ends one of the user's sessions, by its `id`; false if it has none of that id. */
   endSessionOf(userId: string, id: string): boolean;
+  /** Everything kept about the user's account, or null if there's no such account. */
+  dataOf(userId: string): AccountData | null;
   /** A new password, given the current one. Every session of the user ends. */
   changePassword(userId: string, current: string, next: string, from: string): Promise<User>;
   /** The account and its sessions, gone, given its password. */
@@ -571,6 +584,24 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const ended = !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
       if (ended) emit("session-ended", { userId });
       return ended;
+    },
+
+    dataOf(userId) {
+      const now = Date.now();
+      const row = db.prepare("SELECT email, created FROM auth_users WHERE id = ?").get(userId) as { email: string; created: number } | undefined;
+      if (!row) return null;
+      const sessions = db.prepare("SELECT expires, seen FROM auth_sessions WHERE user = ? AND expires > ? ORDER BY seen DESC").all(userId, now) as { expires: number; seen: number }[];
+      // Its own links, and those to its address, that do something: not the ones stored only to do the same work.
+      const links = db
+        .prepare("SELECT kind, email, expires FROM auth_links WHERE (user = ? OR email = ?) AND kind != 'none' AND expires > ? ORDER BY expires")
+        .all(userId, row.email, now) as { kind: LinkKind; email: string; expires: number }[];
+      return {
+        email: row.email,
+        created: row.created,
+        password: "set",
+        sessions: sessions.map((session) => ({ started: session.expires - SESSION_DAYS * DAY_MS, lastUsed: session.seen })),
+        links: links.map((link) => ({ kind: link.kind, email: link.email, expires: link.expires })),
+      };
     },
 
     async changePassword(userId, current, next, from) {

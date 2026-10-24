@@ -32,7 +32,7 @@ it brings. Nothing here is a promise of a date.
       email service, called over HTTPS: no SDK). Email confirmation also lets sign-up
       stop saying which emails have accounts.
 - [x] **Changing an email address,** confirmed by email, ending every other session.
-- [ ] **A copy of someone's data on request** (UK GDPR).
+- [x] **A copy of someone's data on request** (UK GDPR).
 - [x] **A record of security events** (sign-ins, failures, pauses, password changes)
       the app can keep, without passwords or tokens in it.
 - [x] **Signing in by an emailed link,** always offered beside the password: single-use,

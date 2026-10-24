@@ -984,3 +984,19 @@ test("breached passwords: a check that fails, or takes over 5 seconds, allows th
   assert.match(String(logged[0]), /allowed/);
   assert.match(String(logged[1]), /5 seconds/);
 });
+
+test("a copy of everything kept about an account, with nothing in it that signs anyone in", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, HERE));
+  const pending = auth.requestLink("sign-in", "ann@example.org", "192.0.2.190")!;
+  const data = auth.dataOf(ann.id)!;
+  assert.deepEqual(Object.keys(data), ["email", "created", "password", "sessions", "links"]);
+  assert.equal(data.email, "ann@example.org");
+  assert.equal(data.password, "set");
+  assert.equal(data.sessions.length, 1);
+  assert.deepEqual(data.links.map((l) => [l.kind, l.email]), [["sign-in", "ann@example.org"]]);
+  const copy = JSON.stringify(data);
+  for (const secret of [session, pending.token!, PASSWORD, "$scrypt$"]) assert.ok(!copy.includes(secret), secret);
+  assert.equal(auth.dataOf("nobody"), null);
+});

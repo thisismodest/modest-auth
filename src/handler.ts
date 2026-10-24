@@ -16,6 +16,7 @@
 //   POST /auth/sign-out-everywhere    (no fields)
 //   GET  /auth/sessions              the account's sessions: { sessions: [{ id, started, lastUsed, current }] }
 //   POST /auth/end-session           { id }: ends one of them
+//   GET  /auth/my-data               everything kept about the account, as a file to save
 //   POST /auth/password              { current, next }: every other session ends
 //   POST /auth/change-email          { password, email }: a link to the new address
 //   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
@@ -297,6 +298,14 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
         const user = token ? auth.userOf(token) : null;
         if (!user) return refuse(401, "signed-out", "Please sign in.");
         return reply(200, { sessions: auth.sessionsOf(user.id, token!) });
+      }
+      if (request.method === "GET" && name === "my-data") {
+        const user = userOf(request);
+        const data = user ? auth.dataOf(user.id) : null;
+        if (!data) return refuse(401, "signed-out", "Please sign in.");
+        const answer = reply(200, data);
+        answer.headers.set("content-disposition", 'attachment; filename="my-data.json"');
+        return answer;
       }
       const route = Object.hasOwn(routes, name) ? routes[name] : undefined;
       if (!route) return refuse(404, "not-found", "Not found.");

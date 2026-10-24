@@ -44,6 +44,8 @@ this is for you.
   address can take the account back, even one handed on to someone else.
 - **Notices:** an email to the account when its password changes, and to the old
   address when its email does.
+- **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
+  was made, its sessions, and links waiting to be used; nothing that signs anyone in.
 - **A record of events,** if you want one: sessions started, wrong passwords, pauses,
   new accounts, password and email changes, signing out, and deletions, given to your
   `onEvent` after each answer, with the account's id and where it came from, but never
@@ -172,6 +174,7 @@ The routes take and give JSON:
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
 | `GET /auth/sessions` | | The account's sessions: `{ sessions: [{ id, started, lastUsed, current }] }` |
 | `POST /auth/end-session` | `{ id }` | Ends one of them |
+| `GET /auth/my-data` | | Everything kept about the account, as a file to save |
 | `POST /auth/password` | `{ current, next }` | Changes the password, and ends every other session |
 | `POST /auth/change-email` | `{ password, email }` | Emails a link to the new address (signed in) |
 | `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session |

@@ -8,6 +8,7 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ### Added
 
+- A copy of an account's data for its owner: `GET /auth/my-data`, and `dataOf`.
 - `createAuth(db, { onEvent, breachedRange })`: a record of events (no passwords,
   tokens, or emails in it), and new passwords checked against a breached-password set
   through a 5-character hash prefix. A `breached-password` error.

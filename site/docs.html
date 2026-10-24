@@ -124,6 +124,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
                 <tr><td><code>GET /auth/sessions</code></td><td></td><td>The account's sessions: <code>{ sessions: [{ id, started, lastUsed, current }] }</code></td></tr>
                 <tr><td><code>POST /auth/end-session</code></td><td><code>{ id }</code></td><td>Ends one of them</td></tr>
+                <tr><td><code>GET /auth/my-data</code></td><td></td><td>Everything kept about the account, as a file to save</td></tr>
                 <tr><td><code>POST /auth/password</code></td><td><code>{ current, next }</code></td><td>Changes the password, and ends every other session</td></tr>
                 <tr><td><code>POST /auth/change-email</code></td><td><code>{ password, email }</code></td><td>Signed in: emails a link to the new address</td></tr>
                 <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From that link, signed in to the account: moves it, and ends every session</td></tr>
@@ -326,6 +327,7 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
                 <tr><td><code>endSession(token)</code>, <code>endAllSessions(userId)</code></td><td>Sign out, here or everywhere</td></tr>
                 <tr><td><code>sessionsOf(userId, token)</code>, <code>endSessionOf(userId, id)</code></td><td>The account's sessions, and ending one</td></tr>
+                <tr><td><code>dataOf(userId)</code></td><td>Everything kept about the account</td></tr>
                 <tr><td><code>changePassword(userId, current, next, from)</code></td><td>A new password; every session ends</td></tr>
                 <tr><td><code>requestEmailChange(userId, password, email, from)</code></td><td>An email to send to the new address, or null</td></tr>
                 <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> token for it</td></tr>
