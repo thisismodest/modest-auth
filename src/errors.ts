@@ -10,6 +10,8 @@ export type AuthErrorCode =
   | "long-password"
   /** Too easy to guess: a common password, or made from the email, or with fewer than four different characters. */
   | "common-password"
+  /** Found in the breached-password set the app checks against. */
+  | "breached-password"
   /** Not valid text (broken Unicode), which can't be stored faithfully. */
   | "invalid-password"
   /** An emailed link that has expired, been used, or was never sent. */
@@ -26,6 +28,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   "short-password": 422,
   "long-password": 422,
   "common-password": 422,
+  "breached-password": 422,
   "invalid-password": 422,
   "invalid-link": 400,
   "wrong-credentials": 401,

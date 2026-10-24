@@ -22,6 +22,47 @@ import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGES
 
 export type User = { id: string; email: string };
 
+/** Something that happened to an account, for the app to keep: never a password, token, or email. `from` is addressKey's. */
+export type AuthEvent = {
+  type:
+    | "signed-in"
+    | "sign-in-failed"
+    | "password-check-failed"
+    | "paused"
+    | "account-made"
+    | "password-changed"
+    | "email-changed"
+    | "email-change-undone"
+    | "signed-out"
+    | "signed-out-everywhere"
+    | "session-ended"
+    | "account-deleted";
+  at: number;
+  userId?: string;
+  from?: string;
+  /** For "signed-in" (a session started): after the password was checked, or an emailed link used. */
+  by?: "password" | "link";
+};
+// "sign-in-failed": a wrong email or password; "password-check-failed": a wrong password from the account's own
+// session (changing the password or deleting the account); "paused": a try refused by a limit, on the account or
+// on where it came from.
+
+export type AuthOptions = {
+  /**
+   * Told of each event, after the answer has gone (so how long it takes shows nothing, and a failure is
+   * logged, not passed on). For a record of who did what, and when.
+   */
+  onEvent?(event: AuthEvent): void;
+  /**
+   * Checks new passwords against a breached-password set, without ever seeing them: given the first 5
+   * characters of a password's SHA-1 (uppercase hex), gives what Have I Been Pwned's range API does for them
+   * (lines of "SUFFIX:COUNT"), such as `(prefix) => fetch(\`https://api.pwnedpasswords.com/range/${prefix}\`).then((r) => r.text())`.
+   * A password found there is refused; if it fails or takes over 5 seconds, the password is allowed (and that
+   * logged), so a service that's down can't stop anyone choosing one.
+   */
+  breachedRange?(prefix: string): Promise<string> | string;
+};
+
 /** One of an account's sessions, as its owner sees it: `id` names it (it can't be used to sign in), and `current` is the one asking. */
 export type Session = { id: string; started: number; lastUsed: number; current: boolean };
 
@@ -160,7 +201,51 @@ const EXPIRED = () => new AuthError("invalid-link", "That link has expired or be
 const LINK_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
-export function createAuth(db: DatabaseSync): Auth {
+export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
+  const { onEvent, breachedRange } = options;
+  if (onEvent !== undefined && typeof onEvent !== "function") throw new Error("onEvent must be a function.");
+  if (breachedRange !== undefined && typeof breachedRange !== "function") throw new Error("breachedRange must be a function.");
+  /** An event, told after the answer has gone: the same whatever it is, so it can't show anything by its timing. */
+  const emit = (type: AuthEvent["type"], details: Omit<AuthEvent, "type" | "at"> = {}) => {
+    if (!onEvent) return;
+    const event: AuthEvent = { type, at: Date.now(), ...details };
+    setImmediate(() => {
+      // Whether it throws or (being async) rejects: logged, never passed on.
+      Promise.resolve()
+        .then(() => onEvent(event))
+        .catch((error: unknown) => console.error("modest-auth: onEvent failed:", error instanceof Error ? error.name : typeof error));
+    });
+  };
+  /**
+   * Refuses a new password found in the breached-password set, if the app gave one to check against: as it's
+   * kept (normalised, NFKC), and as typed if that differs, so a breached password typed in another Unicode form
+   * isn't let through.
+   */
+  const checkBreached = async (password: string) => {
+    if (!breachedRange) return;
+    for (const form of new Set([password.normalize("NFKC"), password])) await checkBreachedForm(form);
+  };
+  const checkBreachedForm = async (password: string) => {
+    if (!breachedRange) return;
+    const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const late = new Promise<never>((_, fail) => (timer = setTimeout(() => fail(new Error("took over 5 seconds")), 5000)));
+      const range = await Promise.race([Promise.resolve().then(() => breachedRange(sha1.slice(0, 5))), late]);
+      for (const line of String(range).split("\n")) {
+        const [suffix, count] = line.trim().split(":");
+        // Padding (which the API can add) has a count of 0.
+        if (suffix?.toUpperCase() === sha1.slice(5) && Number(count) > 0) {
+          throw new AuthError("breached-password", "That password has appeared in a data breach, so it's easy to guess. Please choose another.");
+        }
+      }
+    } catch (error) {
+      if (error instanceof AuthError) throw error;
+      console.error("modest-auth: the breached-password check failed, so the password was allowed:", error instanceof Error ? error.message : typeof error);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   // Several processes can share the file: they wait up to two seconds for another
   // that's writing (set first, so even switching to WAL waits), and WAL lets them
   // read while one writes. Foreign keys take sessions with their account. Deleted
@@ -202,7 +287,8 @@ export function createAuth(db: DatabaseSync): Auth {
   const nobody = `$scrypt$ln=17,r=8,p=1$${randomBytes(16).toString("base64url")}$${randomBytes(32).toString("base64url")}`;
 
   // The password hash each signed-in user was checked against: a session starts only while it's still theirs.
-  const checked = new WeakMap<User, string>();
+  // And how, and from where, for the event when a session starts.
+  const checked = new WeakMap<User, { hash: string; by: "password" | "link"; from: string }>();
 
   const userRow = (where: "email" | "id", value: string) =>
     db.prepare(`SELECT id, email, password FROM auth_users WHERE ${where} = ?`).get(value) as { id: string; email: string; password: string } | undefined;
@@ -212,7 +298,19 @@ export function createAuth(db: DatabaseSync): Auth {
    * sign-in is. `owner`: the account's own signed-in session is asking, so the per-account pause,
    * which strangers can trigger, doesn't apply.
    */
+  /** verify, telling of a wrong password or a pause (not of "busy": nobody was counted). */
   async function verify(row: { id: string; password: string } | undefined, key: string, password: string, from: string, owner = false): Promise<string> {
+    try {
+      return await check(row, key, password, from, owner);
+    } catch (error) {
+      if (error instanceof AuthError && error.code !== "busy") {
+        const type = error.code === "too-many-tries" ? "paused" : owner ? "password-check-failed" : "sign-in-failed";
+        emit(type, { ...(row ? { userId: row.id } : {}), from });
+      }
+      throw error;
+    }
+  }
+  async function check(row: { id: string; password: string } | undefined, key: string, password: string, from: string, owner: boolean): Promise<string> {
     const stored = row?.password ?? nobody;
     // Busy first (and nothing awaited after it until the hash): a try refused for being busy isn't counted.
     checkHashingFree();
@@ -233,7 +331,8 @@ export function createAuth(db: DatabaseSync): Auth {
     throw WRONG();
   }
 
-  const endAllSessions = (userId: string) => void db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId);
+  /** How many sessions ended. */
+  const endAllSessions = (userId: string) => db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId).changes;
   /**
    * Every link to an email ends, and every link to move the account `userId` to another: once one is used, or
    * the password or email changes, or the account goes.
@@ -366,6 +465,7 @@ export function createAuth(db: DatabaseSync): Auth {
         | undefined;
       if (!link) throw EXPIRED();
       checkNewPassword(password, link.email);
+      await checkBreached(password);
       const hashed = await hashPassword(password);
       const { email } = takeLink(token, "password");
       // An account moved away from this address that it can still take back: back it comes, with this password.
@@ -373,8 +473,9 @@ export function createAuth(db: DatabaseSync): Auth {
       if (back) {
         moveBack(back.user, back.current, email, hashed, back.expires);
         flush();
+        emit("email-change-undone", { userId: back.user, from });
         const user = { id: back.user, email, made: false };
-        checked.set(user, hashed);
+        checked.set(user, { hash: hashed, by: "link", from });
         return user;
       }
       const made = !userRow("email", email);
@@ -385,8 +486,9 @@ export function createAuth(db: DatabaseSync): Auth {
       endAllSessions(id);
       endLinks(email, id);
       flush();
+      emit(made ? "account-made" : "password-changed", { userId: id, from });
       const user = { id, email, made };
-      checked.set(user, hashed);
+      checked.set(user, { hash: hashed, by: "link", from });
       return user;
     },
 
@@ -397,7 +499,7 @@ export function createAuth(db: DatabaseSync): Auth {
       if (!row) throw EXPIRED();
       endLinks(email);
       const user = { id: row.id, email: row.email };
-      checked.set(user, row.password);
+      checked.set(user, { hash: row.password, by: "link", from });
       return user;
     },
 
@@ -406,7 +508,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const row = email ? userRow("email", email) : undefined;
       const hash = await verify(row, email || "invalid", password, from);
       const user = { id: row!.id, email: row!.email };
-      checked.set(user, hash);
+      checked.set(user, { hash, by: "password", from });
       return user;
     },
 
@@ -414,14 +516,16 @@ export function createAuth(db: DatabaseSync): Auth {
       const token = randomBytes(32).toString("base64url");
       const now = Date.now();
       sweep(now);
-      const hash = checked.get(user);
-      if (hash === undefined) throw new Error("startSession needs a user just returned by signIn, a link, or changePassword, and starts one session for it.");
+      const how = checked.get(user);
+      if (how === undefined) throw new Error("startSession needs a user just returned by signIn, a link, or changePassword, and starts one session for it.");
       checked.delete(user);
+      const { hash } = how;
       // Only while the account exists and still has the password and email that were checked.
       const started = db
         .prepare("INSERT INTO auth_sessions (token, user, expires, seen) SELECT ?, id, ?, ? FROM auth_users WHERE id = ? AND password = ? AND email = ?")
         .run(tokenHash(token), now + SESSION_DAYS * DAY_MS, now, user.id, hash, user.email);
       if (started.changes === 0) throw WRONG();
+      emit("signed-in", { userId: user.id, from: how.from, by: how.by });
       db.prepare(
         `DELETE FROM auth_sessions WHERE user = ? AND token NOT IN (SELECT token FROM auth_sessions WHERE user = ? ORDER BY expires DESC LIMIT ${MOST_SESSIONS})`,
       ).run(user.id, user.id);
@@ -442,10 +546,14 @@ export function createAuth(db: DatabaseSync): Auth {
     },
 
     endSession(token) {
-      if (typeof token === "string" && token) db.prepare("DELETE FROM auth_sessions WHERE token = ?").run(tokenHash(token));
+      if (typeof token !== "string" || !token) return;
+      const ended = db.prepare("DELETE FROM auth_sessions WHERE token = ? RETURNING user").get(tokenHash(token)) as { user: string } | undefined;
+      if (ended) emit("signed-out", { userId: ended.user });
     },
 
-    endAllSessions,
+    endAllSessions(userId) {
+      if (endAllSessions(userId)) emit("signed-out-everywhere", { userId });
+    },
 
     sessionsOf(userId, token) {
       const now = Date.now();
@@ -460,7 +568,9 @@ export function createAuth(db: DatabaseSync): Auth {
       if (typeof id !== "string" || !/^[\w-]{22}$/.test(id)) return false;
       const rows = db.prepare("SELECT token FROM auth_sessions WHERE user = ?").all(userId) as { token: string }[];
       const found = rows.find((row) => sessionId(row.token) === id);
-      return !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
+      const ended = !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
+      if (ended) emit("session-ended", { userId });
+      return ended;
     },
 
     async changePassword(userId, current, next, from) {
@@ -468,6 +578,7 @@ export function createAuth(db: DatabaseSync): Auth {
       if (!row) throw WRONG();
       const hash = await verify(row, row.email, current, from, true);
       checkNewPassword(next, row.email);
+      await checkBreached(next);
       const fresh = await hashPassword(next);
       // The email as it is now (it may have moved while the password was checked).
       const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ? RETURNING email").get(fresh, userId, hash) as { email: string } | undefined;
@@ -475,8 +586,9 @@ export function createAuth(db: DatabaseSync): Auth {
       endAllSessions(userId);
       endLinks(done.email, userId);
       flush();
+      emit("password-changed", { userId, from });
       const user = { id: row.id, email: done.email };
-      checked.set(user, fresh);
+      checked.set(user, { hash: fresh, by: "password", from });
       return user;
     },
 
@@ -530,6 +642,7 @@ export function createAuth(db: DatabaseSync): Auth {
       // An undo link for the address it moved from (each move its own: using one ends only later ones).
       const undo = makeLink("undo", row.email, Date.now() + UNDO_DAYS * DAY_MS, row.id);
       flush();
+      emit("email-changed", { userId: row.id, from });
       return { id: row.id, email, previous: row.email, undo };
     },
 
@@ -546,6 +659,7 @@ export function createAuth(db: DatabaseSync): Auth {
       const until = Date.now() + PASSWORD_LINK_MINUTES * MINUTE_MS;
       const reset: Link = { kind: "password", to: email, token: makeLink("password", email, until), account: true, expires: until };
       flush();
+      emit("email-change-undone", { userId: row.id, from });
       return { id: row.id, email, reset };
     },
 
@@ -557,6 +671,7 @@ export function createAuth(db: DatabaseSync): Auth {
       if (done.changes === 0) throw WRONG();
       endLinks(row.email, userId);
       flush();
+      emit("account-deleted", { userId, from });
     },
   };
 }

@@ -33,14 +33,14 @@ it brings. Nothing here is a promise of a date.
       stop saying which emails have accounts.
 - [x] **Changing an email address,** confirmed by email, ending every other session.
 - [ ] **A copy of someone's data on request** (UK GDPR).
-- [ ] **A record of security events** (sign-ins, failures, pauses, password changes)
+- [x] **A record of security events** (sign-ins, failures, pauses, password changes)
       the app can keep, without passwords or tokens in it.
 - [x] **Signing in by an emailed link,** always offered beside the password: single-use,
       short-lived, and limited per address, so someone whose sign-in is paused by
       another's guessing can still get in.
 - [x] **Seeing and ending single sessions** (ASVS Level 2).
 - [x] **Telling people when their password changes,** by email (ASVS Level 2).
-- [ ] **Checking new passwords against a full breached-password set** (ASVS Level 2),
+- [x] **Checking new passwords against a full breached-password set** (ASVS Level 2),
       through a function the app supplies, so modest-auth itself still makes no network calls.
 
 ## Before 1.0

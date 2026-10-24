@@ -8,6 +8,9 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ### Added
 
+- `createAuth(db, { onEvent, breachedRange })`: a record of events (no passwords,
+  tokens, or emails in it), and new passwords checked against a breached-password set
+  through a 5-character hash prefix. A `breached-password` error.
 - Seeing and ending single sessions: `GET /auth/sessions` and `POST /auth/end-session`;
   `sessionsOf` and `endSessionOf`.
 - Changing an account's email: `POST /auth/change-email` (signed in, with the

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
+import { createHash, scryptSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { type Auth, createAuth, IDLE_DAYS } from "./auth.ts";
+import { type Auth, type AuthEvent, createAuth, IDLE_DAYS } from "./auth.ts";
 import { AuthError, type AuthErrorCode } from "./errors.ts";
 import { addressKey } from "./limits.ts";
 
@@ -848,4 +848,139 @@ test("an account's sessions can be seen and ended one at a time, by names that c
   assert.ok(auth.userOf(bobs));
   assert.equal(auth.endSessionOf(ann.id, other.id), false, "already gone");
   for (const made of ["", "x", "../../", "a".repeat(22)]) assert.equal(auth.endSessionOf(ann.id, made), false);
+});
+
+test("events: each one told after the answer, with no password, token, or email in it", async () => {
+  const events: AuthEvent[] = [];
+  const auth = createAuth(new DatabaseSync(":memory:"), { onEvent: (event) => void events.push(event) });
+  const later = () => new Promise((done) => setImmediate(done));
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  assert.equal(events.length, 0, "nothing told before the answer");
+  await later();
+  const laptop = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, HERE));
+  await auth.signIn("ann@example.org", "a wrong password here", HERE).catch(() => {});
+  await auth.signIn("nobody@example.org", "a wrong password here", HERE).catch(() => {});
+  const phone = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.180"));
+  auth.endSessionOf(ann.id, auth.sessionsOf(ann.id, laptop).find((s) => !s.current)!.id);
+  auth.endSession(laptop);
+  await auth.changePassword(ann.id, "a wrong password here", "a brand new long password", HERE).catch(() => {});
+  await auth.changePassword(ann.id, PASSWORD, "a brand new long password", HERE);
+  const moved = auth.useEmailLink((await auth.requestEmailChange(ann.id, "a brand new long password", "ann@new.example", HERE))!.token!, ann.id, HERE);
+  auth.useUndoLink(moved.undo, HERE);
+  auth.endAllSessions(ann.id);
+  await later();
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["account-made", "signed-in", "sign-in-failed", "sign-in-failed", "signed-in", "session-ended", "signed-out", "password-check-failed", "password-changed", "email-changed", "email-change-undone"],
+    "and nothing for signing out everywhere with no sessions left",
+  );
+  assert.deepEqual([events[1]!.by, events[1]!.from], ["password", HERE]);
+  assert.deepEqual([events[2]!.userId, events[3]!.userId], [ann.id, undefined], "a failure at an account names it; at no account, nothing");
+  assert.ok(events.every((e) => typeof e.at === "number"));
+  const told = JSON.stringify(events);
+  for (const secret of [PASSWORD, "a wrong password here", "ann@example.org", "nobody@example.org", laptop, phone]) assert.ok(!told.includes(secret), secret);
+});
+
+test("events: a pause, a link sign-in, and a deletion are told; 'signed in' only once a session starts; a failing onEvent changes nothing", async () => {
+  const events: AuthEvent[] = [];
+  let fail: "throw" | "reject" | false = false;
+  const auth = createAuth(new DatabaseSync(":memory:"), {
+    onEvent: async (event) => {
+      if (fail === "throw") throw new Error("the log is full: secret details");
+      if (fail === "reject") return Promise.reject(new Error("the log database is down: secret details"));
+      events.push(event);
+    },
+  });
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  for (let i = 0; i < 11; i++) await auth.signIn("ann@example.org", "a wrong password here", "198.51.100.200").catch(() => {});
+  const byLink = auth.useSignInLink(auth.requestLink("sign-in", "ann@example.org", "192.0.2.181")!.token!, "192.0.2.181");
+  const late = await auth.signIn("ann@example.org", PASSWORD, "192.0.2.184");
+  await auth.changePassword(ann.id, PASSWORD, "a brand new long password", "192.0.2.185");
+  assert.throws(() => auth.startSession(late), code("wrong-credentials"));
+  assert.throws(() => auth.startSession(byLink), code("wrong-credentials"));
+  await auth.deleteAccount(ann.id, "a brand new long password", "192.0.2.182");
+  await new Promise((done) => setImmediate(done));
+  assert.ok(events.some((e) => e.type === "paused" && e.userId === ann.id));
+  assert.equal(events.filter((e) => e.type === "signed-in").length, 0, "no session started: the password changed before either could");
+  assert.ok(events.some((e) => e.type === "account-deleted"));
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => void logged.push(parts);
+  try {
+    for (const how of ["throw", "reject"] as const) {
+      fail = how;
+      await signUp(auth, `${how}@example.org`, PASSWORD, "192.0.2.183");
+      await new Promise((done) => setImmediate(done));
+      await new Promise((done) => setImmediate(done));
+    }
+  } finally {
+    console.error = realError;
+  }
+  assert.equal(logged.length, 2, "both logged, neither crashing anything");
+  assert.doesNotMatch(String(logged), /secret/, "logged without their messages");
+});
+
+test("events: a sign-in link's session is told as one", async () => {
+  const events: AuthEvent[] = [];
+  const auth = createAuth(new DatabaseSync(":memory:"), { onEvent: (event) => void events.push(event) });
+  await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  auth.startSession(auth.useSignInLink(auth.requestLink("sign-in", "ann@example.org", HERE)!.token!, HERE));
+  await new Promise((done) => setImmediate(done));
+  assert.deepEqual(events.filter((e) => e.type === "signed-in").map((e) => e.by), ["link"]);
+});
+
+test("breached passwords: one typed in another Unicode form is still found", async () => {
+  const sha1 = (text: string) => createHash("sha1").update(text).digest("hex").toUpperCase();
+  const breached = "Widford village magazine";
+  const auth = createAuth(new DatabaseSync(":memory:"), {
+    breachedRange: (prefix) => (sha1(breached).startsWith(prefix) ? `${sha1(breached).slice(5)}:7` : ""),
+  });
+  const link = auth.requestLink("password", "ann@example.org", HERE)!;
+  const fullwidth = [...breached].map((c) => (c === " " ? "\u3000" : String.fromCodePoint(c.codePointAt(0)! + 0xfee0))).join("");
+  assert.equal(fullwidth.normalize("NFKC"), breached);
+  await assert.rejects(auth.usePasswordLink(link.token!, fullwidth, HERE), code("breached-password"));
+});
+
+test("breached passwords: refused, checked by the first 5 characters of a hash only, without using up the link", async () => {
+  const asked: string[] = [];
+  // As the range API answers: suffixes of SHA-1s starting with the prefix, with a count; padding has a count of 0.
+  const sha1 = (text: string) => createHash("sha1").update(text).digest("hex").toUpperCase();
+  const breached = "a long but breached password";
+  const padded = "a long padded password here";
+  const auth = createAuth(new DatabaseSync(":memory:"), {
+    breachedRange: (prefix) => {
+      asked.push(prefix);
+      return [breached, padded].filter((p) => sha1(p).startsWith(prefix)).map((p) => `${sha1(p).slice(5)}:${p === padded ? 0 : 42}`).join("\r\n") + "\r\nABCDEF0123456789ABCDEF0123456789ABC:3";
+    },
+  });
+  const link = auth.requestLink("password", "ann@example.org", HERE)!;
+  await assert.rejects(auth.usePasswordLink(link.token!, breached, HERE), code("breached-password"));
+  assert.ok(asked.every((prefix) => /^[0-9A-F]{5}$/.test(prefix)), "only a 5-character prefix of a hash leaves");
+  const ann = await auth.usePasswordLink(link.token!, padded, HERE);
+  assert.equal(ann.email, "ann@example.org", "padding isn't a breach, and the refusal didn't use up the link");
+  await assert.rejects(auth.changePassword(ann.id, padded, breached, HERE), code("breached-password"), "changing the password is checked too");
+});
+
+test("breached passwords: a check that fails, or takes over 5 seconds, allows the password, and says so", async (t) => {
+  const logged: unknown[][] = [];
+  const realError = console.error;
+  console.error = (...parts: unknown[]) => void logged.push(parts);
+  try {
+    const failing = createAuth(new DatabaseSync(":memory:"), { breachedRange: () => Promise.reject(new Error("service down")) });
+    assert.ok(await failing.usePasswordLink(failing.requestLink("password", "ann@example.org", HERE)!.token!, PASSWORD, HERE));
+    let asked = false;
+    const slow = createAuth(new DatabaseSync(":memory:"), { breachedRange: () => ((asked = true), new Promise<string>(() => {})) });
+    const link = slow.requestLink("password", "bob@example.org", HERE)!;
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const using = slow.usePasswordLink(link.token!, PASSWORD, HERE);
+    while (!asked) await new Promise((done) => setImmediate(done));
+    t.mock.timers.tick(5000);
+    t.mock.timers.reset();
+    assert.equal((await using).email, "bob@example.org");
+  } finally {
+    console.error = realError;
+  }
+  assert.equal(logged.length, 2);
+  assert.match(String(logged[0]), /allowed/);
+  assert.match(String(logged[1]), /5 seconds/);
 });

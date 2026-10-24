@@ -63,6 +63,8 @@ round modest-auth.
 | Locking someone out by guessing at their account | The per-account-and-address limit only pauses that address; the per-account limit is high, and doesn't stop the signed-in owner changing the password or deleting the account; and a sign-in link, always offered, isn't paused by it | `auth.ts` |
 | A sign-in racing a password change (or an account's deletion) | A session starts only for a user whose password was just checked, and only if it's still the account's; upgrading an old hash only replaces the hash that was checked | `auth.ts` |
 | A session someone else started, left running | The owner sees every session (when each started and was last used) and can end any one, by a name that can't sign anyone in | `auth.ts`, `handler.ts` |
+| Passwords known from breaches elsewhere | If the app gives a `breachedRange`, new passwords found in that set (Have I Been Pwned's, say) are refused; only the first 5 characters of the password's SHA-1 leave (for its normal form, and the form typed if that differs), so the service never learns it | `auth.ts` |
+| An event's record giving secrets or who has an account away | Events carry the account's id and where it came from, never a password, token, or email; they're told after the answer, and a failing `onEvent` is logged, not passed on | `auth.ts` |
 | Piling up sessions for one account | 50 at most; the oldest ends | `auth.ts` |
 | A copy of the database | Passwords only as salted scrypt hashes; sessions and links only as SHA-256 hashes of 256-bit tokens; limit keys only as hashes | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Hashes that grow weaker as computers get faster | Each hash records its cost; an older one is replaced at the current cost at the next sign-in | `passwords.ts`, `auth.ts` |
@@ -156,6 +158,15 @@ round modest-auth.
 - **Letters from other alphabets that look alike** (a Cyrillic `а` in `аnn@example.org`)
   make a different address, and so a different account, that looks the same. An app
   that shows emails to other people should bear that in mind.
+- **`onEvent` runs after the answer,** but on the same thread: if it does more work for
+  some events than others (looking an account up for a failure that names one, say),
+  how long the next request waits could show which. Keep it to the same work for every
+  event, such as appending it to a log.
+- **The breached-password check allows a password if the service fails or takes over
+  5 seconds** (and logs it), so an outage can't stop anyone choosing one. The 5 seconds
+  doesn't cancel the app's own request: `breachedRange` should have a timeout of its own.
+  A password whose typed form differs from its normal one is checked twice, so a hung
+  service can hold its answer for 10 seconds.
 - **A stolen session can end its owner's sessions one at a time** (and keep its own),
   as fast as they start. A password link needs no session, and ends every other one,
   the thief's too: that's the way out.

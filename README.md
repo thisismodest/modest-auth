@@ -23,7 +23,7 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 1,350 lines of source: only what sign-in needs.
+- **Small.** About 1,500 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, or passkeys today, use a
@@ -44,6 +44,14 @@ this is for you.
   address can take the account back, even one handed on to someone else.
 - **Notices:** an email to the account when its password changes, and to the old
   address when its email does.
+- **A record of events,** if you want one: sessions started, wrong passwords, pauses,
+  new accounts, password and email changes, signing out, and deletions, given to your
+  `onEvent` after each answer, with the account's id and where it came from, but never
+  a password, token, or email.
+- **Breached passwords refused,** if you want: new passwords checked against a
+  breached-password set such as Have I Been Pwned's, through your `breachedRange`,
+  which is given only the first 5 characters of the password's SHA-1 (of its normal
+  form, and of the form typed if that differs).
 - **Signing in** with the password, or with a link emailed on request, always offered:
   so someone whose sign-in is paused by another's guessing can still get in.
 - **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
@@ -117,7 +125,16 @@ import { DatabaseSync } from "node:sqlite";
 import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
 
 // Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
-const auth = createAuth(new DatabaseSync("app.db"));
+const auth = createAuth(new DatabaseSync("app.db"), {
+  // Optional: a record of who did what (no passwords, tokens, or emails in it).
+  onEvent: (event) => console.log(JSON.stringify(event)),
+  // Optional: refuse passwords from known breaches. Only 5-character prefixes of hashes leave.
+  breachedRange: async (prefix) => {
+    const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, { headers: { "add-padding": "true" } });
+    if (!res.ok) throw new Error(`Pwned Passwords answered ${res.status}`);
+    return res.text();
+  },
+});
 const handler = createHandler(auth, {
   // Your site's address (HTTPS), and how many reverse proxies are in front of it:
   // 0 if none, so nobody can claim another address in X-Forwarded-For.
@@ -281,8 +298,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 - **OWASP ASVS 5.0:** written with its authentication and session requirements in
   mind, but not yet checked against them requirement by requirement (that mapping is
   on the roadmap), so it makes no claim to a level. Level 2 would also need
-  multi-factor sign-in, and checking new passwords against a full breached-password set
-  (on the roadmap).
+  multi-factor sign-in.
 
 ## Deliberately not here
 

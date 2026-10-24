@@ -217,6 +217,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
                 <tr><td><code>short-password</code></td><td>422</td><td>Fewer than 15 characters</td></tr>
                 <tr><td><code>long-password</code></td><td>422</td><td>More than 200 characters</td></tr>
                 <tr><td><code>common-password</code></td><td>422</td><td>Too easy to guess</td></tr>
+                <tr><td><code>breached-password</code></td><td>422</td><td>Found in a data breach (with <code>breachedRange</code>)</td></tr>
                 <tr><td><code>invalid-password</code></td><td>422</td><td>Broken text (not valid Unicode)</td></tr>
                 <tr><td><code>invalid-link</code></td><td>400</td><td>The link has expired or been used</td></tr>
                 <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
@@ -255,6 +256,14 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             <div>
               <h3><code>sendEmail</code></h3>
               <p>How your app sends email: <code>(to, subject, text)</code>. Give it a timeout of its own, and don't log the text: it holds the link.</p>
+            </div>
+            <div>
+              <h3><code>onEvent</code> <small>(createAuth)</small></h3>
+              <p>Optional: told of each sign-in, failure, pause, and change, after the answer, with the account's id and where it came from. Never a password, token, or email.</p>
+            </div>
+            <div>
+              <h3><code>breachedRange</code> <small>(createAuth)</small></h3>
+              <p>Optional: given a 5-character prefix of a password's SHA-1, gives Have I Been Pwned's range for it; breached passwords are refused.</p>
             </div>
             <div>
               <h3><code>base</code></h3>
