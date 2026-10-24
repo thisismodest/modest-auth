@@ -14,13 +14,18 @@ test("a password is checked against its hash, and nothing else matches", async (
   const stored = await hashPassword("correct horse battery");
   assert.deepEqual(await checkPassword("correct horse battery", stored), { ok: true, outdated: false });
   assert.equal((await checkPassword("correct horse batterY", stored)).ok, false);
-  for (const bad of ["", "not-a-hash", "scrypt$x$y", "$bcrypt$ln=17,r=8,p=1$aaaaaaaaaaaaaaaaaaaaaa$" + "a".repeat(43)]) assert.equal((await checkPassword("correct horse battery", bad)).ok, false);
+  for (const bad of ["", "not-a-hash", "scrypt$x$y", "$bcrypt$ln=17,r=8,p=1$aaaaaaaaaaaaaaaaaaaaaa$" + "a".repeat(43)])
+    assert.equal((await checkPassword("correct horse battery", bad)).ok, false);
 });
 
 test("a hash at an older, cheaper cost still checks, and says it's outdated", async () => {
   const old = oldHash("correct horse battery", 14);
   assert.deepEqual(await checkPassword("correct horse battery", old), { ok: true, outdated: true });
-  assert.deepEqual(await checkPassword("wrong password", old), { ok: false, outdated: false }, "never outdated when wrong: nothing is rehashed for a wrong guess");
+  assert.deepEqual(
+    await checkPassword("wrong password", old),
+    { ok: false, outdated: false },
+    "never outdated when wrong: nothing is rehashed for a wrong guess",
+  );
 });
 
 test("a stored hash can't make the server do more work than the current cost", async () => {
@@ -98,5 +103,6 @@ test("a password that would be too long to sign in with is refused at sign-up to
 });
 
 test("strong passwords without letters are fine: digits, symbols, or emoji", () => {
-  for (const p of ["83920174659283746510", "#%&*+=?@^~|!$<>[]", "🌲🦊🌙🍄🪵🐝🌊🔥🍂🦉🌾🪨🌻🐌🌿"]) assert.doesNotThrow(() => checkNewPassword(p, "ann@example.org"), p);
+  for (const p of ["83920174659283746510", "#%&*+=?@^~|!$<>[]", "🌲🦊🌙🍄🪵🐝🌊🔥🍂🦉🌾🪨🌻🐌🌿"])
+    assert.doesNotThrow(() => checkNewPassword(p, "ann@example.org"), p);
 });

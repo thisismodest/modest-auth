@@ -49,7 +49,10 @@ test("limits with different names don't share counts, and keys are stored only a
   two("ann@example.org");
   const keys = (db.prepare("SELECT key FROM auth_limits").all() as { key: string }[]).map((r) => r.key);
   assert.equal(keys.length, 2);
-  assert.ok(keys.every((k) => !k.includes("ann")), "no email addresses in the table");
+  assert.ok(
+    keys.every((k) => !k.includes("ann")),
+    "no email addresses in the table",
+  );
 });
 
 test("heavy jobs run so many at once, queue behind, and are 'busy' beyond the queue", async () => {
@@ -57,7 +60,10 @@ test("heavy jobs run so many at once, queue behind, and are 'busy' beyond the qu
   let release = () => {};
   const first = gate(() => new Promise<void>((done) => (release = done)));
   const second = gate(async () => "second");
-  await assert.rejects(gate(async () => "third"), code("busy"));
+  await assert.rejects(
+    gate(async () => "third"),
+    code("busy"),
+  );
   release();
   await first;
   assert.equal(await second, "second");
@@ -69,13 +75,29 @@ test("the address counts the real client: IPv6 by its /64, and only through the 
   assert.equal(addressKey({ remoteAddress: "2001:db8:1:2:aaaa::1" }), "2001:db8:1:2::/64");
   assert.equal(addressKey({ remoteAddress: "2001:db8:1:2:ffff:ffff:ffff:ffff" }), "2001:db8:1:2::/64", "a household's other addresses count as one");
   assert.equal(addressKey({ remoteAddress: "::1" }), "0:0:0:0::/64");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "6.6.6.6" }), "10.0.0.1", "no proxy declared: the header is the client's to write, and ignored");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "1.1.1.1, 203.0.113.9" }, 1), "203.0.113.9", "one proxy: the last address, the one it saw");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: ["1.1.1.1", "203.0.113.9, 198.51.100.7"] }, 2), "203.0.113.9", "two proxies: the second from the right");
+  assert.equal(
+    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "6.6.6.6" }),
+    "10.0.0.1",
+    "no proxy declared: the header is the client's to write, and ignored",
+  );
+  assert.equal(
+    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "1.1.1.1, 203.0.113.9" }, 1),
+    "203.0.113.9",
+    "one proxy: the last address, the one it saw",
+  );
+  assert.equal(
+    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: ["1.1.1.1", "203.0.113.9, 198.51.100.7"] }, 2),
+    "203.0.113.9",
+    "two proxies: the second from the right",
+  );
   assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9" }, 2), "10.0.0.1", "fewer forwarded than proxies: the connection's own");
   assert.equal(addressKey({ remoteAddress: undefined }), "unknown");
   assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "x".repeat(10_000) }, 1), "unknown", "nonsense isn't an address");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: `${"1.1.1.1, ".repeat(2000)}203.0.113.9` }, 1), "203.0.113.9", "padding it out doesn't fall back to the proxy's own address");
+  assert.equal(
+    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: `${"1.1.1.1, ".repeat(2000)}203.0.113.9` }, 1),
+    "203.0.113.9",
+    "padding it out doesn't fall back to the proxy's own address",
+  );
   assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9:51234" }, 1), "203.0.113.9", "a port is dropped");
   assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "[2001:db8::1]:443" }, 1), "2001:db8:0:0::/64");
   assert.equal(addressKey({ remoteAddress: "2001:0db8:0001:0002::1" }), addressKey({ remoteAddress: "2001:db8:1:2::9" }), "one address, however it's written");

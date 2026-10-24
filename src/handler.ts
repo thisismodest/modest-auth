@@ -158,7 +158,8 @@ function linkEmail(link: Link, site: string, url: string, origin: string): { sub
 export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const { origin } = siteOrigin(options.origin);
   const { linkPage, sendEmail } = options;
-  if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage)) throw new Error('linkPage must be a path on the site, such as "/account/link".');
+  if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage))
+    throw new Error('linkPage must be a path on the site, such as "/account/link".');
   if (typeof sendEmail !== "function") throw new Error("sendEmail must be a function that sends an email: (to, subject, text).");
   const site = new URL(origin).host;
   // A slow or stuck email service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
@@ -181,7 +182,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   /** A notice of a change to an account, to its email: so its owner hears of a change they didn't make. */
   const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${site}`, `${text}\n`, Date.now() + DAY);
   const passwordChanged = (to: string) =>
-    notify(to, "Your password was changed", `The password for your account on ${site} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.`);
+    notify(
+      to,
+      "Your password was changed",
+      `The password for your account on ${site} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.`,
+    );
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
   const proxies = options.proxies ?? 0;
@@ -191,7 +196,9 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const checkProxies = (request: Request) => {
     if (warned || proxies > 0 || !request.headers.has("x-forwarded-for")) return;
     warned = true;
-    console.warn("modest-auth: requests carry X-Forwarded-For, but proxies is 0: if a reverse proxy is in front, set proxies, or every visitor shares its sign-in limits.");
+    console.warn(
+      "modest-auth: requests carry X-Forwarded-For, but proxies is 0: if a reverse proxy is in front, set proxies, or every visitor shares its sign-in limits.",
+    );
   };
 
   const tokenOf = (request: Request) => readSessionCookie(request.headers.get("cookie"), origin);

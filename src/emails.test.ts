@@ -11,13 +11,52 @@ test("an address is kept trimmed, normalised, and lowercase", () => {
 });
 
 test("anything that isn't plainly an address is refused", () => {
-  for (const bad of ["user@example.com/path", "user@example.com?q=1", "user@/example.com", "user@example.com#x", "user@ex%61mple.com", "user@0x7f.1", "user@2130706433", "user@127.1", "user@127.0.0.1", "", "ann", "@example.org", "ann@", "ann@example", "ann@@example.org", "a@b@example.org", "ann@.example.org", "ann@example..org", "ann@-example.org", ".ann@example.org", "an..n@example.org", "ann smith@example.org"]) {
+  for (const bad of [
+    "user@example.com/path",
+    "user@example.com?q=1",
+    "user@/example.com",
+    "user@example.com#x",
+    "user@ex%61mple.com",
+    "user@0x7f.1",
+    "user@2130706433",
+    "user@127.1",
+    "user@127.0.0.1",
+    "",
+    "ann",
+    "@example.org",
+    "ann@",
+    "ann@example",
+    "ann@@example.org",
+    "a@b@example.org",
+    "ann@.example.org",
+    "ann@example..org",
+    "ann@-example.org",
+    ".ann@example.org",
+    "an..n@example.org",
+    "ann smith@example.org",
+  ]) {
     assert.equal(cleanEmail(bad), null, bad);
   }
 });
 
 test("nothing that could display as another address, or as markup, gets through", () => {
-  for (const bad of ["ann\ufe0f@example.org", "ann\u034f@example.org", "ann\u3164@example.org", "ann\u115f@example.org", "ann\u180b@example.org", "ann\u2800@example.org", "ann\u202e@example.org", "ann\u200b@example.org", "ann\u0000@example.org", "ann\n@example.org", '"ann"@example.org', "<ann>@example.org", "ann@exam<b>ple.org", "ann'@example.org", "ann@example.org\r\nBcc: x@y.z"]) {
+  for (const bad of [
+    "ann\ufe0f@example.org",
+    "ann\u034f@example.org",
+    "ann\u3164@example.org",
+    "ann\u115f@example.org",
+    "ann\u180b@example.org",
+    "ann\u2800@example.org",
+    "ann\u202e@example.org",
+    "ann\u200b@example.org",
+    "ann\u0000@example.org",
+    "ann\n@example.org",
+    '"ann"@example.org',
+    "<ann>@example.org",
+    "ann@exam<b>ple.org",
+    "ann'@example.org",
+    "ann@example.org\r\nBcc: x@y.z",
+  ]) {
     assert.equal(cleanEmail(bad), null, JSON.stringify(bad));
   }
 });
@@ -30,7 +69,8 @@ test("too long is refused, by RFC 5321's limits", () => {
 
 test("a crafted address can't make it slow", () => {
   const started = performance.now();
-  for (const input of [`a@${".".repeat(1_000_000)}x`, `${"a".repeat(1_000_000)}@`, `a@${"a.".repeat(500_000)}`, "@".repeat(1_000_000)]) assert.equal(cleanEmail(input), null);
+  for (const input of [`a@${".".repeat(1_000_000)}x`, `${"a".repeat(1_000_000)}@`, `a@${"a.".repeat(500_000)}`, "@".repeat(1_000_000)])
+    assert.equal(cleanEmail(input), null);
   assert.ok(performance.now() - started < 200, `took ${Math.round(performance.now() - started)}ms`);
 });
 

@@ -22,7 +22,11 @@ test("signing out clears it", () => {
 
 test("the token is read from among other cookies, and only a well-formed one", () => {
   assert.equal(readSessionCookie(`theme=dark; __Host-session=${TOKEN}; other=1`, SITE), TOKEN);
-  assert.equal(readSessionCookie(`session=${TOKEN}; modest-auth-dev-session=${TOKEN}`, SITE), null, "over HTTPS, an unprefixed cookie (which any subdomain could set) isn't read");
+  assert.equal(
+    readSessionCookie(`session=${TOKEN}; modest-auth-dev-session=${TOKEN}`, SITE),
+    null,
+    "over HTTPS, an unprefixed cookie (which any subdomain could set) isn't read",
+  );
   assert.equal(readSessionCookie(`modest-auth-dev-session=${TOKEN}`, DEV), TOKEN);
   assert.equal(readSessionCookie(`__Host-session=${TOKEN}; __Host-session=other`, SITE), null, "two of them: neither is believed");
   assert.equal(readSessionCookie(`__Host-session="${TOKEN}"`, SITE), null, "quoted");

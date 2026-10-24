@@ -13,10 +13,17 @@ const EMAIL = { linkPage: "/account/link", sendEmail: () => {} };
 
 /** A JSON POST to one of the routes from the site's origin; `address` is the client's. */
 const post = (handler: Handler, route: string, body: unknown, address: string | undefined) =>
-  handler.handle(new Request(`${ORIGIN}/auth/${route}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify(body) }), address);
+  handler.handle(
+    new Request(`${ORIGIN}/auth/${route}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify(body) }),
+    address,
+  );
 
 /** Node's own http server on a free port, the handler in front of the app, closed once `run` is done. */
-const withServer = async (handler: Handler, app: (req: IncomingMessage, res: ServerResponse) => unknown, run: (base: string, port: number) => Promise<void>) => {
+const withServer = async (
+  handler: Handler,
+  app: (req: IncomingMessage, res: ServerResponse) => unknown,
+  run: (base: string, port: number) => Promise<void>,
+) => {
   const server = createServer(async (req, res) => {
     if (await handleNode(handler, req, res)) return;
     await app(req, res);
@@ -82,7 +89,13 @@ test("sign up, see who's signed in, sign out", async () => {
 test("another site can't sign anyone in or out, nor can a request that won't say where it's from", async () => {
   const { send, signUp } = setup();
   await signUp("ann@example.org");
-  for (const headers of [{ origin: "https://evil.example" }, { origin: "" }, { origin: "https://app.example.org.evil.example" }, { "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site" }]) {
+  for (const headers of [
+    { origin: "https://evil.example" },
+    { origin: "" },
+    { origin: "https://app.example.org.evil.example" },
+    { "sec-fetch-site": "cross-site" },
+    { "sec-fetch-site": "same-site" },
+  ]) {
     const res = await send("/auth/sign-out", {}, headers);
     assert.equal(res.status, 403, JSON.stringify(headers));
   }
@@ -91,11 +104,19 @@ test("another site can't sign anyone in or out, nor can a request that won't say
 
 test("only small JSON objects are read", async () => {
   const { send } = setup();
-  assert.equal((await send("/auth/sign-in", "email=ann@example.org", { "content-type": "application/x-www-form-urlencoded" })).status, 415, "a form, which any site can send, isn't accepted");
+  assert.equal(
+    (await send("/auth/sign-in", "email=ann@example.org", { "content-type": "application/x-www-form-urlencoded" })).status,
+    415,
+    "a form, which any site can send, isn't accepted",
+  );
   assert.equal((await send("/auth/sign-in", "not json")).status, 400);
   assert.equal((await send("/auth/sign-in", "[1, 2]")).status, 400);
   assert.equal((await send("/auth/sign-in", { email: "a".repeat(5000) })).status, 413);
-  assert.equal((await send("/auth/sign-in", { email: ["ann@example.org"], password: { x: 1 } })).json.error.code, "wrong-credentials", "anything but a string is ignored");
+  assert.equal(
+    (await send("/auth/sign-in", { email: ["ann@example.org"], password: { x: 1 } })).json.error.code,
+    "wrong-credentials",
+    "anything but a string is ignored",
+  );
 });
 
 test("each sign-in starts a fresh session and ends the one the browser had", async () => {
@@ -154,7 +175,8 @@ test("with Node's own http server: the same routes, and the app's own requests l
     res.end(user ? `hello ${user.email}` : "hello stranger");
   };
   await withServer(handler, app, async (base) => {
-    const send = (route: string, body: string) => fetch(`${base}/auth/${route}`, { method: "POST", headers: { origin: DEV, "content-type": "application/json" }, body });
+    const send = (route: string, body: string) =>
+      fetch(`${base}/auth/${route}`, { method: "POST", headers: { origin: DEV, "content-type": "application/json" }, body });
     assert.equal((await send("send-password-link", JSON.stringify({ email: "ann@example.org" }))).status, 202);
     await afterwards();
     const up = await send("set-password", JSON.stringify({ token: /#password=([\w-]{43})/.exec(mail)![1], password: PASSWORD }));
@@ -222,7 +244,10 @@ test("with Node's own http server, nothing a client sends can crash the app", as
       await raw("TRACE /auth/sign-out HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
       await raw("GET http://a:99999/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
       await raw("GET http://[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-      await raw('POST /auth/sign-in HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"em', true);
+      await raw(
+        'POST /auth/sign-in HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"em',
+        true,
+      );
       await wait(100);
       assert.deepEqual(crashed, []);
       assert.match(await raw("GET /page HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"), /\r\n\r\napp$/, "still answering");
@@ -258,7 +283,16 @@ test("odd forms of a path never reach the routes, so a rule in front of the app 
       });
     assert.match(await ask("/auth/session"), /"user":null/);
     assert.match(await ask("/auth/session?next=%2Fhome"), /"user":null/, "an encoded slash in the query is the query's business");
-    for (const target of ["/auth\\session", "/zzz/%2e%2e/auth/session", "/x/../auth/session", "/./auth/session", "/auth/./session", "//evil/auth/session", "http://evil.example/auth/session", "/auth%2fsession"]) {
+    for (const target of [
+      "/auth\\session",
+      "/zzz/%2e%2e/auth/session",
+      "/x/../auth/session",
+      "/./auth/session",
+      "/auth/./session",
+      "//evil/auth/session",
+      "http://evil.example/auth/session",
+      "/auth%2fsession",
+    ]) {
       assert.match(await ask(target), /\r\n\r\napp$/, target);
     }
   });
@@ -303,7 +337,12 @@ test("asking for a link gets the same answer whether or not there's an account, 
   emails.length = 0;
   const answers = [];
   const ask = (route: string, email: string, address: string) => post(handler, route, { email }, address);
-  for (const [route, email] of [["send-sign-in-link", "ann@example.org"], ["send-sign-in-link", "nobody@example.org"], ["send-password-link", "ann@example.org"], ["send-password-link", "nobody@example.org"]] as const) {
+  for (const [route, email] of [
+    ["send-sign-in-link", "ann@example.org"],
+    ["send-sign-in-link", "nobody@example.org"],
+    ["send-password-link", "ann@example.org"],
+    ["send-password-link", "nobody@example.org"],
+  ] as const) {
     const sentBefore = emails.length;
     const answer = (await ask(route, email, "198.51.100.60"))!;
     assert.equal(emails.length, sentBefore, "nothing sent before the answer");
@@ -311,12 +350,16 @@ test("asking for a link gets the same answer whether or not there's an account, 
     await afterwards();
   }
   assert.deepEqual(new Set(answers.map((a) => JSON.stringify(a))).size, 1, "every answer the same");
-  assert.deepEqual(emails.map((e) => [e.to, e.subject]), [
-    ["ann@example.org", "Sign in to app.example.org"],
-    ["nobody@example.org", "Sign in to app.example.org"],
-    ["ann@example.org", "Choose a new password for app.example.org"],
-    ["nobody@example.org", "Finish signing up to app.example.org"],
-  ], "an email every time, so the work after the answer is the same too");
+  assert.deepEqual(
+    emails.map((e) => [e.to, e.subject]),
+    [
+      ["ann@example.org", "Sign in to app.example.org"],
+      ["nobody@example.org", "Sign in to app.example.org"],
+      ["ann@example.org", "Choose a new password for app.example.org"],
+      ["nobody@example.org", "Finish signing up to app.example.org"],
+    ],
+    "an email every time, so the work after the answer is the same too",
+  );
   assert.doesNotMatch(emails[1]!.text, /#/, "with no link where there's no account");
   assert.match(emails[1]!.text, /no account/);
   for (const i of [1, 2]) await ask("send-sign-in-link", "ann@example.org", `198.51.100.${60 + i}`);
@@ -358,7 +401,11 @@ test("choosing a password at a link signs this browser in, and every other sessi
 });
 
 test("an email that can't be sent is logged without its text, and changes nothing for the person asking", async () => {
-  const handler = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")) });
+  const handler = createHandler(fresh().auth, {
+    origin: ORIGIN,
+    linkPage: "/account/link",
+    sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")),
+  });
   const logged = await captureErrors(async () => {
     assert.equal((await post(handler, "send-password-link", { email: "ann@example.org" }, HERE))!.status, 202);
     await afterwards();
@@ -389,7 +436,7 @@ test("the link page can ask which email a link is for, so nobody is signed in to
 
 test("a stuck email service can't pile up sends without end", async () => {
   let started = 0;
-  const stuck = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/l", sendEmail: () => ((started++, new Promise(() => {})) as Promise<void>) });
+  const stuck = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/l", sendEmail: () => (started++, new Promise(() => {})) as Promise<void> });
   const logged = await captureErrors(async () => {
     for (let i = 0; i < 1015; i++) await post(stuck, "send-password-link", { email: `p${i}@example.org` }, `10.${i >> 8}.${i & 255}.1`);
     await afterwards();
@@ -502,7 +549,11 @@ test("the sessions route lists the account's sessions, and ending this one signs
   assert.equal((await send("/auth/end-session", { id: mine.id })).status, 401, "signed out now");
   forget();
   assert.equal((await send("/auth/sessions")).status, 401);
-  assert.equal((await send("/auth/sessions", undefined, { origin: "https://evil.example" })).headers.get("access-control-allow-origin"), null, "no other site can read it");
+  assert.equal(
+    (await send("/auth/sessions", undefined, { origin: "https://evil.example" })).headers.get("access-control-allow-origin"),
+    null,
+    "no other site can read it",
+  );
 });
 
 test("my data comes as a file to save, only to the account itself", async () => {

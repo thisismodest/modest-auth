@@ -135,7 +135,10 @@ function ipv6(text: string): number[] | null {
 export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxies = 0): string {
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(",") : (forwardedFor ?? "");
   // Read from the right however long it is: padding it out can't make anyone share the proxy's own address.
-  const forwarded = header.split(",").map((part) => part.trim()).filter(Boolean);
+  const forwarded = header
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
   let address = ((proxies > 0 ? forwarded[forwarded.length - proxies] : undefined) ?? remoteAddress ?? "").trim().toLowerCase();
   // "[2001:db8::1]:443" and "203.0.113.9:51234": the address without its port.
   const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(address);
@@ -157,5 +160,8 @@ export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxi
     (zeros(0, 6) && (g6 > 0 || g7 > 1)) ||
     (v6[0] === 0x64 && v6[1] === 0xff9b && (v6[2] === 0 || v6[2] === 1) && zeros(3, 6));
   if (carriesIpv4) return [g6 >> 8, g6 & 255, g7 >> 8, g7 & 255].join(".");
-  return `${v6.slice(0, 4).map((n) => n.toString(16)).join(":")}::/64`;
+  return `${v6
+    .slice(0, 4)
+    .map((n) => n.toString(16))
+    .join(":")}::/64`;
 }

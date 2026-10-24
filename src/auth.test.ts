@@ -5,7 +5,22 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { captureErrors, code, count, fileHas, fresh, HERE, later, oldHash, openSession, PASSWORD, wait, watchCrashes, withClock, withTempDir } from "../test/helpers.ts";
+import {
+  captureErrors,
+  code,
+  count,
+  fileHas,
+  fresh,
+  HERE,
+  later,
+  oldHash,
+  openSession,
+  PASSWORD,
+  wait,
+  watchCrashes,
+  withClock,
+  withTempDir,
+} from "../test/helpers.ts";
 import { type Auth, type AuthEvent, createAuth, IDLE_DAYS } from "./auth.ts";
 import { AuthError } from "./errors.ts";
 import { addressKey } from "./limits.ts";
@@ -21,7 +36,8 @@ const signUp = async (auth: Auth, email: string, password: string, from: string)
 };
 
 /** Moving an account to another email, as its owner does: asking, then using the link sent. */
-const move = async (auth: Auth, id: string, password: string, to: string, from: string) => auth.useEmailLink((await auth.requestEmailChange(id, password, to, from))!.token!, id, HERE);
+const move = async (auth: Auth, id: string, password: string, to: string, from: string) =>
+  auth.useEmailLink((await auth.requestEmailChange(id, password, to, from))!.token!, id, HERE);
 
 /** A hundred wrong passwords for the account, each from another address. */
 const guessFromEverywhere = async (auth: Auth, email: string) => {
@@ -75,7 +91,11 @@ test("signing in: right password in; a wrong password and an unknown email get t
   const { auth } = fresh();
   await signUp(auth, "editor@example.org", PASSWORD, HERE);
   assert.equal((await auth.signIn("EDITOR@example.org", PASSWORD, HERE)).email, "editor@example.org");
-  const failure = (attempt: Promise<unknown>) => attempt.then(() => assert.fail("it should have been refused"), (e: AuthError) => (assert.ok(e instanceof AuthError), e));
+  const failure = (attempt: Promise<unknown>) =>
+    attempt.then(
+      () => assert.fail("it should have been refused"),
+      (e: AuthError) => (assert.ok(e instanceof AuthError), e),
+    );
   const wrong = await failure(auth.signIn("editor@example.org", "the wrong password", HERE));
   const unknown = await failure(auth.signIn("nobody@example.org", "the wrong password", HERE));
   const invalid = await failure(auth.signIn("not an email", "the wrong password", HERE));
@@ -298,7 +318,8 @@ test("expired and idle sessions, and passed limits, are cleared as requests come
 test("a stolen session can't be used to guess the password: the owner's checks are capped at 10 an hour", async () => {
   const { auth } = fresh();
   const user = await signUp(auth, "editor@example.org", PASSWORD, HERE);
-  for (let i = 0; i < 10; i++) await assert.rejects(auth.changePassword(user.id, `guess number ${i}`, "a brand new long password", `10.1.${i}.1`), code("wrong-credentials"));
+  for (let i = 0; i < 10; i++)
+    await assert.rejects(auth.changePassword(user.id, `guess number ${i}`, "a brand new long password", `10.1.${i}.1`), code("wrong-credentials"));
   await assert.rejects(auth.changePassword(user.id, PASSWORD, "a brand new long password", "10.1.99.1"), code("too-many-tries"));
 });
 
@@ -307,7 +328,10 @@ test("two sign-ins upgrading the same old hash at once both succeed", async () =
   await signUp(auth, "editor@example.org", PASSWORD, HERE);
   db.prepare("UPDATE auth_users SET password = ?").run(oldHash(PASSWORD, 14));
   const both = await Promise.allSettled([auth.signIn("editor@example.org", PASSWORD, HERE), auth.signIn("editor@example.org", PASSWORD, "192.0.2.9")]);
-  assert.deepEqual(both.map((b) => b.status), ["fulfilled", "fulfilled"]);
+  assert.deepEqual(
+    both.map((b) => b.status),
+    ["fulfilled", "fulfilled"],
+  );
 });
 
 test("an account holds at most 50 sessions: the oldest ends", async () => {
@@ -316,7 +340,8 @@ test("an account holds at most 50 sessions: the oldest ends", async () => {
   const first = auth.startSession(user);
   // 50 more sessions already open (made directly: each would otherwise need a sign-in).
   const now = Date.now();
-  for (let i = 0; i < 50; i++) db.prepare("INSERT INTO auth_sessions (token, user, expires, seen) VALUES (?, ?, ?, ?)").run(`other${i}`, user.id, now + 86_400_000 * 30 + i, now);
+  for (let i = 0; i < 50; i++)
+    db.prepare("INSERT INTO auth_sessions (token, user, expires, seen) VALUES (?, ?, ?, ?)").run(`other${i}`, user.id, now + 86_400_000 * 30 + i, now);
   await openSession(auth, "editor@example.org", HERE);
   assert.equal(auth.userOf(first), null, "the oldest has ended");
   assert.equal(count(db, "auth_sessions"), 50);
@@ -325,7 +350,8 @@ test("an account holds at most 50 sessions: the oldest ends", async () => {
 test("an IPv6 /48's addresses share an allowance, so its 65,536 /64s can't each guess", async () => {
   const { auth } = fresh();
   const from = (address: string) => addressKey({ remoteAddress: address });
-  for (let i = 0; i < 200; i++) await assert.rejects(auth.signIn(`person${i}@example.org`, "x".repeat(500), from(`2001:db8:1:${i.toString(16)}::1`)), code("wrong-credentials"));
+  for (let i = 0; i < 200; i++)
+    await assert.rejects(auth.signIn(`person${i}@example.org`, "x".repeat(500), from(`2001:db8:1:${i.toString(16)}::1`)), code("wrong-credentials"));
   await assert.rejects(auth.signIn("another@example.org", "x".repeat(500), from("2001:db8:1:ffff::1")), code("too-many-tries"));
   await assert.rejects(auth.signIn("another@example.org", "x".repeat(500), from("2001:db8:2:1::1")), code("wrong-credentials"), "another /48 is unaffected");
 });
@@ -423,7 +449,17 @@ await auth.usePasswordLink(link.token, "three unrelated words here", from);`;
             const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "pipe"] });
             let errors = "";
             child.stderr.on("data", (d) => (errors += d));
-            child.on("exit", (code) => done(code === 0 ? "ok" : errors.split("\n").filter((l) => !/ExperimentalWarning|trace-warnings/.test(l)).join(" ").slice(0, 300)));
+            child.on("exit", (code) =>
+              done(
+                code === 0
+                  ? "ok"
+                  : errors
+                      .split("\n")
+                      .filter((l) => !/ExperimentalWarning|trace-warnings/.test(l))
+                      .join(" ")
+                      .slice(0, 300),
+              ),
+            );
           }),
       ),
     );
@@ -432,7 +468,11 @@ await auth.usePasswordLink(link.token, "three unrelated words here", from);`;
 });
 
 test("starting up while hashing is busy neither crashes nor gives unknown emails away", async () => {
-  const flood = Array.from({ length: 60 }, (_, i) => fresh().auth.signIn(`flood${i}@example.org`, "a wrong password here", `10.8.${i}.1`).catch(() => {}));
+  const flood = Array.from({ length: 60 }, (_, i) =>
+    fresh()
+      .auth.signIn(`flood${i}@example.org`, "a wrong password here", `10.8.${i}.1`)
+      .catch(() => {}),
+  );
   await watchCrashes(async (crashed) => {
     const { auth } = fresh();
     await Promise.all(flood);
@@ -465,7 +505,8 @@ test("a password link makes the account, once: it can't be used again, nor after
   const late = auth.requestLink("password", "bob@example.org", HERE)!;
   db.prepare("UPDATE auth_links SET expires = ?").run(Date.now() - 1);
   await assert.rejects(auth.usePasswordLink(late.token!, PASSWORD, HERE), code("invalid-link"), "past its time");
-  for (const made of ["", "x", "x".repeat(43), `${link.token!}x`, "../../etc"]) await assert.rejects(auth.usePasswordLink(made, PASSWORD, HERE), code("invalid-link"));
+  for (const made of ["", "x", "x".repeat(43), `${link.token!}x`, "../../etc"])
+    await assert.rejects(auth.usePasswordLink(made, PASSWORD, HERE), code("invalid-link"));
 });
 
 test("a password refused at a link doesn't use the link up", async () => {
@@ -525,7 +566,10 @@ test("at most 3 links of each kind to one inbox in 15 minutes, quietly; every on
   const sent = [1, 2, 3].map((i) => auth.requestLink("sign-in", "ann@example.org", `198.51.100.${i}`));
   assert.ok(sent.every(Boolean));
   assert.equal(auth.requestLink("sign-in", "ann@example.org", "198.51.100.9"), null, "the fourth isn't sent, and nothing says so");
-  assert.ok(auth.requestLink("password", "ann@example.org", "198.51.100.9"), "sign-in links can't use up password links: a forgotten password can still be replaced");
+  assert.ok(
+    auth.requestLink("password", "ann@example.org", "198.51.100.9"),
+    "sign-in links can't use up password links: a forgotten password can still be replaced",
+  );
   assert.equal(auth.useSignInLink(sent[0]!.token!, HERE).email, "ann@example.org", "an earlier link still works");
 });
 
@@ -541,7 +585,8 @@ test("each address has its own allowance, so another spelling of it can't use up
   const { auth } = fresh();
   await signUp(auth, "bob@gmail.com", PASSWORD, "192.0.2.90");
   for (const [i, email] of ["b.ob@gmail.com", "bob+x@gmail.com", "bob@googlemail.com"].entries()) {
-    for (const kind of ["password", "sign-in"] as const) for (let n = 0; n < 3; n++) auth.requestLink(kind, email, `198.51.${100 + i}.${n * 2 + (kind === "password" ? 0 : 1)}`);
+    for (const kind of ["password", "sign-in"] as const)
+      for (let n = 0; n < 3; n++) auth.requestLink(kind, email, `198.51.${100 + i}.${n * 2 + (kind === "password" ? 0 : 1)}`);
   }
   assert.ok(auth.requestLink("password", "bob@gmail.com", "192.0.2.91"), "Bob can still choose a new password");
   assert.ok(auth.requestLink("sign-in", "bob@gmail.com", "192.0.2.92")?.token, "and sign in by link");
@@ -656,7 +701,11 @@ test("asking to move an account is limited like other links and password checks"
   for (let i = 0; i < 3; i++) assert.ok(await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", `198.51.100.${130 + i}`));
   assert.equal(await auth.requestEmailChange(ann.id, PASSWORD, "ann@new.example", "198.51.100.140"), null, "3 to one address in 15 minutes, quietly");
   for (let i = 0; i < 10; i++) await auth.requestEmailChange(ann.id, "a wrong password here", `x${i}@new.example`, `198.51.100.${150 + i}`).catch(() => {});
-  await assert.rejects(auth.requestEmailChange(ann.id, PASSWORD, "ann@third.example", "198.51.100.170"), code("too-many-tries"), "the owner's 10 password checks an hour");
+  await assert.rejects(
+    auth.requestEmailChange(ann.id, PASSWORD, "ann@third.example", "198.51.100.170"),
+    code("too-many-tries"),
+    "the owner's 10 password checks an hour",
+  );
 });
 
 test("a move link does nothing for anyone but the account it moves, signed in, and isn't used up by trying", async () => {
@@ -683,7 +732,11 @@ test("the address a move took the account from can undo it: back, every session 
   const back = auth.useUndoLink(first.undo, "192.0.2.132");
   assert.deepEqual([back.id, back.email], [ann.id, "ann@example.org"]);
   assert.equal(auth.userOf(thiefSession), null, "everyone signed out");
-  await assert.rejects(auth.signIn("ann@example.org", "the thief's own long password", "192.0.2.133"), code("wrong-credentials"), "the thief's password no longer works");
+  await assert.rejects(
+    auth.signIn("ann@example.org", "the thief's own long password", "192.0.2.133"),
+    code("wrong-credentials"),
+    "the thief's password no longer works",
+  );
   assert.throws(() => auth.useUndoLink(first.undo, HERE), code("invalid-link"), "once only");
   assert.equal((await auth.usePasswordLink(back.reset.token!, "ann's new long password", "192.0.2.134")).id, ann.id, "and Ann chooses a new one");
 });
@@ -810,7 +863,19 @@ test("events: each one told after the answer, with no password, token, or email 
   await later();
   assert.deepEqual(
     events.map((e) => e.type),
-    ["account-made", "signed-in", "sign-in-failed", "sign-in-failed", "signed-in", "session-ended", "signed-out", "password-check-failed", "password-changed", "email-changed", "email-change-undone"],
+    [
+      "account-made",
+      "signed-in",
+      "sign-in-failed",
+      "sign-in-failed",
+      "signed-in",
+      "session-ended",
+      "signed-out",
+      "password-check-failed",
+      "password-changed",
+      "email-changed",
+      "email-change-undone",
+    ],
     "and nothing for signing out everywhere with no sessions left",
   );
   assert.deepEqual([events[1]!.by, events[1]!.from], ["password", HERE]);
@@ -860,7 +925,10 @@ test("events: a sign-in link's session is told as one", async () => {
   await signUp(auth, "ann@example.org", PASSWORD, HERE);
   auth.startSession(auth.useSignInLink(auth.requestLink("sign-in", "ann@example.org", HERE)!.token!, HERE));
   await later();
-  assert.deepEqual(events.filter((e) => e.type === "signed-in").map((e) => e.by), ["link"]);
+  assert.deepEqual(
+    events.filter((e) => e.type === "signed-in").map((e) => e.by),
+    ["link"],
+  );
 });
 
 test("breached passwords: one typed in another Unicode form is still found", async () => {
@@ -882,12 +950,20 @@ test("breached passwords: refused, checked by the first 5 characters of a hash o
   const { auth } = fresh({
     breachedRange: (prefix) => {
       asked.push(prefix);
-      return [breached, padded].filter((p) => sha1(p).startsWith(prefix)).map((p) => `${sha1(p).slice(5)}:${p === padded ? 0 : 42}`).join("\r\n") + "\r\nABCDEF0123456789ABCDEF0123456789ABC:3";
+      return (
+        [breached, padded]
+          .filter((p) => sha1(p).startsWith(prefix))
+          .map((p) => `${sha1(p).slice(5)}:${p === padded ? 0 : 42}`)
+          .join("\r\n") + "\r\nABCDEF0123456789ABCDEF0123456789ABC:3"
+      );
     },
   });
   const link = auth.requestLink("password", "ann@example.org", HERE)!;
   await assert.rejects(auth.usePasswordLink(link.token!, breached, HERE), code("breached-password"));
-  assert.ok(asked.every((prefix) => /^[0-9A-F]{5}$/.test(prefix)), "only a 5-character prefix of a hash leaves");
+  assert.ok(
+    asked.every((prefix) => /^[0-9A-F]{5}$/.test(prefix)),
+    "only a 5-character prefix of a hash leaves",
+  );
   const ann = await auth.usePasswordLink(link.token!, padded, HERE);
   assert.equal(ann.email, "ann@example.org", "padding isn't a breach, and the refusal didn't use up the link");
   await assert.rejects(auth.changePassword(ann.id, padded, breached, HERE), code("breached-password"), "changing the password is checked too");
@@ -922,7 +998,10 @@ test("a copy of everything kept about an account, with nothing in it that signs 
   assert.equal(data.email, "ann@example.org");
   assert.equal(data.password, "set");
   assert.equal(data.sessions.length, 1);
-  assert.deepEqual(data.links.map((l) => [l.kind, l.email]), [["sign-in", "ann@example.org"]]);
+  assert.deepEqual(
+    data.links.map((l) => [l.kind, l.email]),
+    [["sign-in", "ann@example.org"]],
+  );
   const copy = JSON.stringify(data);
   for (const secret of [session, pending.token!, PASSWORD, "$scrypt$"]) assert.ok(!copy.includes(secret), secret);
   assert.equal(auth.dataOf("nobody"), null);

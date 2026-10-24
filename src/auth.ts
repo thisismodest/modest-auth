@@ -224,7 +224,8 @@ const emailOrRefuse = (given: string) => {
   return email;
 };
 /** When a new link of `kind` runs out. */
-const linkExpires = (kind: LinkKind) => Date.now() + (kind === "sign-in" ? SIGN_IN_LINK_MINUTES * MINUTE : kind === "undo" ? UNDO_DAYS * DAY : PASSWORD_LINK_MINUTES * MINUTE);
+const linkExpires = (kind: LinkKind) =>
+  Date.now() + (kind === "sign-in" ? SIGN_IN_LINK_MINUTES * MINUTE : kind === "undo" ? UNDO_DAYS * DAY : PASSWORD_LINK_MINUTES * MINUTE);
 
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
 export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
@@ -387,7 +388,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
    * the password or email changes, or the account goes.
    */
   // Not an undo link: that stays with the address a move took the account from, whatever is done to the account.
-  const endLinks = (email: string, userId = "") => void db.prepare("DELETE FROM auth_links WHERE (email = ? OR user = ?) AND kind != 'undo'").run(email, userId);
+  const endLinks = (email: string, userId = "") =>
+    void db.prepare("DELETE FROM auth_links WHERE (email = ? OR user = ?) AND kind != 'undo'").run(email, userId);
   type LinkRow = { kind: LinkKind; email: string; user: string | null; expires: number };
   /**
    * A live link of one of `kinds` (never "none": those are stored only to do the same work), by its token: looked
@@ -396,7 +398,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
   const findLink = (token: string, kinds: LinkKind[], take: boolean): LinkRow => {
     if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
     const which = `token = ? AND kind IN (${kinds.map(() => "?").join(", ")}) AND expires > ?`;
-    const sql = take ? `DELETE FROM auth_links WHERE ${which} RETURNING kind, email, user, expires` : `SELECT kind, email, user, expires FROM auth_links WHERE ${which}`;
+    const sql = take
+      ? `DELETE FROM auth_links WHERE ${which} RETURNING kind, email, user, expires`
+      : `SELECT kind, email, user, expires FROM auth_links WHERE ${which}`;
     const row = db.prepare(sql).get(tokenHash(token), ...kinds, Date.now()) as LinkRow | undefined;
     if (!row) throw EXPIRED();
     return row;
@@ -422,7 +426,13 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     moveTo(userId, email, password);
     endAllSessions(userId);
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
-    db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(userId, current, email, undoExpires, userId);
+    db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
+      userId,
+      current,
+      email,
+      undoExpires,
+      userId,
+    );
   };
   /**
    * The account `email` can still take back by an undo (its oldest live one), if only one can: whoever reads
@@ -430,7 +440,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
    */
   const undoTo = (email: string) => {
     const rows = db
-      .prepare("SELECT l.user AS user, l.expires AS expires, u.email AS current FROM auth_links l JOIN auth_users u ON u.id = l.user WHERE l.kind = 'undo' AND l.email = ? AND l.expires > ? ORDER BY l.expires")
+      .prepare(
+        "SELECT l.user AS user, l.expires AS expires, u.email AS current FROM auth_links l JOIN auth_users u ON u.id = l.user WHERE l.kind = 'undo' AND l.email = ? AND l.expires > ? ORDER BY l.expires",
+      )
       .all(email, Date.now()) as { user: string; expires: number; current: string }[];
     return new Set(rows.map((row) => row.user)).size === 1 ? rows[0] : undefined;
   };
@@ -525,7 +537,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const made = !userRow("email", email);
       // Made, or (if there's an account, or one was made meanwhile) its password replaced.
       const { id } = db
-        .prepare("INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET password = excluded.password RETURNING id")
+        .prepare(
+          "INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET password = excluded.password RETURNING id",
+        )
         .get(randomUUID(), email, hashed, Date.now()) as { id: string };
       endAllSessions(id);
       endLinks(email, id);
@@ -584,7 +598,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       sweep(now);
       const hashed = tokenHash(token);
       const row = db
-        .prepare("SELECT u.id AS id, u.email AS email, s.seen AS seen FROM auth_sessions s JOIN auth_users u ON u.id = s.user WHERE s.token = ? AND s.expires > ? AND s.seen > ?")
+        .prepare(
+          "SELECT u.id AS id, u.email AS email, s.seen AS seen FROM auth_sessions s JOIN auth_users u ON u.id = s.user WHERE s.token = ? AND s.expires > ? AND s.seen > ?",
+        )
         .get(hashed, now, now - IDLE_DAYS * DAY) as (User & { seen: number }) | undefined;
       if (!row) return null;
       if (now - row.seen > SEEN_EVERY_MS) db.prepare("UPDATE auth_sessions SET seen = ? WHERE token = ?").run(now, hashed);
@@ -623,7 +639,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const now = Date.now();
       const row = db.prepare("SELECT email, created FROM auth_users WHERE id = ?").get(userId) as { email: string; created: number } | undefined;
       if (!row) return null;
-      const sessions = db.prepare("SELECT expires, seen FROM auth_sessions WHERE user = ? AND expires > ? AND seen > ? ORDER BY seen DESC").all(userId, now, now - IDLE_DAYS * DAY) as {
+      const sessions = db
+        .prepare("SELECT expires, seen FROM auth_sessions WHERE user = ? AND expires > ? AND seen > ? ORDER BY seen DESC")
+        .all(userId, now, now - IDLE_DAYS * DAY) as {
         expires: number;
         seen: number;
       }[];
@@ -646,7 +664,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       await checkBreached(next);
       const fresh = await hashPassword(next);
       // The email as it is now (it may have moved while the password was checked).
-      const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ? RETURNING email").get(fresh, userId, hash) as { email: string } | undefined;
+      const done = db.prepare("UPDATE auth_users SET password = ? WHERE id = ? AND password = ? RETURNING email").get(fresh, userId, hash) as
+        | { email: string }
+        | undefined;
       if (!done) throw WRONG();
       endAllSessions(userId);
       endLinks(done.email, userId);

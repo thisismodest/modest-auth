@@ -65,7 +65,10 @@ export async function handleNode(handler: Handler, req: IncomingMessage, res: Se
   } catch (error) {
     console.error("modest-auth:", error instanceof Error ? error.message : error);
     if (res.headersSent) res.destroy();
-    else res.writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end('{"error":{"code":"failed","message":"Something went wrong."}}');
+    else
+      res
+        .writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
+        .end('{"error":{"code":"failed","message":"Something went wrong."}}');
   }
   return true;
 }

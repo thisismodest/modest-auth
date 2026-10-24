@@ -41,7 +41,9 @@ const derive = (password: string, salt: Buffer, { ln, r, p }: Cost) =>
   twoAtOnce(
     () =>
       new Promise<Buffer>((done, fail) =>
-        scrypt(password.normalize("NFKC"), salt, HASH_BYTES, { N: 2 ** ln, r, p, maxmem: 256 * 1024 * 1024 }, (error, key) => (error ? fail(error) : done(key))),
+        scrypt(password.normalize("NFKC"), salt, HASH_BYTES, { N: 2 ** ln, r, p, maxmem: 256 * 1024 * 1024 }, (error, key) =>
+          error ? fail(error) : done(key),
+        ),
       ),
   );
 
@@ -66,11 +68,14 @@ function commonPasswords(): Set<string> {
 
 /** Throws if `password` won't do as a new password for the account with `email`. */
 export function checkNewPassword(password: string, email: string): void {
-  if (typeof password !== "string" || !password.isWellFormed()) throw new AuthError("invalid-password", "That password has characters that can't be kept. Please choose another.");
+  if (typeof password !== "string" || !password.isWellFormed())
+    throw new AuthError("invalid-password", "That password has characters that can't be kept. Please choose another.");
   const normal = password.normalize("NFKC");
   const length = characters(normal);
-  if (length < SHORTEST_PASSWORD) throw new AuthError("short-password", `Please choose a password of ${SHORTEST_PASSWORD} characters or more: a few words together works well.`);
-  if (length > LONGEST_PASSWORD || password.length > LONGEST_TYPED) throw new AuthError("long-password", `Please choose a password of ${LONGEST_PASSWORD} characters or fewer.`);
+  if (length < SHORTEST_PASSWORD)
+    throw new AuthError("short-password", `Please choose a password of ${SHORTEST_PASSWORD} characters or more: a few words together works well.`);
+  if (length > LONGEST_PASSWORD || password.length > LONGEST_TYPED)
+    throw new AuthError("long-password", `Please choose a password of ${LONGEST_PASSWORD} characters or fewer.`);
   const reduced = reduce(normal);
   const local = reduce(email.slice(0, email.indexOf("@")));
   const fromEmail = characters(local) >= 6 && reduced.includes(local);

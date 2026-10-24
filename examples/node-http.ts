@@ -89,7 +89,11 @@ post("link", { token }).then(({ res, json }) => {
 // (Once an email changes, every session ends: the browser lands on the home page signed out, to sign in again.)
 
 function send(res: ServerResponse, type: string, body: string): void {
-  res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'", "referrer-policy": "no-referrer" });
+  res.writeHead(200, {
+    "content-type": `${type}; charset=utf-8`,
+    "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "referrer-policy": "no-referrer",
+  });
   res.end(body);
 }
 

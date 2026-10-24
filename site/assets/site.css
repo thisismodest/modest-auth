@@ -204,7 +204,9 @@ footer a {
   border-radius: 12px;
   background: var(--code-bg);
   color: var(--code-fg);
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 24px 48px -24px rgb(0 0 0 / 0.45);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    0 24px 48px -24px rgb(0 0 0 / 0.45);
   overflow: hidden;
 }
 
@@ -243,7 +245,10 @@ footer a {
 }
 
 @media (max-width: 30rem) {
-  .window pre { font-size: 0.7rem; padding: 1rem 1rem 2.25rem; }
+  .window pre {
+    font-size: 0.7rem;
+    padding: 1rem 1rem 2.25rem;
+  }
 }
 
 .window :where(pre) code {
@@ -255,10 +260,19 @@ footer a {
 }
 
 /* Coloured by hand: keywords, strings, comments. */
-.k { color: #9fd4bd; }
-.s { color: #e8c98f; }
-.c { color: #7d807b; font-style: italic; }
-.f { color: #c7d8ff; }
+.k {
+  color: #9fd4bd;
+}
+.s {
+  color: #e8c98f;
+}
+.c {
+  color: #7d807b;
+  font-style: italic;
+}
+.f {
+  color: #c7d8ff;
+}
 
 /* The little card that floats over the code: what just happened. */
 .status {
@@ -302,7 +316,9 @@ footer a {
 }
 
 @media (min-width: 48rem) {
-  .facts { grid-template-columns: repeat(4, 1fr); }
+  .facts {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .facts li {
@@ -869,4 +885,3 @@ footer .wrap {
   justify-content: space-between;
   gap: var(--mdst-space-3);
 }
-
