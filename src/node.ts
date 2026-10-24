@@ -53,7 +53,8 @@ export async function handleNode(handler: Handler, req: IncomingMessage, res: Se
   if (!path || (path !== handler.base && !path.startsWith(`${handler.base}/`))) return false;
   try {
     // Read already, by a body parser in front: a mistake in how the handler is mounted, said plainly.
-    if (req.method === "POST" && (req.readableEnded || (req as { body?: unknown }).body !== undefined)) throw new Error(BODY_READ);
+    // (body-parser marks what it parsed with _body: it sets req.body even for a request it leaves alone.)
+    if (req.method === "POST" && (req.readableEnded || (req as { _body?: unknown })._body === true)) throw new Error(BODY_READ);
     const response = await handler.handle(webRequest(req, true), req.socket.remoteAddress);
     if (!response) return false;
     const headers: Record<string, string | string[]> = {};

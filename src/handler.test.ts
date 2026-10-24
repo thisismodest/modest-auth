@@ -365,8 +365,8 @@ test("answers carry no CORS headers, so another site's page can't read them; pau
   for (let i = 0; i < 10; i++) await send("/auth/sign-in", { email: "ann@example.org", password: "a wrong password here" });
   const paused = await send("/auth/sign-in", { email: "ann@example.org", password: "a wrong password here" });
   assert.equal(paused.status, 429);
-  const wait = Number(paused.headers.get("retry-after"));
-  assert.ok(wait > 890 && wait <= 900, `until this pause (15 minutes) lifts: ${wait}s`);
+  const seconds = Number(paused.headers.get("retry-after"));
+  assert.ok(seconds > 890 && seconds <= 900, `until this pause (15 minutes) lifts: ${seconds}s`);
 });
 
 test("a proxy passing X-Forwarded-For but not trusted is said once, naming what to set", async () => {
@@ -445,6 +445,9 @@ test("a sendEmail that ignores its signal is let go when it's up, and said why, 
     });
     const logged = await captureErrors(async () => {
       for (let i = 0; i < 12; i++) await post(handler, "send-password-link", { email: `p${i}@example.org` }, `10.6.0.${i}`);
+      // A second's grace after each signal, for a send that passed it on to stop by itself: the last two
+      // sends start once the first ten are let go, so two seconds and a bit for all of them.
+      await wait(2300);
       for (let i = 0; i < 6; i++) await afterwards();
     });
     assert.equal(started, 12, "every send started: none held a place for good");
@@ -709,7 +712,7 @@ test("a body read before the handler (a body parser mounted in front) is said pl
   const server = createServer(async (req, res) => {
     let text = "";
     for await (const chunk of req) text += chunk;
-    (req as { body?: unknown }).body = JSON.parse(text || "{}");
+    Object.assign(req, { body: JSON.parse(text || "{}"), _body: true });
     if (!(await handleNode(handler, req, res))) res.end("app");
   });
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
@@ -741,4 +744,50 @@ test("sendEmail is given a signal that aborts after 30 seconds, so a stuck servi
   await post(handler, "send-password-link", { email: "ann@example.org" }, HERE);
   await afterwards();
   assert.ok(signal instanceof AbortSignal && !signal.aborted);
+});
+
+test("a parser that only set req.body, without reading this request, isn't taken for one that read it", async () => {
+  const handler = createHandler(fresh().auth, { origin: DEV, ...EMAIL });
+  const server = createServer(async (req, res) => {
+    // As express.urlencoded() does for a JSON request: req.body set, nothing read.
+    Object.assign(req, { body: {} });
+    if (!(await handleNode(handler, req, res))) res.end("app");
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const res = await fetch(`${base}/auth/sign-in`, {
+      method: "POST",
+      headers: { origin: DEV, "content-type": "application/json" },
+      body: JSON.stringify({ email: "a@example.org", password: PASSWORD }),
+    });
+    assert.equal(res.status, 401, "read and answered as usual");
+  } finally {
+    server.close();
+  }
+});
+
+test("a send whose email service times out is said to have timed out, not to have ignored its signal", async () => {
+  const realTimeout = AbortSignal.timeout;
+  AbortSignal.timeout = () => {
+    const stop = new AbortController();
+    setImmediate(() => stop.abort(new DOMException("timed out", "TimeoutError")));
+    return stop.signal;
+  };
+  try {
+    const handler = createHandler(fresh().auth, {
+      ...EMAIL,
+      origin: ORIGIN,
+      sendEmail: (_to, _subject, _text, { signal }) =>
+        new Promise<void>((_, fail) => signal.addEventListener("abort", () => fail(signal.reason), { once: true })),
+    });
+    const logged = await captureErrors(async () => {
+      await post(handler, "send-password-link", { email: "ann@example.org" }, HERE);
+      for (let i = 0; i < 6; i++) await afterwards();
+    });
+    assert.match(String(logged), /didn't answer in 30 seconds/);
+    assert.doesNotMatch(String(logged), /pass its signal on/);
+  } finally {
+    AbortSignal.timeout = realTimeout;
+  }
 });

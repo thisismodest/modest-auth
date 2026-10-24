@@ -20,6 +20,8 @@ in the log what to set.
   set: a proxy passing addresses that isn't named, or one in front passing none. Ranges
   wide enough to be much of the internet are refused. `addressKey(client,
   trustedProxies?)` takes the list in place of a count.
+- The development cookie's name has the port in it, so two apps on localhost don't sign
+  each other out (signing out development sessions once).
 - `sendEmail` is given `{ signal }`, which aborts after 30 seconds, and a send is let go
   of then whether or not it stops (and that's logged), so a stuck email service can't
   hold up the others.
@@ -30,10 +32,8 @@ in the log what to set.
 ### Added
 
 - Setup mistakes said in the log, once each: an `origin` that isn't where the pages
-  are (`www.`, a port, `http`), a handler given no address (with how, for Bun, Deno, and
+  are (`www.`, or a port), a handler given no address (or one that isn't an address) (with how, for Bun, Deno, and
   Hono), and the proxy cases above. An `origin` that isn't an address says so.
-- The development cookie's name has the port in it, so two apps on localhost don't sign
-  each other out.
 - A body read before the handler (a body parser mounted in front of it) is an error
   that says so, rather than a request with no fields.
 

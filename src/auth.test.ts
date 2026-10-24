@@ -1051,29 +1051,6 @@ test("breached passwords: the range can be the fetch Response itself; one that i
   assert.match(String(logged), /503/);
 });
 
-test("breached passwords: the range can be the fetch Response itself; one that isn't OK allows the password, and says so", async () => {
-  const breached = "a long but breached password";
-  const signals: AbortSignal[] = [];
-  let status = 200;
-  const { auth } = fresh({
-    breachedRange: (prefix, { signal }) => {
-      signals.push(signal);
-      return new Response(sha1(breached).startsWith(prefix) ? `${sha1(breached).slice(5)}:9` : "", { status });
-    },
-  });
-  const link = must(auth.requestLink("password", "ann@example.org", HERE));
-  await assert.rejects(auth.usePasswordLink(must(link.token), breached, HERE), code("breached-password"));
-  assert.ok(
-    signals.every((signal) => signal instanceof AbortSignal),
-    "given a signal to pass to fetch",
-  );
-  status = 503;
-  const logged = await captureErrors(async () => {
-    assert.ok(await auth.usePasswordLink(must(link.token), breached, HERE));
-  });
-  assert.match(String(logged), /503/);
-});
-
 test("breached passwords: a range answer over 1MB isn't read to the end; the password is allowed, and that said", async () => {
   const { auth } = fresh({ breachedRange: () => new Response("A".repeat(2_000_000)) });
   const link = must(auth.requestLink("password", "ann@example.org", HERE));

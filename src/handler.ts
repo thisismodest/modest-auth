@@ -34,9 +34,11 @@ export type HandlerOptions = {
   /** The site's origin, such as "https://example.org". Over HTTPS, except on this machine. */
   origin: string;
   /**
-   * Address ranges of proxies in front of the server that connect from public addresses, such as a CDN's
-   * (["173.245.48.0/20", …] for Cloudflare). Proxies on this machine or a private network (nginx, Caddy, a
-   * hosting platform's load balancer) are trusted without it. Leave it out unless a CDN is in front.
+   * The proxies in front of the server, whose X-Forwarded-For is believed: "loopback" (nginx or Caddy on
+   * this machine), "private" (a hosting platform's load balancer, or another container), a CDN's address
+   * ranges, or addresses. None by default, which is always safe (visitors behind a proxy share its
+   * address for limits); the log says what to set. A named proxy must add the visitor's address, not pass
+   * theirs on (nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;).
    */
   trustedProxies?: readonly string[];
   /** Where the routes live. */
@@ -176,15 +178,26 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const sending = atMost(10, 1000);
   // Why, but never the email's text (it holds the link) nor the service's own message (which may repeat it).
   const why = (error: unknown) =>
-    error instanceof AuthError ? "too many waiting" : error instanceof Error ? (error.message === TOO_SLOW ? TOO_SLOW : error.name) : typeof error;
+    error instanceof AuthError
+      ? "too many waiting"
+      : !(error instanceof Error)
+        ? typeof error
+        : error.message === TOO_SLOW
+          ? TOO_SLOW
+          : error.name === "TimeoutError" || error.name === "AbortError"
+            ? "the email service didn't answer in 30 seconds"
+            : error.name;
   /** Sent after the answer, so a slow email service doesn't hold it up; not at all if it's no use by then. */
   const queue = (to: string, subject: string, text: string, until: number) =>
     setImmediate(() => {
       sending(async () => {
         if (Date.now() >= until) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
-        // Waited for until it ends or 30 seconds pass, whichever is first: one that ignores the signal can't hold a place.
+        // Waited for until it ends, or a second after its signal aborts at 30 seconds (time for a send that passed the
+        // signal on to stop): one that ignores the signal can't hold a place.
         const signal = AbortSignal.timeout(30_000);
-        const late = new Promise<never>((_, fail) => signal.addEventListener("abort", () => fail(new Error(TOO_SLOW)), { once: true }));
+        const late = new Promise<never>((_, fail) =>
+          signal.addEventListener("abort", () => setTimeout(() => fail(new Error(TOO_SLOW)), 1000).unref(), { once: true }),
+        );
         await Promise.race([Promise.resolve().then(() => sendEmail(to, subject, text, { signal })), late]);
       }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
     });
@@ -224,15 +237,16 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const checkProxies = (trace: ReturnType<typeof traceClient>, address: string | undefined) => {
     const proxy = trace.untrustedProxy;
     if (proxy?.where === "public") {
+      // Counted by its /64 for IPv6, so one network can't use these up to hide another.
       sayOnce(
-        "proxy",
-        proxy.address,
+        "public proxy",
+        trace.key,
         `a request from ${proxy.address} passed X-Forwarded-For on. If that's a CDN or proxy in front of this server, add its address ranges to trustedProxies, or its visitors share its sign-in limits; if it's a visitor's own proxy, ignore this.`,
       );
     } else if (proxy) {
       const name = proxy.where === "loopback" ? "loopback" : "private";
       sayOnce(
-        "proxy",
+        "internal proxy",
         proxy.address,
         `a proxy at ${proxy.address} passes X-Forwarded-For on but isn't trusted, so every visitor counts as it. Add trustedProxies: ["${name}"], and check it adds the client's address rather than passing on the visitor's (${NGINX}).`,
       );
@@ -368,26 +382,27 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (!route) return refuse(404, "not-found", "Not found.");
       if (request.method !== "POST") return refuse(405, "post-only", "Use POST.");
       if (!fromSite(request)) {
-        // From the site's own page, as the browser says, but not the origin set: the setting, not an attack.
+        // From the site's own page, as the browser says (curl and the like don't), but not the origin set: the setting, not an attack.
         const came = request.headers.get("origin");
-        if (came && request.headers.get("sec-fetch-site") !== "cross-site") {
+        const site = request.headers.get("sec-fetch-site");
+        if (came && (site === "same-origin" || site === "same-site")) {
           sayOnce(
             "origin",
             came.slice(0, 200),
-            `a request from a page at ${came.slice(0, 200)} was refused, as origin is ${origin}. If that's this site (www., a port, http), set origin to the address its pages are served from.`,
+            `a request from a page at ${came.slice(0, 200)} was refused, as origin is ${origin}. If that's this site (www., or a port), set origin to the address its pages are served from.`,
           );
         }
         return refuse(403, "cross-site", "Cross-site request refused.");
       }
-      if (address === undefined) {
+      // Who's asking, for the limits: without it, everyone would share one allowance.
+      const trace = traceClient({ remoteAddress: address, forwardedFor: request.headers.get("x-forwarded-for") }, trusted);
+      if (address === undefined || !trace.connection) {
         sayOnce(
           "address",
           "",
-          "handle(request, address) was given no address: pass the connection's (Bun: server.requestIP(req)?.address; Deno: info.remoteAddr.hostname; Hono: getConnInfo(c).remote.address), or every request is refused.",
+          `handle(request, address) was given ${address === undefined ? "no address" : "something that isn't one"}: pass the connection's own (Node: req.socket.remoteAddress; Bun: server.requestIP(req)?.address; Deno: info.remoteAddr.hostname; Hono: getConnInfo(c).remote.address), not a header, or every request is refused.`,
         );
       }
-      // Who's asking, for the limits: without it, everyone would share one allowance.
-      const trace = traceClient({ remoteAddress: address, forwardedFor: request.headers.get("x-forwarded-for") }, trusted);
       checkProxies(trace, address);
       const from = trace.key;
       if (from === "unknown") return refuse(400, "no-address", "Where the request came from isn't known.");

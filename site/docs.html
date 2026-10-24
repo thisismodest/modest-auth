@@ -87,7 +87,7 @@
 <span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
 <span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
-<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
+<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>));
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: <span class="s">"https://example.org"</span>, <span class="c">// your site's address (HTTPS)</span>
   linkPage: <span class="s">"/account/link"</span>, <span class="c">// your page that emailed links open</span>

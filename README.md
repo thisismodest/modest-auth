@@ -123,14 +123,20 @@ Node 24 or later, and tested on 24 and 26. The first time `node:sqlite` is used,
 built-in module, not an error. In Node 26, `node:sqlite` is a release candidate
 (stability 1.2).
 
+It needs a long-running Node server with a persistent disk: the accounts live in one
+SQLite file. Several processes on one machine can share it; several machines can't (each
+would have its own accounts). So not serverless (Vercel or Netlify functions), and not
+a disk that's wiped on each deploy or restart (Heroku's, or a container's own): give it a
+volume.
+
 ```ts
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
 
 // Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
-// The path is beside this file, not wherever the server happens to be started from.
-const auth = createAuth(new DatabaseSync(new URL("app.db", import.meta.url)), {
+// On a persistent disk or volume, outside the code (so a deploy or rebuild doesn't wipe it).
+const auth = createAuth(new DatabaseSync(process.env.DATABASE_PATH ?? "app.db"), {
   // Optional: a record of who did what (no passwords, tokens, or emails in it).
   onEvent: (event) => console.log(JSON.stringify(event)),
   // Optional: refuse passwords from known breaches. Only 5-character prefixes of hashes leave.
@@ -217,8 +223,9 @@ use one up.
 - **Bun:** `Bun.serve({ fetch: async (req, server) => (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) })`
 - **Deno:** `Deno.serve(async (req, info) => (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req))`
 - **Express:** mount it first, before any body parser (which would read the body
-  first; if one does, the handler says so, rather than reading no fields; in Next.js,
-  turn its own off for the route: `export const config = { api: { bodyParser: false } }`):
+  first; if one does, the handler says so, rather than reading no fields; in a Next.js
+  custom server with the Pages Router, turn its own off for the route:
+  `export const config = { api: { bodyParser: false } }`):
   `app.use(async (req, res, next) => (await handleNode(handler, req, res)) || next())`
 - **Fastify:** in an `onRequest` hook (before Fastify reads the body), take over the
   handler's own paths:
@@ -244,14 +251,22 @@ have it pass the visitor's address on in `X-Forwarded-For`:
 | --- | --- |
 | Nothing (Node faces the internet) | leave it out |
 | nginx or Caddy on the same machine | `["loopback"]` |
+| nginx in another container (Docker Compose) | `["private"]` |
 | A hosting platform's load balancer (Render, Fly, Railway, and the like) | `["private"]` |
-| A CDN such as Cloudflare | its published address ranges, as well |
+| Cloudflare Tunnel (`cloudflared` on the same machine) | `["loopback"]` |
+| A CDN such as Cloudflare, connecting to you directly | its address ranges (Cloudflare's are at cloudflare.com/ips, and change now and then) |
+| A CDN, then a hosting platform's load balancer | both: `["private", "173.245.48.0/20", …]` |
 
-nginx doesn't pass the address on unless told:
-`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (Caddy does by itself).
-Any number of proxies, on any path, is read past. Name nothing, or the wrong thing, and
-it's safe (at worst, visitors share the proxy's address for limits), and the log says
-what to set: a proxy passing addresses that isn't named, or one that passes none.
+A named proxy must **add** the visitor's address, not pass on whatever the visitor sent,
+or visitors can choose their own: nginx passes the visitor's header on unless told
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (Caddy and most hosting
+platforms add it). And `["private"]` trusts everyone on your private network: where
+outside connections can arrive from private addresses (some container port-forwarding
+and cluster address translation), name the proxy's own address instead.
+
+Any number of named proxies, on any path, is read past. Naming nothing is always safe:
+at worst, visitors share the proxy's address for limits. The log says what to set: a
+proxy passing addresses that isn't named, or one in front passing none.
 
 ### Sending email
 
@@ -278,8 +293,8 @@ land in spam. Keep the API key in an environment variable. In development,
 ## What your app does
 
 - **Has a link page** that does the four things above.
-- **Sends email,** with a timeout of its own (a send holds one of 10 places until it
-  finishes), and without logging the text (it holds the link).
+- **Sends email,** passing the `signal` on, returning (or awaiting) the send so a failure
+  is caught, and without logging the text (it holds the link).
 - **Checks its own changing routes come from its own pages,** with `handler.fromSite(request)`,
   as the handler does for its own.
 - **Sets short timeouts** for slow clients, such as `server.requestTimeout = 10_000` and

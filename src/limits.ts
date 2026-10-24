@@ -225,13 +225,14 @@ const written = (address: Address) => ("v4" in address ? address.v4.join(".") : 
  * - `untrustedProxy`: the client found still passed addresses on, so it may be a proxy of yours that
  *   isn't in trustedProxies (or a visitor's own, which is harmless): its address, and whether it's on
  *   this machine or a private network.
+ * - `connection`: whether the connection's own address was one at all.
  * - `quietProxy`: the request came from this machine or a private network with no X-Forwarded-For at
  *   all, so a proxy in front may not be passing the client's address on.
  */
 export function traceClient(
   { remoteAddress, forwardedFor }: ClientAddress,
   trusted: (address: Address) => boolean,
-): { key: string; untrustedProxy: { address: string; where: "loopback" | "private" | "public" } | null; quietProxy: boolean } {
+): { key: string; connection: boolean; untrustedProxy: { address: string; where: "loopback" | "private" | "public" } | null; quietProxy: boolean } {
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(",") : (forwardedFor ?? "");
   const hops = header
     .split(",")
@@ -241,9 +242,14 @@ export function traceClient(
   const quietProxy = !!connection && hops.length === 0 && isPrivate(connection);
   let client = connection;
   while (client && trusted(client) && hops.length) client = readAddress(hops.pop() ?? "");
-  if (!client) return { key: "unknown", untrustedProxy: null, quietProxy };
+  if (!client) return { key: "unknown", connection: !!connection, untrustedProxy: null, quietProxy };
   const where = isLoopback(client) ? "loopback" : isPrivate(client) ? "private" : "public";
-  return { key: keyOf(client), untrustedProxy: hops.length && !trusted(client) ? { address: written(client), where } : null, quietProxy };
+  return {
+    key: keyOf(client),
+    connection: !!connection,
+    untrustedProxy: hops.length && !trusted(client) ? { address: written(client), where } : null,
+    quietProxy,
+  };
 }
 
 /** Who a request came from, for limits (see traceClient), trusting the proxies in `trustedProxies` and no others. */
