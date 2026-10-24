@@ -103,6 +103,8 @@ round modest-auth.
   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 - **A proxy or CDN that isn't named** makes its visitors share its address for the
   limits (safe, but a busy address can pause); the log says so, naming the setting.
+  Each kind of note is said for 5 sources at most, so someone sending from 5 networks
+  first can use them up; the 5 notes still say what to check.
 - **Someone with an account's password and a session can move it,** and has the
   account until its old address undoes the move (and, if they also read the old
   inbox, for good). That's why the undo link also makes the password useless.

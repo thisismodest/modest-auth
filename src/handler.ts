@@ -250,10 +250,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const checkProxies = (trace: ReturnType<typeof traceClient>, address: string | undefined) => {
     const proxy = trace.untrustedProxy;
     if (proxy?.where === "public") {
-      // Counted by its /64 for IPv6, so one network can't use these up to hide another.
+      // Counted by its /48 for IPv6 (what one home or site can be given), so one network can't use these
+      // up to hide another.
       sayOnce(
         "public proxy",
-        trace.key,
+        trace.key.endsWith("/64") ? `${trace.key.split(":").slice(0, 3).join(":")}::/48` : trace.key,
         `a request from ${proxy.address} passed X-Forwarded-For on. If that's a CDN or proxy in front of this server, add its address ranges to trustedProxies, or its visitors share its sign-in limits; if it's a visitor's own proxy, ignore this.`,
       );
     } else if (proxy) {

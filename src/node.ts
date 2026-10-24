@@ -51,7 +51,8 @@ function webRequest(req: IncomingMessage, withBody: boolean): Request {
 /**
  * Where a request's connection came from: its address; on a Unix socket (the server listening on a file,
  * with a proxy on this machine in front), this machine's; and nothing for a connection already gone, whose
- * address Node no longer knows (so it can't be taken for this machine's).
+ * address Node no longer knows (so it can't be taken for this machine's). Node can forget a reset
+ * connection's address before it marks the connection destroyed, so both are checked.
  */
 function connectionAddress(req: IncomingMessage): string | undefined {
   if (req.socket.remoteAddress !== undefined) return req.socket.remoteAddress;
@@ -63,12 +64,13 @@ export async function handleNode(handler: Handler, req: IncomingMessage, res: Se
   const path = plainPath(req.url);
   if (!path || (path !== handler.base && !path.startsWith(`${handler.base}/`))) return false;
   // Gone already (reset as it was sent): nobody to answer, and nothing to count.
-  if (req.socket.destroyed) return true;
+  const address = connectionAddress(req);
+  if (address === undefined) return true;
   try {
     // Read already, by a body parser in front: a mistake in how the handler is mounted, said plainly.
     // (body-parser marks what it parsed with _body: it sets req.body even for a request it leaves alone.)
     if (req.method === "POST" && (req.readableEnded || (req as { _body?: unknown })._body === true)) throw new Error(BODY_READ);
-    const response = await handler.handle(webRequest(req, true), connectionAddress(req));
+    const response = await handler.handle(webRequest(req, true), address);
     if (!response) return false;
     const headers: Record<string, string | string[]> = {};
     response.headers.forEach((value, name) => {

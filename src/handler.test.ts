@@ -793,7 +793,7 @@ test("a send whose email service times out is said to have timed out, not to hav
   }
 });
 
-test("setup messages can't be used up: this site's origin only, a few of each kind, public and internal proxies apart, IPv6 by /64", async () => {
+test("setup messages can't be used up: this site's origin only, a few of each kind, public and internal proxies apart, IPv6 by /48", async () => {
   const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
   const ask = (headers: Record<string, string>, address: string) =>
     handler.handle(new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { "content-type": "application/json", ...headers } }), address);
@@ -812,8 +812,8 @@ test("setup messages can't be used up: this site's origin only, a few of each ki
       await ask({ origin, "sec-fetch-site": "same-origin" }, HERE);
     }
     await ask({ origin: "https://www.app.example.org", "sec-fetch-site": "same-origin" }, HERE);
-    // Many addresses in one IPv6 /64 passing X-Forwarded-For: one message.
-    for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `2001:db8:1:2::${i}`);
+    // Many addresses across one IPv6 /48 passing X-Forwarded-For: one message.
+    for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `2001:db8:1:${i}::${i}`);
     // Public senders, past the few allowed: they don't stop an internal proxy being said.
     for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `198.51.100.${i}`);
     await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, "127.0.0.1");
@@ -821,7 +821,7 @@ test("setup messages can't be used up: this site's origin only, a few of each ki
   const lines = said.map((parts) => String(parts[0]));
   assert.equal(lines.filter((line) => /was refused, as origin is/.test(line)).length, 2, "app.example.org (any port), and www.");
   assert.ok(!lines.some((line) => /site\d+\.example/.test(line)), "other sites' origins never said");
-  assert.equal(lines.filter((line) => /2001:db8:1:2/.test(line)).length, 1);
+  assert.equal(lines.filter((line) => /2001:db8:1:/.test(line)).length, 1);
   assert.ok(lines.filter((line) => /passed X-Forwarded-For on/.test(line)).length <= 5, "a few public ones at most");
   assert.ok(
     lines.some((line) => /proxy at 127\.0\.0\.1.*\["loopback"\]/.test(line)),
@@ -880,26 +880,30 @@ test("a connection reset as its request arrives is never taken for this machine'
   const { connect: open } = await import("node:net");
   const { db, auth } = fresh();
   const handler = createHandler(auth, { ...EMAIL, origin: DEV, trustedProxies: ["loopback"] });
-  await withServer(
-    handler,
-    (_req, res) => res.end("app"),
-    async (_base, port) => {
-      for (let i = 0; i < 10; i++) {
-        await new Promise<void>((done) => {
-          const socket = open(port, "127.0.0.1", () => {
-            const body = JSON.stringify({ email: "a@example.org", password: PASSWORD });
-            socket.write(
-              `POST /auth/send-sign-in-link HTTP/1.1\r\nhost: localhost\r\norigin: ${DEV}\r\ncontent-type: application/json\r\nx-forwarded-for: 6.6.6.${i}\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
-            );
-            socket.resetAndDestroy();
-            setTimeout(done, 20);
+  const warned = await captureWarnings(() =>
+    withServer(
+      handler,
+      (_req, res) => res.end("app"),
+      async (_base, port) => {
+        for (let i = 0; i < 10; i++) {
+          await new Promise<void>((done) => {
+            const socket = open(port, "127.0.0.1", () => {
+              const body = JSON.stringify({ email: "a@example.org", password: PASSWORD });
+              socket.write(
+                `POST /auth/send-sign-in-link HTTP/1.1\r\nhost: localhost\r\norigin: ${DEV}\r\ncontent-type: application/json\r\nx-forwarded-for: 6.6.6.${i}\r\ncontent-length: ${body.length}\r\n\r\n${body}`,
+              );
+              socket.resetAndDestroy();
+              setTimeout(done, 20);
+            });
+            socket.on("error", () => {});
           });
-          socket.on("error", () => {});
-        });
-      }
-      await wait(50);
-      const keys = (db.prepare("SELECT key FROM auth_limits").all() as { key: string }[]).length;
-      assert.ok(keys <= 3, `forged addresses aren't counted as different visitors (${keys} keys)`);
-    },
+        }
+        await wait(50);
+        const keys = (db.prepare("SELECT key FROM auth_limits").all() as { key: string }[]).length;
+        assert.ok(keys <= 3, `forged addresses aren't counted as different visitors (${keys} keys)`);
+      },
+    ),
   );
+  // Nor taken for a setup mistake: a visitor going away isn't the server being given no address.
+  assert.ok(!warned.flat().join(" ").includes("no address"), "no false alarm in the log");
 });
