@@ -81,11 +81,16 @@ export function checkNewPassword(password: string, email: string): void {
   }
 }
 
+/** A hash as it's stored: its cost, salt, and hash. */
+const stored = ({ ln, r, p }: Cost, salt: Buffer, hash: Buffer) => `$scrypt$ln=${ln},r=${r},p=${p}$${salt.toString("base64url")}$${hash.toString("base64url")}`;
+
+/** A hash of the current form and cost that no password matches (random bytes, so nothing is hashed to make it). */
+export const unmatchableHash = () => stored(CURRENT, randomBytes(SALT_BYTES), randomBytes(HASH_BYTES));
+
 /** The hash to store. */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(SALT_BYTES);
-  const { ln, r, p } = CURRENT;
-  return `$scrypt$ln=${ln},r=${r},p=${p}$${salt.toString("base64url")}$${(await derive(password, salt, CURRENT)).toString("base64url")}`;
+  return stored(CURRENT, salt, await derive(password, salt, CURRENT));
 }
 
 const work = ({ ln, r, p }: Cost) => 2 ** ln * r * p;

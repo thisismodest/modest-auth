@@ -25,6 +25,7 @@
 
 import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
 import { atMost } from "./limits.ts";
+import { DAY } from "./time.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
 import { addressKey } from "./limits.ts";
@@ -178,7 +179,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     queue(link.to, subject, text, link.expires);
   };
   /** A notice of a change to an account, to its email: so its owner hears of a change they didn't make. */
-  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${site}`, `${text}\n`, Date.now() + 86_400_000);
+  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${site}`, `${text}\n`, Date.now() + DAY);
   const passwordChanged = (to: string) =>
     notify(to, "Your password was changed", `The password for your account on ${site} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.`);
   const base = options.base ?? "/auth";
@@ -194,15 +195,20 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   };
 
   const tokenOf = (request: Request) => readSessionCookie(request.headers.get("cookie"), origin);
-  const userOf = (request: Request) => {
+  /** The session a request carries, and whose it is; null if none. */
+  const signedInAs = (request: Request) => {
     const token = tokenOf(request);
-    return token ? auth.userOf(token) : null;
+    const user = token ? auth.userOf(token) : null;
+    return token && user ? { token, user } : null;
   };
-  const signedIn = (user: User, old: string | null, status = 200) => {
+  const userOf = (request: Request) => signedInAs(request)?.user ?? null;
+  const signedIn = (user: User, old: string | null) => {
     // A fresh session at each sign-in, and the one the browser had ended: nobody can plant a session and wait.
     if (old) auth.endSession(old);
-    return reply(status, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
+    return reply(200, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
   };
+  /** Sends the email (after the answer), and answers the same whatever happened. */
+  const sent = (link: Link | null) => (send(link), reply(202, {}));
 
   // Only the site's own pages may change anything (browsers always send Origin on a POST).
   const fromSite = (request: Request) => {
@@ -210,54 +216,52 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     return request.headers.get("origin") === origin && (site === null || site === "same-origin");
   };
 
-  const routes: Record<string, (body: Record<string, string>, request: Request, from: string) => Promise<Response> | Response> = {
-    "send-password-link": (b, _r, from) => (send(auth.requestLink("password", b.email ?? "", from)), reply(202, {})),
-    "send-sign-in-link": (b, _r, from) => (send(auth.requestLink("sign-in", b.email ?? "", from)), reply(202, {})),
-    link: (b, _r, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
-    "set-password": async (b, r, from) => {
+  type Me = { token: string; user: User };
+  /** A route only for a signed-in browser, given who it is; "signed-out" otherwise. */
+  const own =
+    <A extends unknown[]>(route: (me: Me, ...rest: A) => Promise<Response> | Response, ask = "Please sign in.") =>
+    (request: Request, ...rest: A) => {
+      const me = signedInAs(request);
+      return me ? route(me, ...rest) : refuse(401, "signed-out", ask);
+    };
+
+  type Body = Record<string, string>;
+  const routes: Record<string, (request: Request, body: Body, from: string) => Promise<Response> | Response> = {
+    "send-password-link": (_r, b, from) => sent(auth.requestLink("password", b.email ?? "", from)),
+    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
+    link: (_r, b, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
+    "set-password": async (r, b, from) => {
       const user = await auth.usePasswordLink(b.token ?? "", b.password ?? "", from);
       const answer = signedIn(user, tokenOf(r));
       if (!user.made) passwordChanged(user.email);
       return answer;
     },
-    "sign-in-with-link": (b, r, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r)),
-    "sign-in": async (b, r, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r)),
-    "sign-out": (_b, r) => {
+    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r)),
+    "sign-in": async (r, b, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r)),
+    "sign-out": (r) => {
       const token = tokenOf(r);
       if (token) auth.endSession(token);
       return reply(200, {}, clearedCookie(origin));
     },
-    "end-session": (b, r) => {
-      const token = tokenOf(r);
-      const user = token ? auth.userOf(token) : null;
-      if (!user) return refuse(401, "signed-out", "Please sign in.");
-      const current = auth.sessionsOf(user.id, token!).find((session) => session.current)?.id === b.id;
-      if (!auth.endSessionOf(user.id, b.id ?? "")) return refuse(404, "not-found", "There's no such session.");
-      return reply(200, {}, current ? clearedCookie(origin) : undefined);
-    },
-    "sign-out-everywhere": (_b, r) => {
+    "sign-out-everywhere": (r) => {
       const user = userOf(r);
       if (user) auth.endAllSessions(user.id);
       return reply(200, {}, clearedCookie(origin));
     },
-    password: async (b, r, from) => {
-      const user = userOf(r);
-      if (!user) return refuse(401, "signed-out", "Please sign in.");
+    "end-session": own(({ token, user }, b: Body) => {
+      const current = auth.sessionsOf(user.id, token).find((session) => session.current)?.id === b.id;
+      if (!auth.endSessionOf(user.id, b.id ?? "")) return refuse(404, "not-found", "There's no such session.");
+      return reply(200, {}, current ? clearedCookie(origin) : undefined);
+    }),
+    password: own(async ({ user }, b: Body, from: string) => {
       const changed = await auth.changePassword(user.id, b.current ?? "", b.next ?? "", from);
       const answer = signedIn(changed, null);
       passwordChanged(changed.email);
       return answer;
-    },
-    "change-email": async (b, r, from) => {
-      const user = userOf(r);
-      if (!user) return refuse(401, "signed-out", "Please sign in.");
-      send(await auth.requestEmailChange(user.id, b.password ?? "", b.email ?? "", from));
-      return reply(202, {});
-    },
-    "confirm-email": (b, r, from) => {
-      // Only by the account it moves, signed in here: someone could send a person their own link.
-      const user = userOf(r);
-      if (!user) return refuse(401, "signed-out", "Please sign in, then open the link again.");
+    }),
+    "change-email": own(async ({ user }, b: Body, from: string) => sent(await auth.requestEmailChange(user.id, b.password ?? "", b.email ?? "", from))),
+    // Only by the account it moves, signed in here: someone could send a person their own link.
+    "confirm-email": own(({ user }, b: Body, from: string) => {
       const moved = auth.useEmailLink(b.token ?? "", user.id, from);
       notify(
         moved.previous,
@@ -266,19 +270,31 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       );
       // Every session ended, this one too.
       return reply(200, { email: moved.email }, clearedCookie(origin));
-    },
-    "undo-email": (b, _r, from) => {
+    }, "Please sign in, then open the link again."),
+    "undo-email": (_r, b, from) => {
       const back = auth.useUndoLink(b.token ?? "", from);
       // Its password no longer works: a link to choose a new one, to the address it's back at.
       send(back.reset);
       return reply(200, { email: back.email });
     },
-    "delete-account": async (b, r, from) => {
-      const user = userOf(r);
-      if (!user) return refuse(401, "signed-out", "Please sign in.");
+    "delete-account": own(async ({ user }, b: Body, from: string) => {
       await auth.deleteAccount(user.id, b.password ?? "", from);
       return reply(200, {}, clearedCookie(origin));
+    }),
+  };
+
+  /** The routes that only read: GET, and nothing in a body. */
+  const reads: Record<string, (request: Request) => Promise<Response> | Response> = {
+    session: (r) => {
+      const user = userOf(r);
+      return reply(200, { user: user ? { email: user.email } : null });
     },
+    sessions: own(({ token, user }) => reply(200, { sessions: auth.sessionsOf(user.id, token) })),
+    "my-data": own(({ user }) => {
+      const answer = reply(200, auth.dataOf(user.id));
+      answer.headers.set("content-disposition", 'attachment; filename="my-data.json"');
+      return answer;
+    }),
   };
 
   return {
@@ -289,24 +305,8 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       const path = new URL(request.url).pathname;
       if (path !== base && !path.startsWith(`${base}/`)) return null;
       const name = path.slice(base.length + 1);
-      if (request.method === "GET" && name === "session") {
-        const user = userOf(request);
-        return reply(200, { user: user ? { email: user.email } : null });
-      }
-      if (request.method === "GET" && name === "sessions") {
-        const token = tokenOf(request);
-        const user = token ? auth.userOf(token) : null;
-        if (!user) return refuse(401, "signed-out", "Please sign in.");
-        return reply(200, { sessions: auth.sessionsOf(user.id, token!) });
-      }
-      if (request.method === "GET" && name === "my-data") {
-        const user = userOf(request);
-        const data = user ? auth.dataOf(user.id) : null;
-        if (!data) return refuse(401, "signed-out", "Please sign in.");
-        const answer = reply(200, data);
-        answer.headers.set("content-disposition", 'attachment; filename="my-data.json"');
-        return answer;
-      }
+      const read = Object.hasOwn(reads, name) ? reads[name] : undefined;
+      if (read && request.method === "GET") return read(request);
       const route = Object.hasOwn(routes, name) ? routes[name] : undefined;
       if (!route) return refuse(404, "not-found", "Not found.");
       if (request.method !== "POST") return refuse(405, "post-only", "Use POST.");
@@ -318,7 +318,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       const body = await readBody(request);
       if (body instanceof Response) return body;
       try {
-        return await route(body, request, from);
+        return await route(request, body, from);
       } catch (error) {
         if (error instanceof AuthError) return refuse(error.status, error.code, error.message, error.retryAfter);
         throw error;
