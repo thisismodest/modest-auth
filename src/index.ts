@@ -7,6 +7,7 @@ export {
   type AuthEvent,
   type AuthOptions,
   createAuth,
+  EMAIL_LINK_MINUTES,
   IDLE_DAYS,
   type Link,
   type LinkKind,

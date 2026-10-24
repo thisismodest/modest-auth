@@ -10,7 +10,8 @@
 // flags but no Secure or prefix, and a name of its own, so other apps on localhost
 // (which share cookies across ports) don't overwrite it.
 
-import { SESSION_DAYS } from "./auth.ts";
+import { LONGEST_TOKEN, SESSION_DAYS } from "./auth.ts";
+import { DAY } from "./time.ts";
 
 /** The site's origin, checked: just a scheme, host, and port; HTTPS, or plain HTTP on this machine. Whether it's HTTPS. */
 export function siteOrigin(given: string): { origin: string; secure: boolean } {
@@ -22,21 +23,23 @@ export function siteOrigin(given: string): { origin: string; secure: boolean } {
 }
 
 const name = (secure: boolean) => (secure ? "__Host-session" : "modest-auth-dev-session");
-const TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
+const TOKEN = new RegExp(`^[A-Za-z0-9_-]{1,${LONGEST_TOKEN}}$`);
 const trimmed = (text: string) => text.replace(/^[ \t]+|[ \t]+$/g, "");
+
+/** The Set-Cookie header for the site at `origin`: `value` for `seconds`. */
+function cookie(origin: string, value: string, seconds: number): string {
+  const { secure } = siteOrigin(origin);
+  return `${name(secure)}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${secure ? "; Secure" : ""}`;
+}
 
 /** The Set-Cookie header that starts a session, for the site at `origin`. */
 export function sessionCookie(token: string, origin: string): string {
   if (!TOKEN.test(token)) throw new Error("That isn't a session token.");
-  const { secure } = siteOrigin(origin);
-  return `${name(secure)}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86_400}${secure ? "; Secure" : ""}`;
+  return cookie(origin, token, (SESSION_DAYS * DAY) / 1000);
 }
 
 /** The Set-Cookie header that ends one (on signing out). */
-export function clearedCookie(origin: string): string {
-  const { secure } = siteOrigin(origin);
-  return `${name(secure)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
-}
+export const clearedCookie = (origin: string): string => cookie(origin, "", 0);
 
 /**
  * The session token from a request's Cookie header, or null. If the header holds

@@ -101,3 +101,9 @@ export const must = <T>(value: T, what = "a value"): NonNullable<T> => {
   assert.ok(value !== null && value !== undefined, `expected ${what}`);
   return value as NonNullable<T>;
 };
+
+/** Until emails asked for have been handed to sendEmail (or dropped, and that logged): two turns of the event loop. */
+export const sendsSettle = async () => {
+  await afterwards();
+  await afterwards();
+};

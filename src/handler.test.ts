@@ -2,9 +2,23 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
-import { afterwards, captureErrors, captureWarnings, fresh, HERE, must, openSession, PASSWORD, wait, watchCrashes, withClock } from "../test/helpers.ts";
+import {
+  afterwards,
+  captureErrors,
+  captureWarnings,
+  fresh,
+  HERE,
+  must,
+  openSession,
+  PASSWORD,
+  sendsSettle,
+  wait,
+  watchCrashes,
+  withClock,
+} from "../test/helpers.ts";
 import { createHandler, type Handler } from "./handler.ts";
 import { handleNode, toRequest } from "./node.ts";
+import { MINUTE } from "./time.ts";
 
 const ORIGIN = "https://app.example.org";
 const DEV = "http://localhost:3000";
@@ -53,7 +67,7 @@ type Json = {
 const setup = () => {
   const { auth } = fresh();
   const emails: { to: string; subject: string; text: string }[] = [];
-  const handler = createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
+  const handler = createHandler(auth, { ...EMAIL, origin: ORIGIN, sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
   let cookie = "";
   /** A request from the site's own page, as a browser sends it (carrying the cookie it was given). */
   const send = async (path: string, body?: unknown, headers: Record<string, string> = {}) => {
@@ -72,7 +86,7 @@ const setup = () => {
   const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
     await afterwards();
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
-    const token = new RegExp(`^${ORIGIN}/account/link#${kind}=([\\w-]{43})$`, "m").exec(text)?.[1];
+    const token = new RegExp(`^${ORIGIN}${EMAIL.linkPage}#${kind}=([\\w-]{43})$`, "m").exec(text)?.[1];
     assert.ok(token, `a ${kind} link was emailed to ${to}`);
     return token;
   };
@@ -437,8 +451,7 @@ test("an email that can't be sent is logged without its text, and changes nothin
   });
   const logged = await captureErrors(async () => {
     assert.equal(must(await post(handler, "send-password-link", { email: "ann@example.org" }, HERE)).status, 202);
-    await afterwards();
-    await afterwards();
+    await sendsSettle();
   });
   assert.equal(logged.length, 1);
   assert.doesNotMatch(JSON.stringify(logged), /secret|#password|ann@example/);
@@ -475,8 +488,7 @@ test("a stuck email service can't pile up sends without end", async () => {
   });
   const logged = await captureErrors(async () => {
     for (let i = 0; i < 1015; i++) await post(stuck, "send-password-link", { email: `p${i}@example.org` }, `10.${i >> 8}.${i & 255}.1`);
-    await afterwards();
-    await afterwards();
+    await sendsSettle();
   });
   assert.equal(started, 10, "10 at once");
   assert.equal(logged.length, 5, "1,000 waiting, and the rest dropped, each logged");
@@ -502,11 +514,10 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
   await afterwards();
   let logged: unknown[][] = [];
   await withClock(async (ahead) => {
-    ahead(61 * 60_000);
+    ahead(61 * MINUTE);
     logged = await captureErrors(async () => {
       release();
-      await afterwards();
-      await afterwards();
+      await sendsSettle();
     });
   });
   assert.equal(sent.length, 10, "the 10 already sending finish");

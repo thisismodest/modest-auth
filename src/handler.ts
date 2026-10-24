@@ -23,7 +23,7 @@
 //   POST /auth/undo-email            { token }: from the notice to the old address
 //   POST /auth/delete-account        { password }
 
-import { type Auth, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
+import { type Auth, EMAIL_LINK_MINUTES, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
 import { addressKey, atMost } from "./limits.ts";
@@ -119,38 +119,42 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
 
 /** The email for a link, in plain text. */
 function linkEmail(link: Link, site: string, url: string, origin: string): { subject: string; text: string } {
+  /** The link, and how long it lasts. */
+  const within = (minutes: number, where = "") => `within ${minutes} minutes${where}:\n\n${url}\n\n`;
+  const notYou = "If it wasn't you, you can ignore this email.\n";
+  if (link.kind === "email" && link.token === null) {
+    return {
+      subject: `Your email address on ${site}`,
+      text: `Someone asked to use this email address for an account on ${site}, but it has an account of its own already, so nothing has changed.\n\n${notYou}`,
+    };
+  }
   if (link.kind === "email") {
-    return link.token === null
-      ? {
-          subject: `Your email address on ${site}`,
-          text: `Someone asked to use this email address for an account on ${site}, but it has an account of its own already, so nothing has changed.\n\nIf it wasn't you, you can ignore this email.\n`,
-        }
-      : {
-          subject: `Confirm your new email address on ${site}`,
-          text: `To use this email address for your account on ${site}, open this link within ${PASSWORD_LINK_MINUTES} minutes, in a browser where you're signed in to that account:\n\n${url}\n\nUsing it signs you out everywhere. If you didn't ask, you can ignore this email: nothing changes without it.\n`,
-        };
+    return {
+      subject: `Confirm your new email address on ${site}`,
+      text: `To use this email address for your account on ${site}, open this link ${within(EMAIL_LINK_MINUTES, ", in a browser where you're signed in to that account")}Using it signs you out everywhere. If you didn't ask, you can ignore this email: nothing changes without it.\n`,
+    };
   }
   if (link.token === null) {
     return {
       subject: `Sign in to ${site}`,
-      text: `Someone asked to sign in to ${site} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\nIf it wasn't you, you can ignore this email.\n`,
+      text: `Someone asked to sign in to ${site} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\n${notYou}`,
     };
   }
   if (link.kind === "sign-in") {
     return {
       subject: `Sign in to ${site}`,
-      text: `To sign in to ${site}, open this link within ${SIGN_IN_LINK_MINUTES} minutes:\n\n${url}\n\nIf you didn't ask to sign in, you can ignore this email.\n`,
+      text: `To sign in to ${site}, open this link ${within(SIGN_IN_LINK_MINUTES)}If you didn't ask to sign in, you can ignore this email.\n`,
     };
   }
   if (link.account) {
     return {
       subject: `Choose a new password for ${site}`,
-      text: `To choose a new password for your account on ${site}, open this link within ${PASSWORD_LINK_MINUTES} minutes:\n\n${url}\n\nChoosing one signs you out everywhere else. If you didn't ask, you can ignore this email: your password stays as it is.\n`,
+      text: `To choose a new password for your account on ${site}, open this link ${within(PASSWORD_LINK_MINUTES)}Choosing one signs you out everywhere else. If you didn't ask, you can ignore this email: your password stays as it is.\n`,
     };
   }
   return {
     subject: `Finish signing up to ${site}`,
-    text: `To finish signing up to ${site}, choose a password at this link within ${PASSWORD_LINK_MINUTES} minutes:\n\n${url}\n\nIf you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
+    text: `To finish signing up to ${site}, choose a password at this link ${within(PASSWORD_LINK_MINUTES)}If you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
   };
 }
 
@@ -213,6 +217,8 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     if (old) auth.endSession(old);
     return reply(200, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
   };
+  /** Signed out: the session cookie cleared. */
+  const signedOut = (body: object = {}) => reply(200, body, clearedCookie(origin));
   /** Sends the email (after the answer), and answers the same whatever happened. */
   const sent = (link: Link | null) => {
     send(link);
@@ -250,12 +256,12 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     "sign-out": (r) => {
       const token = tokenOf(r);
       if (token) auth.endSession(token);
-      return reply(200, {}, clearedCookie(origin));
+      return signedOut();
     },
     "sign-out-everywhere": (r) => {
       const user = userOf(r);
       if (user) auth.endAllSessions(user.id);
-      return reply(200, {}, clearedCookie(origin));
+      return signedOut();
     },
     "end-session": own(({ token, user }, b: Body) => {
       const current = auth.sessionsOf(user.id, token).find((session) => session.current)?.id === b.id;
@@ -278,7 +284,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
         `The email address for your account on ${site} was just changed from this one to ${moved.email}, and every session ended.\n\nIf it wasn't you, undo it within ${UNDO_DAYS} days at this link, which moves the account back to this address, signs everyone out, and sends you a link to choose a new password:\n\n${origin}${linkPage}#undo=${moved.undo}`,
       );
       // Every session ended, this one too.
-      return reply(200, { email: moved.email }, clearedCookie(origin));
+      return signedOut({ email: moved.email });
     }, "Please sign in, then open the link again."),
     "undo-email": (_r, b, from) => {
       const back = auth.useUndoLink(b.token ?? "", from);
@@ -288,7 +294,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     },
     "delete-account": own(async ({ user }, b: Body, from: string) => {
       await auth.deleteAccount(user.id, b.password ?? "", from);
-      return reply(200, {}, clearedCookie(origin));
+      return signedOut();
     }),
   };
 

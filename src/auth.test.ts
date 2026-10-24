@@ -25,6 +25,7 @@ import {
 import { type Auth, type AuthEvent, createAuth, IDLE_DAYS } from "./auth.ts";
 import { AuthError } from "./errors.ts";
 import { addressKey } from "./limits.ts";
+import { DAY, MINUTE } from "./time.ts";
 
 /** Signing up as a person does: a password link emailed, then a password chosen at it. */
 const signUp = async (auth: Auth, email: string, password: string, from: string) => {
@@ -164,7 +165,7 @@ test("a session finds its user until it's ended, runs out, or goes unused; only 
   assert.equal(auth.userOf(expired), null, "past its 30 days");
 
   const idle = auth.startSession(await signIn());
-  db.prepare("UPDATE auth_sessions SET seen = ?").run(Date.now() - IDLE_DAYS * 86_400_000 - 1);
+  db.prepare("UPDATE auth_sessions SET seen = ?").run(Date.now() - IDLE_DAYS * DAY - 1);
   assert.equal(auth.userOf(idle), null, `unused for ${IDLE_DAYS} days`);
 });
 
@@ -264,7 +265,7 @@ test("using a session keeps it from going idle", async () => {
   const { db, auth } = fresh();
   const user = await signUp(auth, "editor@example.org", PASSWORD, HERE);
   const token = auth.startSession(user);
-  const sixDaysAgo = Date.now() - 6 * 86_400_000;
+  const sixDaysAgo = Date.now() - 6 * DAY;
   db.prepare("UPDATE auth_sessions SET seen = ?").run(sixDaysAgo);
   assert.deepEqual(auth.userOf(token), user);
   assert.ok((db.prepare("SELECT seen FROM auth_sessions").get() as { seen: number }).seen > sixDaysAgo, "its last use is written down");
@@ -311,7 +312,7 @@ test("expired and idle sessions, and passed limits, are cleared as requests come
   db.prepare("UPDATE auth_sessions SET expires = 0").run();
   db.prepare("UPDATE auth_limits SET resets = 0").run();
   await withClock(async (ahead) => {
-    ahead(60_000); // after the sweeps' pause
+    ahead(MINUTE); // after the sweeps' pause
     auth.userOf("anything");
     await auth.signIn("editor@example.org", "a wrong password here", "192.0.2.80").catch(() => {});
   });
@@ -345,7 +346,7 @@ test("an account holds at most 50 sessions: the oldest ends", async () => {
   // 50 more sessions already open (made directly: each would otherwise need a sign-in).
   const now = Date.now();
   for (let i = 0; i < 50; i++)
-    db.prepare("INSERT INTO auth_sessions (token, user, expires, seen) VALUES (?, ?, ?, ?)").run(`other${i}`, user.id, now + 86_400_000 * 30 + i, now);
+    db.prepare("INSERT INTO auth_sessions (token, user, expires, seen) VALUES (?, ?, ?, ?)").run(`other${i}`, user.id, now + DAY * 30 + i, now);
   await openSession(auth, "editor@example.org", HERE);
   assert.equal(auth.userOf(first), null, "the oldest has ended");
   assert.equal(count(db, "auth_sessions"), 50);
@@ -374,7 +375,7 @@ test("an expired link's email, which may have no account, is in neither the data
     withClock((ahead) => {
       const auth = createAuth(db);
       auth.requestLink("sign-in", "nobody.here@example.org", HERE);
-      ahead(61 * 60_000);
+      ahead(61 * MINUTE);
       auth.userOf("any token");
       assertGone(dir, "nobody.here");
     }),
@@ -386,7 +387,7 @@ test("clearing old links doesn't disturb the app's own transaction, nor wait for
     withClock((ahead, realNow) => {
       const auth = createAuth(db);
       auth.requestLink("sign-in", "someone@example.org", HERE);
-      ahead(61 * 60_000);
+      ahead(61 * MINUTE);
       db.exec("BEGIN");
       assert.doesNotThrow(() => auth.userOf("any token"), "inside the app's transaction");
       db.exec("COMMIT");
@@ -394,13 +395,13 @@ test("clearing old links doesn't disturb the app's own transaction, nor wait for
       reader.exec("BEGIN");
       reader.prepare("SELECT count(*) FROM auth_users").get();
       auth.requestLink("sign-in", "another@example.org", "198.51.100.120");
-      ahead(122 * 60_000);
+      ahead(122 * MINUTE);
       const started = realNow();
       auth.userOf("any token");
       assert.ok(realNow() - started < 500, "another process reading doesn't make it wait");
       reader.exec("COMMIT");
       reader.close();
-      ahead(123 * 60_000);
+      ahead(123 * MINUTE);
       auth.userOf("any token");
       // Read directly, not with fileHas: the WAL must be there.
       const wal = readFileSync(join(dir, "auth.db-wal"));
@@ -416,10 +417,10 @@ test("clearing old links while the app is part-way through its own query doesn't
       const auth = createAuth(db);
       db.exec("PRAGMA busy_timeout = 7000;");
       auth.requestLink("sign-in", "lingering@example.org", HERE);
-      ahead(61 * 60_000);
+      ahead(61 * MINUTE);
       for (const _ of db.prepare("SELECT id FROM notes").iterate()) assert.doesNotThrow(() => auth.userOf("any token"), "mid-query");
       assert.equal((db.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout, 7000, "the app's own busy_timeout is left alone");
-      ahead(62 * 60_000);
+      ahead(62 * MINUTE);
       auth.userOf("any token");
       assert.equal(readFileSync(join(dir, "auth.db-wal")).includes("lingering"), false, "emptied at the next clearing");
     }),
@@ -1014,4 +1015,15 @@ test("a copy of everything kept about an account, with nothing in it that signs 
   const copy = JSON.stringify(data);
   for (const secret of [session, must(pending.token), PASSWORD, "$scrypt$"]) assert.ok(!copy.includes(secret), secret);
   assert.equal(auth.dataOf("nobody"), null);
+});
+
+test("an undo still works when the account is already back at that address: everyone out, and the password useless", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const there = await move(auth, ann.id, PASSWORD, "ann@new.example", HERE);
+  await move(auth, ann.id, PASSWORD, "ann@example.org", "192.0.2.200");
+  const session = await openSession(auth, "ann@example.org", "192.0.2.201");
+  assert.equal(auth.useUndoLink(there.undo, HERE).email, "ann@example.org");
+  assert.equal(auth.userOf(session), null);
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, "192.0.2.202"), code("wrong-credentials"));
 });

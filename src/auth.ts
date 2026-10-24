@@ -17,7 +17,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { cleanEmail } from "./emails.ts";
 import { AuthError } from "./errors.ts";
-import { databaseLimits, settingUp } from "./limits.ts";
+import { databaseLimits, type Limit, settingUp } from "./limits.ts";
 import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGEST_TYPED, unmatchableHash } from "./passwords.ts";
 import { DAY, HOUR, MINUTE } from "./time.ts";
 
@@ -98,6 +98,8 @@ export const SIGN_IN_LINK_MINUTES = 15;
 export type LinkKind = "password" | "sign-in" | "email" | "undo";
 /** How long the address an account moved from can undo the move. */
 export const UNDO_DAYS = 7;
+/** How long a link to move an account to a new email lasts. */
+export const EMAIL_LINK_MINUTES = 60;
 
 /**
  * An email to send. `token` goes in the link, and only `to` should get it; for a
@@ -210,7 +212,13 @@ const blockOf = (from: string) => (from.endsWith("::/64") ? `${from.split(":").s
 /** When a session started, from when it runs out. */
 const startedAt = (expires: number) => expires - SESSION_DAYS * DAY;
 /** A session's name for its owner: a hash of its stored hash, so it can't be used to sign in. */
-const sessionId = (stored: string) => createHash("sha256").update(`session\0${stored}`).digest("base64url").slice(0, 22);
+/** The longest token a cookie can carry: longer is no token of ours (they're 43 characters). */
+export const LONGEST_TOKEN = 100;
+const SESSION_ID_LENGTH = 22;
+const sessionId = (stored: string) => createHash("sha256").update(`session\0${stored}`).digest("base64url").slice(0, SESSION_ID_LENGTH);
+/** A session that hasn't run out or gone unused, as SQL over auth_sessions, with `live(now)` for its two values. */
+const LIVE = "expires > ? AND seen > ?";
+const live = (now: number) => [now, now - IDLE_DAYS * DAY] as const;
 /** What addressKey gives for a real address: IPv4, or an IPv6 /64. */
 const ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3}::\/64$/;
 const WRONG = () => new AuthError("wrong-credentials", "That email and password don't match.");
@@ -224,8 +232,13 @@ const emailOrRefuse = (given: string) => {
   return email;
 };
 /** When a new link of `kind` runs out. */
-const linkExpires = (kind: LinkKind) =>
-  Date.now() + (kind === "sign-in" ? SIGN_IN_LINK_MINUTES * MINUTE : kind === "undo" ? UNDO_DAYS * DAY : PASSWORD_LINK_MINUTES * MINUTE);
+const LIFETIME: Record<LinkKind, number> = {
+  password: PASSWORD_LINK_MINUTES * MINUTE,
+  "sign-in": SIGN_IN_LINK_MINUTES * MINUTE,
+  email: EMAIL_LINK_MINUTES * MINUTE,
+  undo: UNDO_DAYS * DAY,
+};
+const linkExpires = (kind: LinkKind) => Date.now() + LIFETIME[kind];
 
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
 export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
@@ -250,10 +263,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
    */
   const checkBreached = async (password: string) => {
     if (!breachedRange) return;
-    for (const form of new Set([password.normalize("NFKC"), password])) await checkBreachedForm(form);
+    for (const form of new Set([password.normalize("NFKC"), password])) await checkBreachedForm(form, breachedRange);
   };
-  const checkBreachedForm = async (password: string) => {
-    if (!breachedRange) return;
+  const checkBreachedForm = async (password: string, breachedRange: NonNullable<AuthOptions["breachedRange"]>) => {
     const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -302,18 +314,19 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
   // strangers in bulk.
   const linksFrom = limit("links", 5, 15 * MINUTE);
   const linksFromBlock = limit("links-block", 20, 15 * MINUTE);
+  /** Counts a try from an address with `each`, and from its IPv6 /48 (if it has one) with `inBlock`. */
+  const andBlock = (each: Limit, inBlock: Limit) => (from: string) => {
+    each(from);
+    const block = blockOf(from);
+    if (block) inBlock(block);
+  };
+  const countFrom = andBlock(perAddress, perBlock);
+  /** A link asked for (from has been checked by fromWhere or verify). */
+  const countLinkFrom = andBlock(linksFrom, linksFromBlock);
   const fromWhere = (from: string) => {
     // Without an address, everyone would share one allowance: that's a mistake in the calling code.
     if (typeof from !== "string" || !ADDRESS.test(from)) throw new Error("from must be where the request came from, as addressKey gives it.");
-    perAddress(from);
-    const block = blockOf(from);
-    if (block) perBlock(block);
-  };
-  /** A link asked for (from has been checked by fromWhere or verify). */
-  const countLinkFrom = (from: string) => {
-    linksFrom(from);
-    const block = blockOf(from);
-    if (block) linksFromBlock(block);
+    countFrom(from);
   };
   /** Counts a link of `kind` to `email`; false, quietly, past the limit, so the answer is the same either way. */
   const inboxHasRoom = (kind: LinkKind, email: string) => {
@@ -334,6 +347,18 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
   // And how, and from where, for the event when a session starts.
   const checked = new WeakMap<User, { hash: string; by: "password" | "link"; from: string }>();
 
+  /** A user just checked (by password or link), ready for startSession: once, while the account still has `hash`. */
+  const handOver = <U extends User>(user: U, hash: string, by: "password" | "link", from: string): U => {
+    checked.set(user, { hash, by, from });
+    return user;
+  };
+  /** After a new password: every session ends, and every link of the account and to its address. */
+  const afterNewPassword = (userId: string, email: string) => {
+    endAllSessions(userId);
+    endLinks(email, userId);
+    flush();
+  };
+
   const userRow = (where: "email" | "id", value: string) =>
     db.prepare(`SELECT id, email, password FROM auth_users WHERE ${where} = ?`).get(value) as { id: string; email: string; password: string } | undefined;
   /** The signed-in user's account and its password's hash, after checking the password they gave (as the owner). */
@@ -343,12 +368,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     return { row, hash: await verify(row, row.email, password, from, true) };
   };
 
-  /**
-   * The account's hash after checking its password (made again if at an older cost), limited as a
-   * sign-in is. `owner`: the account's own signed-in session is asking, so the per-account pause,
-   * which strangers can trigger, doesn't apply.
-   */
-  /** verify, telling of a wrong password or a pause (not of "busy": nobody was counted). */
+  /** check, telling of a wrong password or a pause (not of "busy": nobody was counted). */
   async function verify(row: { id: string; password: string } | undefined, key: string, password: string, from: string, owner = false): Promise<string> {
     try {
       return await check(row, key, password, from, owner);
@@ -360,6 +380,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       throw error;
     }
   }
+  /**
+   * The account's hash after checking its password (made again if at an older cost), limited as a
+   * sign-in is. `owner`: the account's own signed-in session is asking, so the per-account pause,
+   * which strangers can trigger, doesn't apply.
+   */
   async function check(row: { id: string; password: string } | undefined, key: string, password: string, from: string, owner: boolean): Promise<string> {
     const stored = row?.password ?? nobody;
     // Busy first (and nothing awaited after it until the hash): a try refused for being busy isn't counted.
@@ -406,9 +431,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     return row;
   };
   const takeLink = (token: string, kind: LinkKind) => findLink(token, [kind], true);
+  /** The account a link moves, which must still be there. */
+  const accountOf = (link: LinkRow) => {
+    const row = link.user ? userRow("id", link.user) : undefined;
+    if (!row) throw EXPIRED();
+    return row;
+  };
   /** Gives the account `userId` the address `email` (and `password`, if given); "invalid-link" if another account has it. */
   const moveTo = (userId: string, email: string, password?: string) => {
-    if (userRow("email", email)) throw EXPIRED();
+    const holder = userRow("email", email);
+    if (holder && holder.id !== userId) throw EXPIRED();
     try {
       if (password === undefined) db.prepare("UPDATE auth_users SET email = ? WHERE id = ?").run(email, userId);
       else db.prepare("UPDATE auth_users SET email = ?, password = ? WHERE id = ?").run(email, password, userId);
@@ -530,9 +562,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
         moveBack(back.user, back.current, email, hashed, back.expires);
         flush();
         emit("email-change-undone", { userId: back.user, from });
-        const user = { id: back.user, email, made: false };
-        checked.set(user, { hash: hashed, by: "link", from });
-        return user;
+        return handOver({ id: back.user, email, made: false }, hashed, "link", from);
       }
       const made = !userRow("email", email);
       // Made, or (if there's an account, or one was made meanwhile) its password replaced.
@@ -541,13 +571,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
           "INSERT INTO auth_users (id, email, password, created) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET password = excluded.password RETURNING id",
         )
         .get(randomUUID(), email, hashed, Date.now()) as { id: string };
-      endAllSessions(id);
-      endLinks(email, id);
-      flush();
+      afterNewPassword(id, email);
       emit(made ? "account-made" : "password-changed", { userId: id, from });
-      const user = { id, email, made };
-      checked.set(user, { hash: hashed, by: "link", from });
-      return user;
+      return handOver({ id, email, made }, hashed, "link", from);
     },
 
     useSignInLink(token, from) {
@@ -556,9 +582,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const row = userRow("email", email);
       if (!row) throw EXPIRED();
       endLinks(email);
-      const user = { id: row.id, email: row.email };
-      checked.set(user, { hash: row.password, by: "link", from });
-      return user;
+      return handOver({ id: row.id, email: row.email }, row.password, "link", from);
     },
 
     async signIn(given, password, from) {
@@ -567,9 +591,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const hash = await verify(row, email || "invalid", password, from);
       // (verify throws without an account: this only tells the type checker so.)
       if (!row) throw WRONG();
-      const user = { id: row.id, email: row.email };
-      checked.set(user, { hash, by: "password", from });
-      return user;
+      return handOver({ id: row.id, email: row.email }, hash, "password", from);
     },
 
     startSession(user) {
@@ -593,15 +615,13 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     },
 
     userOf(token) {
-      if (typeof token !== "string" || !token || token.length > 100) return null;
+      if (typeof token !== "string" || !token || token.length > LONGEST_TOKEN) return null;
       const now = Date.now();
       sweep(now);
       const hashed = tokenHash(token);
       const row = db
-        .prepare(
-          "SELECT u.id AS id, u.email AS email, s.seen AS seen FROM auth_sessions s JOIN auth_users u ON u.id = s.user WHERE s.token = ? AND s.expires > ? AND s.seen > ?",
-        )
-        .get(hashed, now, now - IDLE_DAYS * DAY) as (User & { seen: number }) | undefined;
+        .prepare(`SELECT u.id AS id, u.email AS email, s.seen AS seen FROM auth_sessions s JOIN auth_users u ON u.id = s.user WHERE s.token = ? AND ${LIVE}`)
+        .get(hashed, ...live(now)) as (User & { seen: number }) | undefined;
       if (!row) return null;
       if (now - row.seen > SEEN_EVERY_MS) db.prepare("UPDATE auth_sessions SET seen = ? WHERE token = ?").run(now, hashed);
       return { id: row.id, email: row.email };
@@ -620,14 +640,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     sessionsOf(userId, token) {
       const now = Date.now();
       const mine = typeof token === "string" && token ? tokenHash(token) : "";
-      const rows = db
-        .prepare("SELECT token, expires, seen FROM auth_sessions WHERE user = ? AND expires > ? AND seen > ? ORDER BY seen DESC")
-        .all(userId, now, now - IDLE_DAYS * DAY) as { token: string; expires: number; seen: number }[];
+      const rows = db.prepare(`SELECT token, expires, seen FROM auth_sessions WHERE user = ? AND ${LIVE} ORDER BY seen DESC`).all(userId, ...live(now)) as {
+        token: string;
+        expires: number;
+        seen: number;
+      }[];
       return rows.map((row) => ({ id: sessionId(row.token), started: startedAt(row.expires), lastUsed: row.seen, current: row.token === mine }));
     },
 
     endSessionOf(userId, id) {
-      if (typeof id !== "string" || !/^[\w-]{22}$/.test(id)) return false;
+      if (typeof id !== "string" || id.length !== SESSION_ID_LENGTH || !/^[\w-]+$/.test(id)) return false;
       const rows = db.prepare("SELECT token FROM auth_sessions WHERE user = ?").all(userId) as { token: string }[];
       const found = rows.find((row) => sessionId(row.token) === id);
       const ended = !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
@@ -639,9 +661,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const now = Date.now();
       const row = db.prepare("SELECT email, created FROM auth_users WHERE id = ?").get(userId) as { email: string; created: number } | undefined;
       if (!row) return null;
-      const sessions = db
-        .prepare("SELECT expires, seen FROM auth_sessions WHERE user = ? AND expires > ? AND seen > ? ORDER BY seen DESC")
-        .all(userId, now, now - IDLE_DAYS * DAY) as {
+      const sessions = db.prepare(`SELECT expires, seen FROM auth_sessions WHERE user = ? AND ${LIVE} ORDER BY seen DESC`).all(userId, ...live(now)) as {
         expires: number;
         seen: number;
       }[];
@@ -668,13 +688,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
         | { email: string }
         | undefined;
       if (!done) throw WRONG();
-      endAllSessions(userId);
-      endLinks(done.email, userId);
-      flush();
+      afterNewPassword(userId, done.email);
       emit("password-changed", { userId, from });
-      const user = { id: row.id, email: done.email };
-      checked.set(user, { hash: fresh, by: "password", from });
-      return user;
+      return handOver({ id: row.id, email: done.email }, fresh, "password", from);
     },
 
     async requestEmailChange(userId, password, given, from) {
@@ -699,10 +715,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       fromWhere(from);
       // Only by the account it moves, signed in where it's opened: checked before the link is used up.
       if (findLink(token, ["email"], false).user !== signedIn) throw EXPIRED();
-      const { email, user: userId } = takeLink(token, "email");
-      const row = userId ? userRow("id", userId) : undefined;
-      // Gone, or the address taken meanwhile: nothing to move.
-      if (!row) throw EXPIRED();
+      const link = takeLink(token, "email");
+      const { email } = link;
+      // Gone (or, in moveTo, the address taken meanwhile): nothing to move.
+      const row = accountOf(link);
       moveTo(row.id, email);
       endAllSessions(row.id);
       endLinks(row.email, row.id);
@@ -716,10 +732,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
 
     useUndoLink(token, from) {
       fromWhere(from);
-      const { email, user: userId, expires } = takeLink(token, "undo");
-      const row = userId ? userRow("id", userId) : undefined;
+      const link = takeLink(token, "undo");
+      const { email, expires } = link;
       // Gone (or, in moveBack, the address since taken by another account): nothing to move back.
-      if (!row) throw EXPIRED();
+      const row = accountOf(link);
       // Its password made one that nothing matches: whoever moved it may know it.
       moveBack(row.id, row.email, email, unmatchableHash(), expires);
       const until = linkExpires("password");

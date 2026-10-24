@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { code, wait, withTempDir } from "../test/helpers.ts";
 import { addressKey, atMost, databaseLimits } from "./limits.ts";
+import { MINUTE } from "./time.ts";
 
 const tooMany = code("too-many-tries");
 
@@ -20,20 +21,20 @@ test("a rate limit allows so many per key, then refuses, and forgets once the wi
 test("a limit survives a restart, and is shared by every connection to the database file", async () => {
   await withTempDir((dir) => {
     const one = new DatabaseSync(join(dir, "limits.db"));
-    const first = databaseLimits(one)("test", 2, 60_000);
+    const first = databaseLimits(one)("test", 2, MINUTE);
     first("a");
     first("a");
     one.close();
     // Another connection, as another process (or the same one after a restart) has.
     const other = new DatabaseSync(join(dir, "limits.db"));
-    assert.throws(() => databaseLimits(other)("test", 2, 60_000)("a"), tooMany);
+    assert.throws(() => databaseLimits(other)("test", 2, MINUTE)("a"), tooMany);
     other.close();
   });
 });
 
 test("flooding the limits with other keys can't push one out", () => {
   const db = new DatabaseSync(":memory:");
-  const limit = databaseLimits(db)("test", 2, 60_000);
+  const limit = databaseLimits(db)("test", 2, MINUTE);
   limit("target");
   limit("target");
   for (let i = 0; i < 60_000; i++) limit(`flood-${i}`);
@@ -43,8 +44,8 @@ test("flooding the limits with other keys can't push one out", () => {
 test("limits with different names don't share counts, and keys are stored only as hashes", () => {
   const db = new DatabaseSync(":memory:");
   const limits = databaseLimits(db);
-  const one = limits("one", 1, 60_000);
-  const two = limits("two", 1, 60_000);
+  const one = limits("one", 1, MINUTE);
+  const two = limits("two", 1, MINUTE);
   one("ann@example.org");
   two("ann@example.org");
   const keys = (db.prepare("SELECT key FROM auth_limits").all() as { key: string }[]).map((r) => r.key);
