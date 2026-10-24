@@ -1,20 +1,40 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { DatabaseSync } from "node:sqlite";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { connect } from "node:net";
 import { test } from "node:test";
-import { createAuth } from "./auth.ts";
-import { createHandler } from "./handler.ts";
+import { afterwards, captureErrors, captureWarnings, fresh, HERE, openSession, PASSWORD, wait, watchCrashes, withClock } from "../test/helpers.ts";
+import { createHandler, type Handler } from "./handler.ts";
 import { handleNode, toRequest } from "./node.ts";
 
 const ORIGIN = "https://app.example.org";
-const PASSWORD = "a long enough password";
+const DEV = "http://localhost:3000";
 /** What every handler needs besides its origin: where links go, and how to send an email (here, nowhere). */
 const EMAIL = { linkPage: "/account/link", sendEmail: () => {} };
-/** After the answer: emails go once it's sent. */
-const afterwards = () => new Promise((done) => setImmediate(() => setImmediate(done)));
+
+/** A JSON POST to one of the routes from the site's origin; `address` is the client's. */
+const post = (handler: Handler, route: string, body: unknown, address: string | undefined) =>
+  handler.handle(new Request(`${ORIGIN}/auth/${route}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify(body) }), address);
+
+/** Node's own http server on a free port, the handler in front of the app, closed once `run` is done. */
+const withServer = async (handler: Handler, app: (req: IncomingMessage, res: ServerResponse) => unknown, run: (base: string, port: number) => Promise<void>) => {
+  const server = createServer(async (req, res) => {
+    if (await handleNode(handler, req, res)) return;
+    await app(req, res);
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  const port = (server.address() as { port: number }).port;
+  try {
+    await run(`http://127.0.0.1:${port}`, port);
+  } finally {
+    server.close();
+  }
+};
+
+/** An app that answers "app" to whatever the handler leaves to it. */
+const plainApp = (_req: IncomingMessage, res: ServerResponse) => res.end("app");
 
 const setup = () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const { auth } = fresh();
   const emails: { to: string; subject: string; text: string }[] = [];
   const handler = createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
   let cookie = "";
@@ -25,7 +45,7 @@ const setup = () => {
       headers: { origin: ORIGIN, "sec-fetch-site": "same-origin", "content-type": "application/json", ...(cookie ? { cookie } : {}), ...headers },
       ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
     });
-    const response = await handler.handle(request, "203.0.113.9");
+    const response = await handler.handle(request, HERE);
     assert.ok(response, `${path} is one of the routes`);
     const set = response.headers.get("set-cookie");
     if (set) cookie = set.split(";")[0]!;
@@ -44,7 +64,7 @@ const setup = () => {
     await send("/auth/send-password-link", { email });
     return send("/auth/set-password", { token: await linkTo(email, "password"), password });
   };
-  return { auth, handler, send, emails, linkTo, signUp, cookie: () => cookie, forget: () => (cookie = "") };
+  return { auth, handler, send, emails, linkTo, signUp, token: () => cookie.split("=")[1]!, forget: () => (cookie = "") };
 };
 
 test("sign up, see who's signed in, sign out", async () => {
@@ -79,11 +99,11 @@ test("only small JSON objects are read", async () => {
 });
 
 test("each sign-in starts a fresh session and ends the one the browser had", async () => {
-  const { auth, send, cookie, signUp } = setup();
+  const { auth, send, token, signUp } = setup();
   await signUp("ann@example.org");
-  const first = cookie().split("=")[1]!;
+  const first = token();
   await send("/auth/sign-in", { email: "ann@example.org", password: PASSWORD });
-  const second = cookie().split("=")[1]!;
+  const second = token();
   assert.notEqual(first, second);
   assert.equal(auth.userOf(first), null, "the old session is over");
   assert.ok(auth.userOf(second));
@@ -92,7 +112,7 @@ test("each sign-in starts a fresh session and ends the one the browser had", asy
 test("changing the password signs out everywhere else, and keeps this browser signed in", async () => {
   const { auth, send, signUp } = setup();
   await signUp("ann@example.org");
-  const elsewhere = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.50"));
+  const elsewhere = await openSession(auth, "ann@example.org", "192.0.2.50");
   assert.equal((await send("/auth/password", { current: "wrong password!", next: "a brand new password" })).status, 401);
   assert.equal((await send("/auth/password", { current: PASSWORD, next: "a brand new password" })).status, 200);
   assert.equal(auth.userOf(elsewhere), null);
@@ -119,45 +139,38 @@ test("wrong methods and unknown routes are refused; other paths are left to the 
 });
 
 test("it won't run on plain HTTP, except on this machine, nor with an origin that's more than an origin", () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const { auth } = fresh();
   assert.throws(() => createHandler(auth, { origin: "http://example.org", ...EMAIL }));
   assert.throws(() => createHandler(auth, { origin: "https://example.org/app", ...EMAIL }));
   assert.throws(() => createHandler(auth, { origin: "https://example.org", proxies: -1, ...EMAIL }));
-  assert.doesNotThrow(() => createHandler(auth, { origin: "http://localhost:3000", ...EMAIL }));
+  assert.doesNotThrow(() => createHandler(auth, { origin: DEV, ...EMAIL }));
 });
 
 test("with Node's own http server: the same routes, and the app's own requests left alone", async () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
   let mail = "";
-  const handler = createHandler(auth, { origin: "http://localhost:3000", linkPage: "/link", sendEmail: (_to, _subject, text) => void (mail = text) });
-  const server = createServer(async (req, res) => {
-    if (await handleNode(handler, req, res)) return;
+  const handler = createHandler(fresh().auth, { origin: DEV, linkPage: "/link", sendEmail: (_to, _subject, text) => void (mail = text) });
+  const app = (req: IncomingMessage, res: ServerResponse) => {
     const user = handler.userOf(toRequest(req));
     res.end(user ? `hello ${user.email}` : "hello stranger");
-  });
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  const post = (route: string, body: unknown) =>
-    fetch(`${base}/auth/${route}`, { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: JSON.stringify(body) });
-  try {
-    assert.equal((await post("send-password-link", { email: "ann@example.org" })).status, 202);
+  };
+  await withServer(handler, app, async (base) => {
+    const send = (route: string, body: string) => fetch(`${base}/auth/${route}`, { method: "POST", headers: { origin: DEV, "content-type": "application/json" }, body });
+    assert.equal((await send("send-password-link", JSON.stringify({ email: "ann@example.org" }))).status, 202);
     await afterwards();
-    const up = await post("set-password", { token: /#password=([\w-]{43})/.exec(mail)![1], password: PASSWORD });
+    const up = await send("set-password", JSON.stringify({ token: /#password=([\w-]{43})/.exec(mail)![1], password: PASSWORD }));
     assert.equal(up.status, 200);
     const cookie = up.headers.getSetCookie()[0]!.split(";")[0]!;
     assert.equal(await (await fetch(`${base}/page`, { headers: { cookie } })).text(), "hello ann@example.org");
     assert.equal(await (await fetch(`${base}/page`)).text(), "hello stranger");
-    const big = await fetch(`${base}/auth/sign-in`, { method: "POST", headers: { origin: "http://localhost:3000", "content-type": "application/json" }, body: "x".repeat(100_000) });
+    const big = await send("sign-in", "x".repeat(100_000));
     assert.equal(big.status, 413);
-  } finally {
-    server.close();
-  }
+  });
 });
 
 test("a request with no Origin header at all is refused, and fromSite says so for the app's own routes", async () => {
   const { handler } = setup();
   const bare = new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-  assert.equal((await handler.handle(bare, "203.0.113.9"))!.status, 403);
+  assert.equal((await handler.handle(bare, HERE))!.status, 403);
   assert.equal(handler.fromSite(bare), false);
   assert.equal(handler.fromSite(new Request(`${ORIGIN}/my/route`, { method: "POST", headers: { origin: ORIGIN } })), true);
   assert.equal(handler.fromSite(new Request(`${ORIGIN}/my/route`, { method: "POST", headers: { origin: ORIGIN, "sec-fetch-site": "same-site" } })), false);
@@ -170,123 +183,93 @@ test("routes that take nothing accept an empty JSON body", async () => {
 });
 
 test("signing up ends any session the browser had", async () => {
-  const { auth, cookie, signUp } = setup();
+  const { auth, token, signUp } = setup();
   await signUp("ann@example.org");
-  const ann = cookie().split("=")[1]!;
+  const ann = token();
   await signUp("bob@example.org");
   assert.equal(auth.userOf(ann), null);
 });
 
 test("without knowing where a request came from, it's refused rather than sharing everyone's allowance", async () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
-  const handler = createHandler(auth, { origin: ORIGIN, ...EMAIL });
-  const request = new Request(`${ORIGIN}/auth/sign-in`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
-  assert.equal((await handler.handle(request, undefined))!.status, 400);
+  const handler = createHandler(fresh().auth, { origin: ORIGIN, ...EMAIL });
+  assert.equal((await post(handler, "sign-in", {}, undefined))!.status, 400);
 });
 
 test("base must be a plain path", () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const { auth } = fresh();
   for (const base of ["/", "auth", "/auth/", "/Auth", "/a/../b", ""]) assert.throws(() => createHandler(auth, { origin: ORIGIN, base, ...EMAIL }), Error, base);
   assert.doesNotThrow(() => createHandler(auth, { origin: ORIGIN, base: "/api/auth", ...EMAIL }));
 });
 
 test("with Node's own http server, nothing a client sends can crash the app", async () => {
-  const { connect } = await import("node:net");
-  const auth = createAuth(new DatabaseSync(":memory:"));
-  const handler = createHandler(auth, { origin: "http://localhost:3000", ...EMAIL });
+  const handler = createHandler(fresh().auth, { origin: DEV, ...EMAIL });
   // As the README's quick start: no try/catch of its own.
-  const server = createServer(async (req, res) => {
-    if (await handleNode(handler, req, res)) return;
-    res.end("app");
-  });
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const port = (server.address() as { port: number }).port;
-  const raw = (text: string, hangUp = false) =>
-    new Promise<string>((done) => {
-      // A server that has fallen over never answers: give up after a moment, so the test fails rather than hangs.
-      const timer = setTimeout(() => (socket.destroy(), done("no answer")), 2000);
-      const socket = connect(port, "127.0.0.1", () => {
-        socket.write(text);
-        if (hangUp) setTimeout(() => (socket.destroy(), done("")), 50);
+  await withServer(handler, plainApp, async (_base, port) => {
+    const raw = (text: string, hangUp = false) =>
+      new Promise<string>((done) => {
+        // A server that has fallen over never answers: give up after a moment, so the test fails rather than hangs.
+        const timer = setTimeout(() => (socket.destroy(), done("no answer")), 2000);
+        const socket = connect(port, "127.0.0.1", () => {
+          socket.write(text);
+          if (hangUp) setTimeout(() => (socket.destroy(), done("")), 50);
+        });
+        let got = "";
+        socket.on("data", (d) => (got += d));
+        socket.on("end", () => (clearTimeout(timer), done(got)));
+        socket.on("error", () => (clearTimeout(timer), done(got)));
       });
-      let got = "";
-      socket.on("data", (d) => (got += d));
-      socket.on("end", () => (clearTimeout(timer), done(got)));
-      socket.on("error", () => (clearTimeout(timer), done(got)));
+    await watchCrashes(async (crashed) => {
+      await raw("TRACE /auth/sign-out HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+      await raw("GET http://a:99999/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+      await raw("GET http://[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+      await raw('POST /auth/sign-in HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"em', true);
+      await wait(100);
+      assert.deepEqual(crashed, []);
+      assert.match(await raw("GET /page HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"), /\r\n\r\napp$/, "still answering");
     });
-  const crashed: unknown[] = [];
-  const onRejection = (e: unknown) => crashed.push(e);
-  process.on("unhandledRejection", onRejection);
-  try {
-    await raw("TRACE /auth/sign-out HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    await raw("GET http://a:99999/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    await raw("GET http://[ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-    await raw('POST /auth/sign-in HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"em', true);
-    await new Promise((r) => setTimeout(r, 100));
-    assert.deepEqual(crashed, []);
-    assert.match(await raw("GET /page HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"), /\r\n\r\napp$/, "still answering");
-  } finally {
-    process.off("unhandledRejection", onRejection);
-    server.close();
-  }
+  });
 });
 
 test("with Node's own http server, the app's own requests are left exactly as they came, large bodies and all", async () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
-  const handler = createHandler(auth, { origin: "http://localhost:3000", ...EMAIL });
-  const server = createServer(async (req, res) => {
-    if (await handleNode(handler, req, res)) return;
+  const handler = createHandler(fresh().auth, { origin: DEV, ...EMAIL });
+  const app = async (req: IncomingMessage, res: ServerResponse) => {
     handler.userOf(toRequest(req));
     let size = 0;
     for await (const chunk of req) size += chunk.length;
     res.end(String(size));
-  });
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  try {
+  };
+  await withServer(handler, app, async (base) => {
     for (const size of [10, 70_000, 1_000_000]) {
       const res = await fetch(`${base}/upload`, { method: "POST", body: "x".repeat(size), signal: AbortSignal.timeout(5000) });
       assert.equal(await res.text(), String(size));
     }
-  } finally {
-    server.close();
-  }
+  });
 });
 
 test("odd forms of a path never reach the routes, so a rule in front of the app can't be stepped round", async () => {
-  const { connect } = await import("node:net");
-  const auth = createAuth(new DatabaseSync(":memory:"));
-  const handler = createHandler(auth, { origin: "http://localhost:3000", ...EMAIL });
-  const server = createServer(async (req, res) => {
-    if (await handleNode(handler, req, res)) return;
-    res.end("app");
-  });
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const port = (server.address() as { port: number }).port;
-  const ask = (target: string) =>
-    new Promise<string>((done) => {
-      const socket = connect(port, "127.0.0.1", () => socket.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
-      let got = "";
-      socket.on("data", (d) => (got += d));
-      socket.on("end", () => done(got));
-    });
-  try {
+  const handler = createHandler(fresh().auth, { origin: DEV, ...EMAIL });
+  await withServer(handler, plainApp, async (_base, port) => {
+    const ask = (target: string) =>
+      new Promise<string>((done) => {
+        const socket = connect(port, "127.0.0.1", () => socket.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
+        let got = "";
+        socket.on("data", (d) => (got += d));
+        socket.on("end", () => done(got));
+      });
     assert.match(await ask("/auth/session"), /"user":null/);
     assert.match(await ask("/auth/session?next=%2Fhome"), /"user":null/, "an encoded slash in the query is the query's business");
     for (const target of ["/auth\\session", "/zzz/%2e%2e/auth/session", "/x/../auth/session", "/./auth/session", "/auth/./session", "//evil/auth/session", "http://evil.example/auth/session", "/auth%2fsession"]) {
       assert.match(await ask(target), /\r\n\r\napp$/, target);
     }
-  } finally {
-    server.close();
-  }
+  });
 });
 
 test("signing out everywhere, from the route, ends every session of the account and only theirs", async () => {
   const { auth, send, signUp } = setup();
   await signUp("ann@example.org");
-  const phone = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.60"));
+  const phone = await openSession(auth, "ann@example.org", "192.0.2.60");
   await auth.usePasswordLink(auth.requestLink("password", "bob@example.org", "192.0.2.61")!.token!, PASSWORD, "192.0.2.61");
-  const bobs = auth.startSession(await auth.signIn("bob@example.org", PASSWORD, "192.0.2.61"));
+  const bobs = await openSession(auth, "bob@example.org", "192.0.2.61");
   assert.equal((await send("/auth/sign-out-everywhere", "")).status, 200);
   assert.equal(auth.userOf(phone), null);
   assert.ok(auth.userOf(bobs));
@@ -306,17 +289,12 @@ test("answers carry no CORS headers, so another site's page can't read them; pau
 
 test("a forwarded address with no proxies declared is warned about once, naming the setting", async () => {
   const { send } = setup();
-  const warnings: string[] = [];
-  const realWarn = console.warn;
-  console.warn = (message: string) => void warnings.push(message);
-  try {
+  const warnings = await captureWarnings(async () => {
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.50" });
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.51" });
-  } finally {
-    console.warn = realWarn;
-  }
+  });
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0]!, /proxies/);
+  assert.match(warnings[0]![0] as string, /proxies/);
 });
 
 test("asking for a link gets the same answer whether or not there's an account, and the email goes only after the answer", async () => {
@@ -324,8 +302,7 @@ test("asking for a link gets the same answer whether or not there's an account, 
   await signUp("ann@example.org");
   emails.length = 0;
   const answers = [];
-  const ask = (route: string, email: string, address: string) =>
-    handler.handle(new Request(`${ORIGIN}/auth/${route}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email }) }), address);
+  const ask = (route: string, email: string, address: string) => post(handler, route, { email }, address);
   for (const [route, email] of [["send-sign-in-link", "ann@example.org"], ["send-sign-in-link", "nobody@example.org"], ["send-password-link", "ann@example.org"], ["send-password-link", "nobody@example.org"]] as const) {
     const sentBefore = emails.length;
     const answer = (await ask(route, email, "198.51.100.60"))!;
@@ -356,9 +333,9 @@ test("a link's token is after the #, which browsers never send to a server, on t
 });
 
 test("a sign-in link signs this browser in with a fresh session, ending the one it had", async () => {
-  const { auth, send, cookie, linkTo, signUp } = setup();
+  const { auth, send, token: session, linkTo, signUp } = setup();
   await signUp("ann@example.org");
-  const before = cookie().split("=")[1]!;
+  const before = session();
   await send("/auth/send-sign-in-link", { email: "ann@example.org" });
   const token = await linkTo("ann@example.org", "sign-in");
   const answer = await send("/auth/sign-in-with-link", { token });
@@ -372,7 +349,7 @@ test("a sign-in link signs this browser in with a fresh session, ending the one 
 test("choosing a password at a link signs this browser in, and every other session out", async () => {
   const { auth, send, linkTo, signUp } = setup();
   await signUp("ann@example.org");
-  const elsewhere = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.70"));
+  const elsewhere = await openSession(auth, "ann@example.org", "192.0.2.70");
   await send("/auth/send-password-link", { email: "ann@example.org" });
   const answer = await send("/auth/set-password", { token: await linkTo("ann@example.org", "password"), password: "a brand new long password" });
   assert.equal(answer.status, 200);
@@ -381,25 +358,18 @@ test("choosing a password at a link signs this browser in, and every other sessi
 });
 
 test("an email that can't be sent is logged without its text, and changes nothing for the person asking", async () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
-  const handler = createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")) });
-  const logged: unknown[][] = [];
-  const realError = console.error;
-  console.error = (...parts: unknown[]) => void logged.push(parts);
-  try {
-    const request = new Request(`${ORIGIN}/auth/send-password-link`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email: "ann@example.org" }) });
-    assert.equal((await handler.handle(request, "203.0.113.9"))!.status, 202);
+  const handler = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")) });
+  const logged = await captureErrors(async () => {
+    assert.equal((await post(handler, "send-password-link", { email: "ann@example.org" }, HERE))!.status, 202);
     await afterwards();
     await afterwards();
-  } finally {
-    console.error = realError;
-  }
+  });
   assert.equal(logged.length, 1);
   assert.doesNotMatch(JSON.stringify(logged), /secret|#password|ann@example/);
 });
 
 test("it needs a page for links and a way to send email", () => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const { auth } = fresh();
   for (const linkPage of ["", "account", "https://evil.example/x", "//evil.example", "/a b", "/a#b", "/a?b"]) {
     assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage, sendEmail: () => {} }), Error, linkPage);
   }
@@ -419,20 +389,12 @@ test("the link page can ask which email a link is for, so nobody is signed in to
 
 test("a stuck email service can't pile up sends without end", async () => {
   let started = 0;
-  const stuck = createHandler(createAuth(new DatabaseSync(":memory:")), { origin: ORIGIN, linkPage: "/l", sendEmail: () => ((started++, new Promise(() => {})) as Promise<void>) });
-  const logged: unknown[][] = [];
-  const realError = console.error;
-  console.error = (...parts: unknown[]) => void logged.push(parts);
-  try {
-    for (let i = 0; i < 1015; i++) {
-      const address = `10.${i >> 8}.${i & 255}.1`;
-      await stuck.handle(new Request(`${ORIGIN}/auth/send-password-link`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email: `p${i}@example.org` }) }), address);
-    }
+  const stuck = createHandler(fresh().auth, { origin: ORIGIN, linkPage: "/l", sendEmail: () => ((started++, new Promise(() => {})) as Promise<void>) });
+  const logged = await captureErrors(async () => {
+    for (let i = 0; i < 1015; i++) await post(stuck, "send-password-link", { email: `p${i}@example.org` }, `10.${i >> 8}.${i & 255}.1`);
     await afterwards();
     await afterwards();
-  } finally {
-    console.error = realError;
-  }
+  });
   assert.equal(started, 10, "10 at once");
   assert.equal(logged.length, 5, "1,000 waiting, and the rest dropped, each logged");
   assert.match(String(logged[0]), /too many waiting/);
@@ -443,7 +405,7 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
   let release!: () => void;
   const blocked = new Promise<void>((done) => (release = done));
   let calls = 0;
-  const handler = createHandler(createAuth(new DatabaseSync(":memory:")), {
+  const handler = createHandler(fresh().auth, {
     origin: ORIGIN,
     linkPage: "/l",
     sendEmail: async (to) => {
@@ -451,23 +413,17 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
       sent.push(to);
     },
   });
-  const ask = (email: string, i: number) =>
-    handler.handle(new Request(`${ORIGIN}/auth/send-password-link`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email }) }), `10.9.${i}.1`);
-  for (let i = 0; i < 11; i++) await ask(`p${i}@example.org`, i);
+  for (let i = 0; i < 11; i++) await post(handler, "send-password-link", { email: `p${i}@example.org` }, `10.9.${i}.1`);
   await afterwards();
-  const realNow = Date.now;
-  const logged: unknown[][] = [];
-  const realError = console.error;
-  Date.now = () => realNow() + 61 * 60_000;
-  console.error = (...parts: unknown[]) => void logged.push(parts);
-  try {
-    release();
-    await afterwards();
-    await afterwards();
-  } finally {
-    Date.now = realNow;
-    console.error = realError;
-  }
+  let logged: unknown[][] = [];
+  await withClock(async (ahead) => {
+    ahead(61 * 60_000);
+    logged = await captureErrors(async () => {
+      release();
+      await afterwards();
+      await afterwards();
+    });
+  });
   assert.equal(sent.length, 10, "the 10 already sending finish");
   assert.ok(!sent.includes("p10@example.org"), "the one that waited past its link's life isn't sent");
   assert.match(String(logged[0]), /ran out/);
@@ -503,12 +459,13 @@ test("a changed password is told to the account's email, by either route, but si
   await afterwards();
   assert.ok(!emails.some((e) => /password was changed/.test(e.subject)), "a new account gets no notice");
   await send("/auth/password", { current: PASSWORD, next: "a brand new long password" });
+  const notices = () => emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length;
   await afterwards();
-  assert.equal(emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length, 1);
+  assert.equal(notices(), 1);
   await send("/auth/send-password-link", { email: "ann@example.org" });
   await send("/auth/set-password", { token: await linkTo("ann@example.org", "password"), password: "a third long password here" });
   await afterwards();
-  assert.equal(emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length, 2);
+  assert.equal(notices(), 2);
 });
 
 test("confirming a move needs the account signed in; the notice to the old address can undo it, and a password link follows", async () => {
@@ -532,7 +489,7 @@ test("confirming a move needs the account signed in; the notice to the old addre
 test("the sessions route lists the account's sessions, and ending this one signs this browser out", async () => {
   const { auth, send, signUp, forget } = setup();
   await signUp("ann@example.org");
-  const phone = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.170"));
+  const phone = await openSession(auth, "ann@example.org", "192.0.2.170");
   const listed = await send("/auth/sessions");
   assert.equal(listed.status, 200);
   assert.equal(listed.json.sessions.length, 2);

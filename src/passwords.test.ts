@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
 import { test } from "node:test";
-import { AuthError, type AuthErrorCode } from "./errors.ts";
+import { code, oldHash } from "../test/helpers.ts";
 import { checkNewPassword, checkPassword, hashPassword } from "./passwords.ts";
-
-const code = (expected: AuthErrorCode) => (error: unknown) => error instanceof AuthError && error.code === expected;
 
 test("a password is kept only as a salted scrypt hash, which records its cost", async () => {
   const stored = await hashPassword("correct horse battery");
@@ -21,9 +18,7 @@ test("a password is checked against its hash, and nothing else matches", async (
 });
 
 test("a hash at an older, cheaper cost still checks, and says it's outdated", async () => {
-  const salt = Buffer.from("0123456789abcdef");
-  const hash = scryptSync("correct horse battery", salt, 32, { N: 2 ** 14, r: 8, p: 1 });
-  const old = `$scrypt$ln=14,r=8,p=1$${salt.toString("base64url")}$${hash.toString("base64url")}`;
+  const old = oldHash("correct horse battery", 14);
   assert.deepEqual(await checkPassword("correct horse battery", old), { ok: true, outdated: true });
   assert.deepEqual(await checkPassword("wrong password", old), { ok: false, outdated: false }, "never outdated when wrong: nothing is rehashed for a wrong guess");
 });
@@ -65,8 +60,7 @@ test("a new password with broken Unicode is refused, rather than stored as somet
 });
 
 test("a wrong password takes the current cost's work even against an older, cheaper hash", async () => {
-  const salt = Buffer.from("0123456789abcdef");
-  const old = `$scrypt$ln=12,r=8,p=1$${salt.toString("base64url")}$${scryptSync("correct horse battery", salt, 32, { N: 2 ** 12, r: 8, p: 1 }).toString("base64url")}`;
+  const old = oldHash("correct horse battery", 12);
   const current = await hashPassword("correct horse battery");
   const time = async (stored: string) => {
     const started = performance.now();

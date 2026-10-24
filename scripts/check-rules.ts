@@ -33,7 +33,7 @@ const allowed = (spec: string) => spec.startsWith("node:") || spec.startsWith(".
 let lines = 0;
 // This file names the patterns it looks for, so it isn't searched itself.
 const self = relative(root, import.meta.filename);
-for (const file of [...(await files("src")), ...(await files("examples")), ...(await files("scripts"))].filter((f) => f !== self)) {
+for (const file of [...(await files("src")), ...(await files("examples")), ...(await files("scripts")), ...(await files("test"))].filter((f) => f !== self)) {
   const code = await readFile(join(root, file), "utf8");
   if (file.startsWith("src") && !/\.test\.[a-z]+$/.test(file)) {
     lines += code.split("\n").length;

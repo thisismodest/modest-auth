@@ -18,5 +18,5 @@
     "types": ["node"],
     "lib": ["esnext"]
   },
-  "include": ["src", "examples"]
+  "include": ["src", "examples", "test"]
 }

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { AuthError } from "./errors.ts";
+import { code, wait, withTempDir } from "../test/helpers.ts";
 import { addressKey, atMost, databaseLimits } from "./limits.ts";
 
-const tooMany = (e: unknown) => e instanceof AuthError && e.code === "too-many-tries";
+const tooMany = code("too-many-tries");
 
 test("a rate limit allows so many per key, then refuses, and forgets once the window has passed", async () => {
   const limit = databaseLimits(new DatabaseSync(":memory:"))("test", 2, 50);
@@ -12,16 +13,12 @@ test("a rate limit allows so many per key, then refuses, and forgets once the wi
   limit("a");
   assert.throws(() => limit("a"), tooMany);
   limit("b");
-  await new Promise((r) => setTimeout(r, 60));
+  await wait(60);
   limit("a");
 });
 
 test("a limit survives a restart, and is shared by every connection to the database file", async () => {
-  const { mkdtempSync, rmSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const { tmpdir } = await import("node:os");
-  const dir = mkdtempSync(join(tmpdir(), "modest-auth-"));
-  try {
+  await withTempDir((dir) => {
     const one = new DatabaseSync(join(dir, "limits.db"));
     const first = databaseLimits(one)("test", 2, 60_000);
     first("a");
@@ -31,9 +28,7 @@ test("a limit survives a restart, and is shared by every connection to the datab
     const other = new DatabaseSync(join(dir, "limits.db"));
     assert.throws(() => databaseLimits(other)("test", 2, 60_000)("a"), tooMany);
     other.close();
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("flooding the limits with other keys can't push one out", () => {
@@ -62,7 +57,7 @@ test("heavy jobs run so many at once, queue behind, and are 'busy' beyond the qu
   let release = () => {};
   const first = gate(() => new Promise<void>((done) => (release = done)));
   const second = gate(async () => "second");
-  await assert.rejects(gate(async () => "third"), (e) => e instanceof AuthError && e.code === "busy");
+  await assert.rejects(gate(async () => "third"), code("busy"));
   release();
   await first;
   assert.equal(await second, "second");
