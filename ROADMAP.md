@@ -63,6 +63,12 @@ without becoming a plugin system.
 - **Passkeys** (WebAuthn), if they can be verified without a dependency.
 - **Two-step sign-in** with an authenticator app (TOTP): the step to ASVS Level 2 and
   NIST AAL2.
+- **More sign-ins at once,** for a site with a few thousand people signing in around
+  the same time. Checking a session is already cheap; a password sign-in is costly by
+  design (about 170 ms and 130MB each, two at a time per process). First a benchmark
+  anyone can run, with published numbers; then using more of the server, such as
+  several processes sharing one database, tested and documented, or more checks at
+  once where the memory allows. Never by lowering the hashing cost.
 
 ## Never
 
