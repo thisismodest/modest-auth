@@ -26,8 +26,8 @@ modest-auth does the least that sign-in needs, the same way every time:
 - **Small.** About 1,950 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
-If you need social sign-in, single sign-on, organisations, or passkeys today, use a
-larger library. If you need people to sign in with an email and a password, safely,
+If you need social sign-in, single sign-on, organisations, passkeys, or sign-in by phone
+number today, use a larger library. If you need people to sign in with an email and a password, safely,
 this is for you.
 
 ## What it does
@@ -150,6 +150,8 @@ const handler = createHandler(auth, {
   // Your way of sending email (see "Sending email" below). Pass the signal on, and return or
   // await the send, so a failure is caught and logged.
   sendEmail: (to, subject, text, { signal }) => sendWithYourService({ to, subject, text, signal }),
+  // In development, with no email service yet, print the emails (and their links) instead:
+  // sendEmail: (to, subject, text) => console.log(to, subject, text),
   // Only behind a proxy (see "Behind a proxy" below), such as:
   // trustedProxies: ["loopback"],
 });
@@ -287,8 +289,19 @@ sendEmail: async (to, subject, text, { signal }) => {
 ```
 
 Verify your sending domain with the service (SPF, DKIM, and DMARC records), or the emails
-land in spam. Keep the API key in an environment variable. In development,
-`(to, subject, text) => console.log(to, subject, text)` prints the links instead.
+land in spam. Keep the API key in an environment variable.
+
+In development, with no email service yet, print the emails instead:
+
+```ts
+sendEmail: (to, subject, text) => console.log(to, subject, text),
+```
+
+Each email, with its link, appears where the app's output does: open the whole link,
+including the part after `#`. Each link works once, and only 3 of each kind go to one
+address in 15 minutes: past that nothing is printed (the page still says it was sent,
+as it does for an address with no account), so use another address or wait. Don't
+print emails in production: the text holds the link, and logs are kept.
 
 ## What your app does
 

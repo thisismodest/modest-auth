@@ -92,6 +92,8 @@
   origin: <span class="s">"https://example.org"</span>, <span class="c">// your site's address (HTTPS)</span>
   linkPage: <span class="s">"/account/link"</span>, <span class="c">// your page that emailed links open</span>
   sendEmail: (to, subject, text, { signal }) =&gt; <span class="f">sendWithYourService</span>({ to, subject, text, signal }),
+  <span class="c">// in development, with no email service yet, print the emails (and their links) instead:</span>
+  <span class="c">// sendEmail: (to, subject, text) =&gt; console.log(to, subject, text),</span>
 });
 
 <span class="k">const</span> server = <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
@@ -255,7 +257,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>sendEmail</code></h3>
-              <p>How your app sends email: <code>(to, subject, text, { signal })</code>. Pass the signal to <code>fetch</code> (it aborts after 30 seconds), and don't log the text: it holds the link.</p>
+              <p>How your app sends email: <code>(to, subject, text, { signal })</code>. Pass the signal to <code>fetch</code> (it aborts after 30 seconds), and don't log the text in production: it holds the link. In development, <code>(to, subject, text) =&gt; console.log(to, subject, text)</code> prints each email instead; each link works once, and only 3 of each kind go to one address in 15 minutes (past that, nothing is printed).</p>
             </div>
             <div>
               <h3><code>onEvent</code> <small>(createAuth)</small></h3>
