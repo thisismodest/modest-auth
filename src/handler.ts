@@ -84,6 +84,14 @@ export const BODY_READ =
 
 /** How nginx adds the client's address, which it doesn't by default. */
 const NGINX = "nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;";
+/** An origin's host, without a "www." or a port: what two addresses of one site have in common. Null if it isn't an origin. */
+const pageHost = (origin: string | null) => {
+  try {
+    return origin ? new URL(origin).hostname.replace(/^www\./, "") : null;
+  } catch {
+    return null;
+  }
+};
 const TOO_SLOW = "sendEmail didn't finish in 30 seconds: pass its signal on to your email service";
 
 /** The largest body a route reads. */
@@ -382,25 +390,27 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (!route) return refuse(404, "not-found", "Not found.");
       if (request.method !== "POST") return refuse(405, "post-only", "Use POST.");
       if (!fromSite(request)) {
-        // From the site's own page, as the browser says (curl and the like don't), but not the origin set: the setting, not an attack.
-        const came = request.headers.get("origin");
-        const site = request.headers.get("sec-fetch-site");
-        if (came && (site === "same-origin" || site === "same-site")) {
+        // This site's own pages at another address (www., or a port) than the one set: the setting, not an attack.
+        // Only this site's host is said, so nobody can fill the log, or use the message up, with others.
+        const page = pageHost(request.headers.get("origin"));
+        if (page !== null && page === pageHost(origin)) {
+          const came = request.headers.get("origin") ?? "";
+          // Keyed without the port: at most four (http or https, with or without www.), all this site's.
           sayOnce(
             "origin",
-            came.slice(0, 200),
-            `a request from a page at ${came.slice(0, 200)} was refused, as origin is ${origin}. If that's this site (www., or a port), set origin to the address its pages are served from.`,
+            came.replace(/:\d+$/, ""),
+            `a request from a page at ${came} was refused, as origin is ${origin}. If that's this site (www., or a port), set origin to the address its pages are served from.`,
           );
         }
         return refuse(403, "cross-site", "Cross-site request refused.");
       }
       // Who's asking, for the limits: without it, everyone would share one allowance.
       const trace = traceClient({ remoteAddress: address, forwardedFor: request.headers.get("x-forwarded-for") }, trusted);
-      if (address === undefined || !trace.connection) {
+      if (!trace.connection) {
         sayOnce(
           "address",
           "",
-          `handle(request, address) was given ${address === undefined ? "no address" : "something that isn't one"}: pass the connection's own (Node: req.socket.remoteAddress; Bun: server.requestIP(req)?.address; Deno: info.remoteAddr.hostname; Hono: getConnInfo(c).remote.address), not a header, or every request is refused.`,
+          `handle(request, address) was given ${address === undefined ? "no address" : "something that isn't one"}: pass the connection's own (Node: req.socket.remoteAddress; Bun: server.requestIP(req)?.address; Deno: info.remoteAddr.hostname; Hono: getConnInfo(c).remote.address), not a header; on a Unix socket, name the proxy with trustedProxies: ["loopback"]. Until then every request is refused.`,
         );
       }
       checkProxies(trace, address);

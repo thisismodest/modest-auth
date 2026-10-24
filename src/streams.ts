@@ -8,6 +8,10 @@ export async function readAtMost(stream: ReadableStream<Uint8Array> | null | und
   const reader = stream?.getReader();
   if (!reader) return Buffer.alloc(0);
   const stop = () => void reader.cancel().catch(() => {});
+  if (signal?.aborted) {
+    stop();
+    throw signal.reason;
+  }
   signal?.addEventListener("abort", stop, { once: true });
   try {
     const chunks: Uint8Array[] = [];
@@ -20,6 +24,8 @@ export async function readAtMost(stream: ReadableStream<Uint8Array> | null | und
       }
       chunks.push(part.value);
     }
+    // Let go of part-way: what was read isn't all there was.
+    if (signal?.aborted) throw signal.reason;
     return Buffer.concat(chunks);
   } finally {
     signal?.removeEventListener("abort", stop);

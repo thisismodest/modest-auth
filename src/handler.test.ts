@@ -791,3 +791,47 @@ test("a send whose email service times out is said to have timed out, not to hav
     AbortSignal.timeout = realTimeout;
   }
 });
+
+test("setup messages can't be used up: this site's origin only, a few of each kind, public and internal proxies apart, IPv6 by /64", async () => {
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
+  const ask = (headers: Record<string, string>, address: string) =>
+    handler.handle(new Request(`${ORIGIN}/auth/sign-out`, { method: "POST", headers: { "content-type": "application/json", ...headers } }), address);
+  const said = await captureWarnings(async () => {
+    // Other sites' origins, however many, and this site's at other ports: nothing new to say past the first.
+    for (let i = 0; i < 20; i++) await ask({ origin: `https://site${i}.example`, "sec-fetch-site": "same-origin" }, HERE);
+    for (let port = 1; port < 20; port++) await ask({ origin: `https://app.example.org:${port}`, "sec-fetch-site": "same-origin" }, HERE);
+    await ask({ origin: "https://www.app.example.org", "sec-fetch-site": "same-origin" }, HERE);
+    // Many addresses in one IPv6 /64 passing X-Forwarded-For: one message.
+    for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `2001:db8:1:2::${i}`);
+    // Public senders, past the few allowed: they don't stop an internal proxy being said.
+    for (let i = 1; i < 20; i++) await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, `198.51.100.${i}`);
+    await ask({ origin: ORIGIN, "x-forwarded-for": "203.0.113.9" }, "127.0.0.1");
+  });
+  const lines = said.map((parts) => String(parts[0]));
+  assert.equal(lines.filter((line) => /was refused, as origin is/.test(line)).length, 2, "app.example.org (any port), and www.");
+  assert.ok(!lines.some((line) => /site\d+\.example/.test(line)), "other sites' origins never said");
+  assert.equal(lines.filter((line) => /2001:db8:1:2/.test(line)).length, 1);
+  assert.ok(lines.filter((line) => /passed X-Forwarded-For on/.test(line)).length <= 5, "a few public ones at most");
+  assert.ok(
+    lines.some((line) => /proxy at 127\.0\.0\.1.*\["loopback"\]/.test(line)),
+    "the internal proxy still said",
+  );
+});
+
+test("an address that isn't one is said, like a missing one; on a Unix socket behind a named proxy, all is well", async () => {
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN });
+  const request = () =>
+    new Request(`${ORIGIN}/auth/sign-out`, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+    });
+  const said = await captureWarnings(async () => {
+    assert.equal((await handler.handle(request(), "81.2.69.160, 10.0.0.1"))?.status, 400);
+  });
+  assert.match(String(said), /something that isn't one.*not a header/);
+  const socket = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN, trustedProxies: ["loopback"] });
+  const quiet = await captureWarnings(async () => {
+    assert.equal((await socket.handle(request(), undefined))?.status, 200);
+  });
+  assert.deepEqual(quiet, []);
+});

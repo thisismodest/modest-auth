@@ -223,8 +223,8 @@ use one up.
 - **Bun:** `Bun.serve({ fetch: async (req, server) => (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) })`
 - **Deno:** `Deno.serve(async (req, info) => (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req))`
 - **Express:** mount it first, before any body parser (which would read the body
-  first; if one does, the handler says so, rather than reading no fields; in a Next.js
-  custom server with the Pages Router, turn its own off for the route:
+  first; if one does, the handler says so, rather than reading no fields; called from a
+  Next.js Pages Router API route, turn Next's own off for that route:
   `export const config = { api: { bodyParser: false } }`):
   `app.use(async (req, res, next) => (await handleNode(handler, req, res)) || next())`
 - **Fastify:** in an `onRequest` hook (before Fastify reads the body), take over the
@@ -238,8 +238,8 @@ use one up.
   });
   ```
 
-On a Unix socket there's no client address: put it behind a proxy (which then passes the
-client's on).
+On a Unix socket there's no client address: put a proxy in front, have it add the
+client's, and name it as `trustedProxies: ["loopback"]`.
 
 ### Behind a proxy
 
@@ -266,7 +266,7 @@ and cluster address translation), name the proxy's own address instead.
 
 Any number of named proxies, on any path, is read past. Naming nothing is always safe:
 at worst, visitors share the proxy's address for limits. The log says what to set: a
-proxy passing addresses that isn't named, or one in front passing none.
+proxy passing addresses that isn't named, or (on an HTTPS site) one in front passing none.
 
 ### Sending email
 

@@ -17,7 +17,8 @@ in the log what to set.
   CDN's ranges, or addresses. `X-Forwarded-For` is read from the right past however
   many named proxies there are, on any path, to the first address that isn't one.
   Nothing named is safe (visitors share the proxy's address), and the log says what to
-  set: a proxy passing addresses that isn't named, or one in front passing none. Ranges
+  set: a proxy passing addresses that isn't named, or (on an HTTPS site) one in front
+  passing none. On a Unix socket, `["loopback"]` covers the proxy in front. Ranges
   wide enough to be much of the internet are refused. `addressKey(client,
   trustedProxies?)` takes the list in place of a count.
 - The development cookie's name has the port in it, so two apps on localhost don't sign
@@ -31,9 +32,10 @@ in the log what to set.
 
 ### Added
 
-- Setup mistakes said in the log, once each: an `origin` that isn't where the pages
-  are (`www.`, or a port), a handler given no address (or one that isn't an address) (with how, for Bun, Deno, and
-  Hono), and the proxy cases above. An `origin` that isn't an address says so.
+- Setup mistakes said in the log, a few times at most: an `origin` that isn't where the
+  site's pages are (`www.`, or a port); a handler given no address, or one that isn't an
+  address (with how, for Node, Bun, Deno, and Hono); and the proxy cases above. An
+  `origin` that isn't an address says so.
 - A body read before the handler (a body parser mounted in front of it) is an error
   that says so, rather than a request with no fields.
 
