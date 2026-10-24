@@ -114,6 +114,9 @@ this is for you.
 
 ## Quick start
 
+New to it? [Step by step](https://modest-auth.com/start.html) builds a whole site with
+sign-in, from an empty folder to going live.
+
 ```sh
 npm install modest-auth
 ```
