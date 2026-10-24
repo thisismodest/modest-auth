@@ -6,7 +6,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import type { Handler } from "./handler.ts";
+import { BODY_READ, type Handler } from "./handler.ts";
 
 /**
  * The request's path, if it's a plain one ("/auth/sign-in", not "http://host/...",
@@ -52,6 +52,8 @@ export async function handleNode(handler: Handler, req: IncomingMessage, res: Se
   const path = plainPath(req.url);
   if (!path || (path !== handler.base && !path.startsWith(`${handler.base}/`))) return false;
   try {
+    // Read already, by a body parser in front: a mistake in how the handler is mounted, said plainly.
+    if (req.method === "POST" && (req.readableEnded || (req as { body?: unknown }).body !== undefined)) throw new Error(BODY_READ);
     const response = await handler.handle(webRequest(req, true), req.socket.remoteAddress);
     if (!response) return false;
     const headers: Record<string, string | string[]> = {};

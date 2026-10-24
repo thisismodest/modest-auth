@@ -26,14 +26,18 @@
 import { type Auth, EMAIL_LINK_MINUTES, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
-import { addressKey, atMost } from "./limits.ts";
+import { atMost, clientOf, fromTrusted, trusting } from "./limits.ts";
 import { DAY } from "./time.ts";
 
 export type HandlerOptions = {
   /** The site's origin, such as "https://example.org". Over HTTPS, except on this machine. */
   origin: string;
-  /** How many reverse proxies are in front of the server (see addressKey). */
-  proxies?: number;
+  /**
+   * Address ranges of proxies in front of the server that connect from public addresses, such as a CDN's
+   * (["173.245.48.0/20", …] for Cloudflare). Proxies on this machine or a private network (nginx, Caddy, a
+   * hosting platform's load balancer) are trusted without it. Leave it out unless a CDN is in front.
+   */
+  trustedProxies?: readonly string[];
   /** Where the routes live. */
   base?: string;
   /**
@@ -50,11 +54,12 @@ export type HandlerOptions = {
    * Sends an email: the app's own way (any email service). Called after the answer
    * has gone, and for every request whether or not there's an account, so neither
    * the answer nor the work after it shows which. At most 10 at once (each until it
-   * finishes, so give it a timeout of its own) and 1,000 waiting; beyond that, or
-   * once its link has run out, an email is dropped. Failures are logged, without
-   * the email's text.
+   * finishes) and 1,000 waiting; beyond that, or once its link has run out, an email
+   * is dropped. `signal` aborts after 30 seconds: pass it on (fetch(url, { signal })),
+   * so a stuck email service can't hold a place. Failures are logged, without the
+   * email's text.
    */
-  sendEmail(to: string, subject: string, text: string): Promise<void> | void;
+  sendEmail(to: string, subject: string, text: string, options: { signal: AbortSignal }): Promise<void> | void;
 };
 
 export type Handler = {
@@ -70,6 +75,9 @@ export type Handler = {
    */
   fromSite(request: Request): boolean;
 };
+
+export const BODY_READ =
+  "The request's body was read before modest-auth's handler saw it: mount the handler before any body parser (express.json() and the like).";
 
 /** The largest body a route reads. */
 const BODY_LIMIT = 4096;
@@ -87,6 +95,8 @@ const refuse = (status: number, code: string, message: string, retryAfter?: numb
 
 /** A small JSON object of strings (an empty body counts as {}), or why not. */
 async function readBody(request: Request): Promise<Record<string, string> | Response> {
+  // Read already, by a body parser in front: a mistake in how the handler is mounted, said plainly (or every route would see no fields).
+  if (request.bodyUsed) throw new Error(BODY_READ);
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return refuse(415, "json-only", "Send JSON.");
   if (Number(request.headers.get("content-length") ?? 0) > BODY_LIMIT) return refuse(413, "too-large", "That's too large.");
   const chunks: Uint8Array[] = [];
@@ -174,7 +184,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     setImmediate(() => {
       sending(async () => {
         if (Date.now() >= until) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
-        await sendEmail(to, subject, text);
+        await sendEmail(to, subject, text, { signal: AbortSignal.timeout(30_000) });
       }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
     });
   const send = (link: Link | null) => {
@@ -192,15 +202,20 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     );
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
-  const proxies = options.proxies ?? 0;
-  if (!Number.isInteger(proxies) || proxies < 0) throw new Error("proxies must be a whole number, 0 or more.");
-  // A proxy is passing addresses on, but none was declared: everyone looks like the proxy, and shares one allowance.
+  if ("proxies" in options) {
+    throw new Error(
+      "proxies has gone: proxies on this machine or a private network are trusted by themselves; for a CDN in front, list its address ranges in trustedProxies.",
+    );
+  }
+  const trusted = trusting(options.trustedProxies);
+  // A connection from an address that isn't trusted, passing addresses on: a proxy or CDN that should be listed (or
+  // someone making the header up, which is harmless: it's ignored). Unlisted, its visitors share its allowance.
   let warned = false;
-  const checkProxies = (request: Request) => {
-    if (warned || proxies > 0 || !request.headers.has("x-forwarded-for")) return;
+  const checkProxies = (request: Request, address: string | undefined) => {
+    if (warned || !request.headers.has("x-forwarded-for") || fromTrusted(address, trusted)) return;
     warned = true;
     console.warn(
-      "modest-auth: requests carry X-Forwarded-For, but proxies is 0: if a reverse proxy is in front, set proxies, or every visitor shares its sign-in limits.",
+      `modest-auth: a request from ${address} carries X-Forwarded-For. If that's a proxy or CDN in front of this server, add its address ranges to trustedProxies, or its visitors share its sign-in limits; if not, ignore this.`,
     );
   };
 
@@ -326,9 +341,9 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (!route) return refuse(404, "not-found", "Not found.");
       if (request.method !== "POST") return refuse(405, "post-only", "Use POST.");
       if (!fromSite(request)) return refuse(403, "cross-site", "Cross-site request refused.");
-      checkProxies(request);
+      checkProxies(request, address);
       // Who's asking, for the limits: without it, everyone would share one allowance.
-      const from = addressKey({ remoteAddress: address, forwardedFor: request.headers.get("x-forwarded-for") }, proxies);
+      const from = clientOf({ remoteAddress: address, forwardedFor: request.headers.get("x-forwarded-for") }, trusted);
       if (from === "unknown") return refuse(400, "no-address", "Where the request came from isn't known.");
       const body = await readBody(request);
       if (body instanceof Response) return body;

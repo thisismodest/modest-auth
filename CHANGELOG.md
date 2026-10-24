@@ -6,6 +6,29 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+Nothing to fine-tune: settings that could quietly go wrong now work without being set,
+or say plainly what to change.
+
+### Changed
+
+- **Proxies are found, not counted.** `proxies` is gone (passing it says what replaced
+  it): a proxy on this machine or a private network (nginx, Caddy, a hosting platform's
+  load balancer) is trusted by itself, however many there are and on whatever path, and
+  `X-Forwarded-For` is read from the right to the first address that isn't a trusted
+  proxy. A CDN with public addresses is listed in the new `trustedProxies`; left out,
+  its visitors share its address (safe), and the handler says so once.
+  `addressKey(client, trustedProxies?)` takes the list in place of a count.
+- `sendEmail` is given `{ signal }`, which aborts after 30 seconds: passed to `fetch`,
+  a stuck email service can't hold up the others.
+- `breachedRange` is given `{ signal }` too, and may give the fetch `Response` itself;
+  one that isn't OK counts as a failed check (the password is allowed, and that logged)
+  rather than as an empty range.
+
+### Added
+
+- A body read before the handler (a body parser mounted in front of it) is an error
+  that says so, rather than a request with no fields.
+
 ## [0.2.0] - 2026-10-24
 
 Emailed links, changing an account's email (with an undo), notices, single

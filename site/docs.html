@@ -90,9 +90,8 @@
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>));
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: <span class="s">"https://example.org"</span>, <span class="c">// your site's address (HTTPS)</span>
-  proxies: <span class="s">0</span>, <span class="c">// how many reverse proxies are in front of it</span>
   linkPage: <span class="s">"/account/link"</span>, <span class="c">// your page that emailed links open</span>
-  sendEmail: (to, subject, text) =&gt; <span class="f">sendWithYourService</span>({ to, subject, text }),
+  sendEmail: (to, subject, text, { signal }) =&gt; <span class="f">sendWithYourService</span>({ to, subject, text, signal }),
 });
 
 <span class="k">const</span> server = <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
@@ -247,8 +246,8 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
               <p>Your site's address, such as <code>"https://example.org"</code>. HTTPS, except <code>localhost</code> for development. The cookie is worked out from it.</p>
             </div>
             <div>
-              <h3><code>proxies</code></h3>
-              <p>How many reverse proxies are in front of your server (0 if none). Only then is <code>X-Forwarded-For</code> believed, read from the right.</p>
+              <h3><code>trustedProxies</code></h3>
+              <p>Only with a CDN in front: its address ranges. Proxies on this machine or a private network (nginx, Caddy, a hosting platform's) are trusted without it, however many there are.</p>
             </div>
             <div>
               <h3><code>linkPage</code></h3>
@@ -256,7 +255,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>sendEmail</code></h3>
-              <p>How your app sends email: <code>(to, subject, text)</code>. Give it a timeout of its own, and don't log the text: it holds the link.</p>
+              <p>How your app sends email: <code>(to, subject, text, { signal })</code>. Pass the signal to <code>fetch</code> (it aborts after 30 seconds), and don't log the text: it holds the link.</p>
             </div>
             <div>
               <h3><code>onEvent</code> <small>(createAuth)</small></h3>
@@ -278,7 +277,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
           <ul class="checks">
             <li><strong>Serves the site over HTTPS.</strong></li>
             <li><strong>Has a link page</strong> that shows which email a link is for, and acts only when the person does.</li>
-            <li><strong>Declares its proxies,</strong> and lets nothing reach the server, or any proxy but the outermost, any other way.</li>
+            <li><strong>Lists a CDN in front, if there is one,</strong> as <code>trustedProxies</code>. Other proxies need nothing.</li>
             <li><strong>Checks its own changing routes</strong> with <code>handler.fromSite(request)</code>.</li>
             <li><strong>Sets short timeouts</strong> for slow clients.</li>
             <li><strong>Keeps scripts out of its pages</strong> (a content security policy helps).</li>
@@ -337,7 +336,7 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
             </table>
           </div>
           <p>
-            <code>from</code> is <code>addressKey({ remoteAddress, forwardedFor }, proxies)</code>; refuse a request
+            <code>from</code> is <code>addressKey({ remoteAddress, forwardedFor }, trustedProxies)</code>; refuse a request
             whose address comes back <code>"unknown"</code>. Cookies come from
             <code>sessionCookie(token, origin)</code>, <code>clearedCookie(origin)</code>, and
             <code>readSessionCookie(header, origin)</code>.

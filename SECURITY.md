@@ -35,7 +35,7 @@ Anything that breaks a promise in [README.md](README.md) or
 ## Out of scope
 
 Things the app round modest-auth is responsible for (see "What your app does" in the
-README), such as serving over HTTPS, declaring its proxies, keeping scripts out of its
+README), such as serving over HTTPS, listing a CDN in front, keeping scripts out of its
 pages, and, if it uses the parts without the handler, checking the `Origin` of requests. Reports of weaknesses there that modest-auth could make harder to get
 wrong are still welcome, as ordinary issues.
 

@@ -57,11 +57,13 @@ export type AuthOptions = {
   /**
    * Checks new passwords against a breached-password set, without ever seeing them: given the first 5
    * characters of a password's SHA-1 (uppercase hex), gives what Have I Been Pwned's range API does for them
-   * (lines of "SUFFIX:COUNT"), such as `(prefix) => fetch(\`https://api.pwnedpasswords.com/range/${prefix}\`).then((r) => r.text())`.
-   * A password found there is refused; if it fails or takes over 5 seconds, the password is allowed (and that
-   * logged), so a service that's down can't stop anyone choosing one.
+   * (lines of "SUFFIX:COUNT"), as text or as the fetch Response itself, such as
+   * `(prefix, { signal }) => fetch(\`https://api.pwnedpasswords.com/range/${prefix}\`, { signal })`.
+   * `signal` aborts after 5 seconds. A password found there is refused; if the check fails (an error, an
+   * answer that isn't OK, or no answer in 5 seconds), the password is allowed and that's logged, so a
+   * service that's down can't stop anyone choosing one.
    */
-  breachedRange?(prefix: string): Promise<string> | string;
+  breachedRange?(prefix: string, options: { signal: AbortSignal }): Promise<string | Response> | string | Response;
 };
 
 /** One of an account's sessions, as its owner sees it: `id` names it (it can't be used to sign in), and `current` is the one asking. */
@@ -268,10 +270,26 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
   const checkBreachedForm = async (password: string, breachedRange: NonNullable<AuthOptions["breachedRange"]>) => {
     const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = new AbortController();
     try {
-      const late = new Promise<never>((_, fail) => (timer = setTimeout(() => fail(new Error("took over 5 seconds")), 5000)));
-      const range = await Promise.race([Promise.resolve().then(() => breachedRange(sha1.slice(0, 5))), late]);
-      for (const line of String(range).split("\n")) {
+      const late = new Promise<never>((_, fail) => {
+        timer = setTimeout(() => {
+          stop.abort();
+          fail(new Error("took over 5 seconds"));
+        }, 5000);
+      });
+      /** The range as text: given as text, or read from a Response (one that isn't OK is a failure). */
+      const fetchRange = async () => {
+        const given = await breachedRange(sha1.slice(0, 5), { signal: stop.signal });
+        if (typeof given === "string") return given;
+        if (given instanceof Response) {
+          if (!given.ok) throw new Error(`the range answered ${given.status}`);
+          return given.text();
+        }
+        throw new Error("breachedRange gave neither text nor a Response");
+      };
+      const range = await Promise.race([fetchRange(), late]);
+      for (const line of range.split("\n")) {
         const [suffix, count] = line.trim().split(":");
         // Padding (which the API can add) has a count of 0.
         if (suffix?.toUpperCase() === sha1.slice(5) && Number(count) > 0) {

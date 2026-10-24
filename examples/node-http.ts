@@ -5,7 +5,7 @@
 // The handler answers /auth/*; everything else is the app's, which asks the
 // handler who's signed in. Emails are printed here rather than sent: a real app
 // sends them with its email service. On a real site, ORIGIN is its https://
-// address, and `proxies` says how many reverse proxies are in front of it.
+// address; a proxy on the same machine or a private network needs nothing set.
 
 import { createServer, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -16,7 +16,6 @@ const ORIGIN = "http://localhost:3000";
 const auth = createAuth(new DatabaseSync("example.db"));
 const handler = createHandler(auth, {
   origin: ORIGIN,
-  proxies: 0,
   // The page emailed links open (below).
   linkPage: "/link",
   sendEmail: (to, subject, text) => console.log(`\nEmail to ${to}: ${subject}\n${text}`),

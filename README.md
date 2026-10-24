@@ -98,7 +98,9 @@ this is for you.
     password, deleting the account), so a stolen session can't be used to guess it.
 
   IPv6 addresses count by their /64; a port added by a proxy is ignored; and
-  `X-Forwarded-For` is only believed through the proxies you declare.
+  `X-Forwarded-For` is only believed from a proxy you trust: one on this machine or a
+  private network, found by itself, or a CDN you list. There's no count of proxies to
+  get right.
 - **No telling who has an account:** signing in, signing up, and asking for a link
   each give the same answer, after the same work, whether or not the email has one;
   and an email goes either way (for a sign-in link to an email with no account, one
@@ -131,21 +133,18 @@ const auth = createAuth(new DatabaseSync("app.db"), {
   // Optional: a record of who did what (no passwords, tokens, or emails in it).
   onEvent: (event) => console.log(JSON.stringify(event)),
   // Optional: refuse passwords from known breaches. Only 5-character prefixes of hashes leave.
-  breachedRange: async (prefix) => {
-    const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, { headers: { "add-padding": "true" } });
-    if (!res.ok) throw new Error(`Pwned Passwords answered ${res.status}`);
-    return res.text();
-  },
+  breachedRange: (prefix, { signal }) => fetch(`https://api.pwnedpasswords.com/range/${prefix}`, { headers: { "add-padding": "true" }, signal }),
 });
 const handler = createHandler(auth, {
-  // Your site's address (HTTPS), and how many reverse proxies are in front of it:
-  // 0 if none, so nobody can claim another address in X-Forwarded-For.
+  // Your site's address (HTTPS).
   origin: "https://example.org",
-  proxies: 0,
   // Your page that emailed links open (see "The link page" below).
   linkPage: "/account/link",
-  // Your way of sending email: any service. Give it a timeout of its own.
-  sendEmail: (to, subject, text) => sendWithYourService({ to, subject, text }),
+  // Your way of sending email (see "Sending email" below). Pass the signal on.
+  sendEmail: (to, subject, text, { signal }) => sendWithYourService({ to, subject, text, signal }),
+  // Only with a CDN in front (Cloudflare and the like): its address ranges. A proxy on this
+  // machine or a private network (nginx, Caddy, a hosting platform's) needs nothing.
+  // trustedProxies: ["173.245.48.0/20", …],
 });
 
 const server = createServer(async (req, res) => {
@@ -217,7 +216,8 @@ use one up.
 - **Bun:** `Bun.serve({ fetch: async (req, server) => (await handler.handle(req, server.requestIP(req)?.address)) ?? app(req) })`
 - **Deno:** `Deno.serve(async (req, info) => (await handler.handle(req, info.remoteAddr.hostname)) ?? app(req))`
 - **Express:** mount it first, before any body parser (which would read the body
-  first): `app.use(async (req, res, next) => (await handleNode(handler, req, res)) || next())`
+  first; if one does, the handler says so, rather than reading no fields):
+  `app.use(async (req, res, next) => (await handleNode(handler, req, res)) || next())`
 - **Fastify:** in an `onRequest` hook (before Fastify reads the body), take over the
   handler's own paths:
 
@@ -229,7 +229,30 @@ use one up.
   });
   ```
 
-On a Unix socket there's no client address: put it behind a proxy and set `proxies`.
+On a Unix socket there's no client address: put it behind a proxy (which then passes the
+client's on).
+
+### Sending email
+
+modest-auth sends no email itself: it calls your `sendEmail(to, subject, text, { signal })`
+after answering. Any email service with an HTTPS API works with Node's own `fetch`, with
+nothing to install. With Resend, say:
+
+```ts
+sendEmail: async (to, subject, text, { signal }) => {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({ from: "Example <signin@example.org>", to, subject, text }),
+    signal, // aborts after 30 seconds, so a stuck service can't hold up others
+  });
+  if (!res.ok) throw new Error(`Resend answered ${res.status}`); // logged, without the email's text
+},
+```
+
+Verify your sending domain with the service (SPF, DKIM, and DMARC records), or the emails
+land in spam. Keep the API key in an environment variable. In development,
+`(to, subject, text) => console.log(to, subject, text)` prints the links instead.
 
 ## What your app does
 
@@ -244,10 +267,10 @@ On a Unix socket there's no client address: put it behind a proxy and set `proxi
   except `localhost` for development.
 - **Leaves its routes' path to the handler:** everything under `/auth` (or `base`) is
   the handler's.
-- **Declares its proxies.** Pass how many reverse proxies are in front of the server
-  as `proxies`, and don't let the server, or any proxy but the outermost, be reached
-  any other way. Otherwise every visitor looks like the proxy, and one person could use
-  up everyone's sign-in limit; or someone could name any address they like.
+- **Lists a CDN in front, if there is one,** as `trustedProxies` (its published address
+  ranges). Proxies on this machine or a private network are trusted without it. If you
+  forget, its visitors share its address for limits, and the handler says so once in
+  the log, naming the setting.
 - **Sends JSON from its pages,** with `fetch` (a plain HTML form can't send JSON; see
   the example).
 - **Keeps its pages free of injected scripts** (a content security policy helps). No
@@ -274,6 +297,8 @@ Worth knowing:
   network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
   shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one
   organisation) shares 200, and 20 links.
+- **Someone on your own private network** (for an app used on an intranet) is trusted as
+  a proxy would be, so could write their own address into `X-Forwarded-For`.
 
 ## Using the parts
 
@@ -284,8 +309,9 @@ work out the caller's address with `addressKey`; and for links, send the email
 email saying there's no account), and answer the same either way.
 
 ```ts
-// Who's asking: here, one reverse proxy is in front. Refuse a request whose address isn't known.
-const from = addressKey({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"] }, 1);
+// Who's asking (proxies on private networks are trusted; list a CDN's ranges as a second argument).
+// Refuse a request whose address isn't known.
+const from = addressKey({ remoteAddress: req.socket.remoteAddress, forwardedFor: req.headers["x-forwarded-for"] });
 if (from === "unknown") return res.writeHead(400).end();
 const user = await auth.signIn(email, password, from); // or usePasswordLink, useSignInLink; throws AuthError
 // The cookie is worked out from your site's origin (HTTPS: Secure, and __Host-).

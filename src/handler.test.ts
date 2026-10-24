@@ -187,7 +187,12 @@ test("it won't run on plain HTTP, except on this machine, nor with an origin tha
   const { auth } = fresh();
   assert.throws(() => createHandler(auth, { origin: "http://example.org", ...EMAIL }));
   assert.throws(() => createHandler(auth, { origin: "https://example.org/app", ...EMAIL }));
-  assert.throws(() => createHandler(auth, { origin: "https://example.org", proxies: -1, ...EMAIL }));
+  assert.throws(
+    () => createHandler(auth, { origin: "https://example.org", proxies: 1, ...EMAIL } as never),
+    /trustedProxies/,
+    "the old setting says what replaced it",
+  );
+  assert.throws(() => createHandler(auth, { origin: "https://example.org", trustedProxies: ["not a range"], ...EMAIL }), /trustedProxies/);
   assert.doesNotThrow(() => createHandler(auth, { origin: DEV, ...EMAIL }));
 });
 
@@ -364,14 +369,22 @@ test("answers carry no CORS headers, so another site's page can't read them; pau
   assert.ok(wait > 890 && wait <= 900, `until this pause (15 minutes) lifts: ${wait}s`);
 });
 
-test("a forwarded address with no proxies declared is warned about once, naming the setting", async () => {
+test("X-Forwarded-For from an address that isn't trusted is warned about once, naming the setting; from a trusted proxy, not at all", async () => {
   const { send } = setup();
   const warnings = await captureWarnings(async () => {
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.50" });
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.51" });
   });
   assert.equal(warnings.length, 1);
-  assert.match(must(warnings[0])[0] as string, /proxies/);
+  assert.match(must(warnings[0])[0] as string, /trustedProxies/);
+  const fromProxy = await captureWarnings(async () => {
+    const request = new Request(`${ORIGIN}/auth/sign-out`, {
+      method: "POST",
+      headers: { origin: ORIGIN, "content-type": "application/json", "x-forwarded-for": "203.0.113.52" },
+    });
+    await setup().handler.handle(request, "10.0.0.1");
+  });
+  assert.equal(fromProxy.length, 0);
 });
 
 test("asking for a link gets the same answer whether or not there's an account, and the email goes only after the answer", async () => {
@@ -618,4 +631,41 @@ test("my data comes as a file to save, only to the account itself", async () => 
   assert.equal(copy.headers.get("cache-control"), "no-store");
   forget();
   assert.equal((await send("/auth/my-data")).status, 401);
+});
+
+test("a body read before the handler (a body parser mounted in front) is said plainly, not taken as empty", async () => {
+  const request = new Request(`${ORIGIN}/auth/sign-in`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
+  await request.text();
+  await assert.rejects(setup().handler.handle(request, HERE), /before any body parser/);
+  const handler = createHandler(fresh().auth, { origin: DEV, ...EMAIL });
+  // A body parser in front of the handler, as express.json() would be: the body read, and put on the request.
+  const server = createServer(async (req, res) => {
+    let text = "";
+    for await (const chunk of req) text += chunk;
+    (req as { body?: unknown }).body = JSON.parse(text || "{}");
+    if (!(await handleNode(handler, req, res))) res.end("app");
+  });
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const errors = await captureErrors(async () => {
+      const res = await fetch(`${base}/auth/sign-in`, {
+        method: "POST",
+        headers: { origin: DEV, "content-type": "application/json" },
+        body: JSON.stringify({ email: "a@example.org", password: PASSWORD }),
+      });
+      assert.equal(res.status, 500);
+    });
+    assert.match(String(errors), /before any body parser/);
+  } finally {
+    server.close();
+  }
+});
+
+test("sendEmail is given a signal that aborts after 30 seconds, so a stuck service can be let go", async () => {
+  let signal: AbortSignal | undefined;
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: ORIGIN, sendEmail: (_to, _subject, _text, options) => void (signal = options.signal) });
+  await post(handler, "send-password-link", { email: "ann@example.org" }, HERE);
+  await afterwards();
+  assert.ok(signal instanceof AbortSignal && !signal.aborted);
 });

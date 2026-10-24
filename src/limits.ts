@@ -123,35 +123,26 @@ function ipv6(text: string): number[] | null {
   return all.every((group) => /^[0-9a-f]{1,4}$/i.test(group)) ? all.map((group) => parseInt(group, 16)) : null;
 }
 
+/** An address, read: IPv4 as four numbers, IPv6 as eight. */
+export type Address = { v4: number[] } | { v6: number[] };
+
 /**
- * Who a request came from, for limits. Behind `proxies` proxies you trust, the
- * address the first of them saw: counted from the right of X-Forwarded-For, as
- * each proxy adds the address it saw (anything further left is the client's to
- * make up). With no proxies, the header is ignored. A port, if a proxy adds one,
- * is dropped. An IPv6 address counts by its /64, the block one household or
- * server is given, so changing the rest of it doesn't get round a limit; and
- * anything that isn't an address counts as "unknown".
+ * An address as written by a connection or a proxy, or null if it isn't one. A port and brackets
+ * ("[2001:db8::1]:443", "203.0.113.9:51234") and a zone ("%eth0") are dropped, and an IPv4 address
+ * carried in IPv6 is that IPv4 address, or every IPv4 visitor would share one /64: mapped
+ * (::ffff:a.b.c.d), compatible (::a.b.c.d), and through NAT64 (64:ff9b::a.b.c.d, RFC 6052, and the
+ * local-use 64:ff9b:1::/48, RFC 8215, with the usual /96 prefix).
  */
-export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxies = 0): string {
-  const header = Array.isArray(forwardedFor) ? forwardedFor.join(",") : (forwardedFor ?? "");
-  // Read from the right however long it is: padding it out can't make anyone share the proxy's own address.
-  const forwarded = header
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  let address = ((proxies > 0 ? forwarded[forwarded.length - proxies] : undefined) ?? remoteAddress ?? "").trim().toLowerCase();
-  // "[2001:db8::1]:443" and "203.0.113.9:51234": the address without its port.
+function readAddress(written: string): Address | null {
+  let address = written.trim().toLowerCase();
   const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(address);
   if (bracketed) address = bracketed[1] ?? "";
   else if (/^[\d.]+:\d+$/.test(address)) address = address.slice(0, address.indexOf(":"));
   address = address.split("%")[0] ?? "";
   const v4 = ipv4(address);
-  if (v4) return v4.join(".");
+  if (v4) return { v4 };
   const v6 = address.includes(":") ? ipv6(address) : null;
-  if (!v6) return "unknown";
-  // An IPv4 address carried in IPv6 is that IPv4 address, or every IPv4 visitor would share one /64:
-  // mapped (::ffff:a.b.c.d), compatible (::a.b.c.d), and through NAT64 (64:ff9b::a.b.c.d, RFC 6052,
-  // and the local-use 64:ff9b:1::/48, RFC 8215, with the usual /96 prefix).
+  if (!v6) return null;
   const zeros = (from: number, to: number) => v6.slice(from, to).every((n) => n === 0);
   // The last two groups: where an IPv4 address is carried.
   const [g6 = 0, g7 = 0] = v6.slice(6);
@@ -159,9 +150,81 @@ export function addressKey({ remoteAddress, forwardedFor }: ClientAddress, proxi
     (zeros(0, 5) && v6[5] === 0xffff) ||
     (zeros(0, 6) && (g6 > 0 || g7 > 1)) ||
     (v6[0] === 0x64 && v6[1] === 0xff9b && (v6[2] === 0 || v6[2] === 1) && zeros(3, 6));
-  if (carriesIpv4) return [g6 >> 8, g6 & 255, g7 >> 8, g7 & 255].join(".");
-  return `${v6
-    .slice(0, 4)
-    .map((n) => n.toString(16))
-    .join(":")}::/64`;
+  return carriesIpv4 ? { v4: [g6 >> 8, g6 & 255, g7 >> 8, g7 & 255] } : { v6 };
 }
+
+/** An address's bits, from the left: 8 to a number for IPv4, 16 for IPv6. */
+const bits = (address: Address) => ("v4" in address ? { of: address.v4, size: 8 } : { of: address.v6, size: 16 });
+
+/** Whether `address` is in `range` (an address and a prefix length). */
+function inRange(address: Address, range: { at: Address; prefix: number }): boolean {
+  const [a, r] = [bits(address), bits(range.at)];
+  if (a.size !== r.size) return false;
+  for (let left = range.prefix, i = 0; left > 0; left -= a.size, i++) {
+    const take = Math.min(left, a.size);
+    const mask = ((1 << take) - 1) << (a.size - take);
+    if (((a.of[i] ?? 0) & mask) !== ((r.of[i] ?? 0) & mask)) return false;
+  }
+  return true;
+}
+
+/** A range as written ("10.0.0.0/8", "2400:cb00::/32", or one address), or why not. */
+function readRange(written: string): { at: Address; prefix: number } {
+  const [address = "", prefix, ...more] = String(written).split("/");
+  const at = readAddress(address);
+  const most = at && "v4" in at ? 32 : 128;
+  const length = prefix === undefined ? most : /^\d{1,3}$/.test(prefix) ? Number(prefix) : Number.NaN;
+  if (!at || more.length || !(length >= 0 && length <= most))
+    throw new Error(`trustedProxies: "${written}" isn't an address or a range such as "203.0.113.0/24".`);
+  return { at, prefix: length };
+}
+
+/**
+ * Where a proxy you can trust connects from, without being told: this machine (loopback), and private
+ * networks (where a hosting platform's load balancer, or your own, sits). Someone on the internet can't
+ * connect from one of these.
+ */
+const PRIVATE = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "::1", "fc00::/7", "fe80::/10"];
+
+/** Whether an address is a proxy you trust: on a private network, or in one of `extra`'s ranges (a CDN's, say). */
+export function trusting(extra: readonly string[] = []): (address: Address) => boolean {
+  if (!Array.isArray(extra)) throw new Error('trustedProxies must be a list of address ranges, such as ["173.245.48.0/20"].');
+  const ranges = [...PRIVATE, ...extra].map(readRange);
+  return (address) => ranges.some((range) => inRange(address, range));
+}
+
+/** The address a limit counts: IPv4 as it is, IPv6 by its /64 (the block one household or server is given). */
+const keyOf = (address: Address) =>
+  "v4" in address
+    ? address.v4.join(".")
+    : `${address.v6
+        .slice(0, 4)
+        .map((n) => n.toString(16))
+        .join(":")}::/64`;
+
+/**
+ * Who a request came from, for limits. Starting from the connection, each address that's a proxy you
+ * trust passes on the next one along X-Forwarded-For, from the right (each proxy adds the address it
+ * saw); the first that isn't a trusted proxy is the client. So any number of proxies, on any path, is
+ * read rightly with nothing to set, and a connection from anyone else has its header ignored, whatever
+ * it says. Anything that isn't an address counts as "unknown".
+ */
+export function clientOf({ remoteAddress, forwardedFor }: ClientAddress, trusted: (address: Address) => boolean): string {
+  const header = Array.isArray(forwardedFor) ? forwardedFor.join(",") : (forwardedFor ?? "");
+  const hops = header
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let client = readAddress(remoteAddress ?? "");
+  while (client && trusted(client) && hops.length) client = readAddress(hops.pop() ?? "");
+  return client ? keyOf(client) : "unknown";
+}
+
+/** Whether a connection comes from a proxy you trust (so its X-Forwarded-For is read). */
+export const fromTrusted = (remoteAddress: string | undefined, trusted: (address: Address) => boolean): boolean => {
+  const address = readAddress(remoteAddress ?? "");
+  return !!address && trusted(address);
+};
+
+/** Who a request came from, for limits (see clientOf), trusting proxies on private networks and in `trustedProxies`' ranges. */
+export const addressKey = (client: ClientAddress, trustedProxies: readonly string[] = []): string => clientOf(client, trusting(trustedProxies));

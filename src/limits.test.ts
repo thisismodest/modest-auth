@@ -70,39 +70,64 @@ test("heavy jobs run so many at once, queue behind, and are 'busy' beyond the qu
   assert.equal(await second, "second");
 });
 
-test("the address counts the real client: IPv6 by its /64, and only through the proxies declared", () => {
+test("the address counts the real client, IPv6 by its /64, however it's written", () => {
   assert.equal(addressKey({ remoteAddress: "203.0.113.9" }), "203.0.113.9");
   assert.equal(addressKey({ remoteAddress: "::ffff:203.0.113.9" }), "203.0.113.9");
   assert.equal(addressKey({ remoteAddress: "2001:db8:1:2:aaaa::1" }), "2001:db8:1:2::/64");
   assert.equal(addressKey({ remoteAddress: "2001:db8:1:2:ffff:ffff:ffff:ffff" }), "2001:db8:1:2::/64", "a household's other addresses count as one");
   assert.equal(addressKey({ remoteAddress: "::1" }), "0:0:0:0::/64");
-  assert.equal(
-    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "6.6.6.6" }),
-    "10.0.0.1",
-    "no proxy declared: the header is the client's to write, and ignored",
-  );
-  assert.equal(
-    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "1.1.1.1, 203.0.113.9" }, 1),
-    "203.0.113.9",
-    "one proxy: the last address, the one it saw",
-  );
-  assert.equal(
-    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: ["1.1.1.1", "203.0.113.9, 198.51.100.7"] }, 2),
-    "203.0.113.9",
-    "two proxies: the second from the right",
-  );
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9" }, 2), "10.0.0.1", "fewer forwarded than proxies: the connection's own");
   assert.equal(addressKey({ remoteAddress: undefined }), "unknown");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "x".repeat(10_000) }, 1), "unknown", "nonsense isn't an address");
-  assert.equal(
-    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: `${"1.1.1.1, ".repeat(2000)}203.0.113.9` }, 1),
-    "203.0.113.9",
-    "padding it out doesn't fall back to the proxy's own address",
-  );
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9:51234" }, 1), "203.0.113.9", "a port is dropped");
-  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "[2001:db8::1]:443" }, 1), "2001:db8:0:0::/64");
   assert.equal(addressKey({ remoteAddress: "2001:0db8:0001:0002::1" }), addressKey({ remoteAddress: "2001:db8:1:2::9" }), "one address, however it's written");
   for (const nonsense of ["garbage", "1.2.3.999", "1:2:3:4:5:6:7:8:9", "1::2::3"]) assert.equal(addressKey({ remoteAddress: nonsense }), "unknown", nonsense);
+});
+
+test("a connection from the internet is the client: its X-Forwarded-For is ignored, whatever it says", () => {
+  for (const forwardedFor of ["6.6.6.6", "10.0.0.1", "127.0.0.1, 6.6.6.6", ["6.6.6.6", "7.7.7.7"]]) {
+    assert.equal(addressKey({ remoteAddress: "203.0.113.9", forwardedFor }), "203.0.113.9", String(forwardedFor));
+  }
+  assert.equal(addressKey({ remoteAddress: "2001:db8:1:2::9", forwardedFor: "6.6.6.6" }), "2001:db8:1:2::/64");
+});
+
+test("proxies on this machine or a private network are trusted with nothing set, however many there are", () => {
+  assert.equal(addressKey({ remoteAddress: "127.0.0.1", forwardedFor: "203.0.113.9" }), "203.0.113.9", "nginx or Caddy on this machine");
+  assert.equal(addressKey({ remoteAddress: "::1", forwardedFor: "203.0.113.9" }), "203.0.113.9");
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9" }), "203.0.113.9", "a hosting platform's load balancer");
+  for (const internal of ["172.16.4.4", "192.168.1.1", "100.64.0.9", "169.254.1.1", "fd00::1", "fe80::1%eth0", "::ffff:10.0.0.1"]) {
+    assert.equal(addressKey({ remoteAddress: internal, forwardedFor: "203.0.113.9" }), "203.0.113.9", internal);
+  }
+  // However many internal hops a request took, on whichever path: the first address from the right that isn't one.
+  for (const forwardedFor of ["203.0.113.9", "203.0.113.9, 10.0.0.2", "203.0.113.9, 10.0.0.2, 192.168.1.1", ["203.0.113.9", "172.16.0.1"]]) {
+    assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor }), "203.0.113.9", String(forwardedFor));
+  }
+  assert.equal(addressKey({ remoteAddress: "10.0.0.5" }), "10.0.0.5", "straight from inside the network (a health check, say): that address");
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "10.0.0.7, 192.168.1.1" }), "10.0.0.7", "every hop internal: the furthest one");
+});
+
+test("whatever a client writes in X-Forwarded-For, the address the first trusted proxy saw wins", () => {
+  for (const written of ["6.6.6.6", "10.9.9.9", "127.0.0.1", "6.6.6.6, 10.0.0.2"]) {
+    // A proxy adds the address it saw (the client's) after whatever the client sent.
+    assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: `${written}, 203.0.113.9` }), "203.0.113.9", written);
+  }
+  assert.equal(
+    addressKey({ remoteAddress: "10.0.0.1", forwardedFor: `${"1.1.1.1, ".repeat(2000)}203.0.113.9` }),
+    "203.0.113.9",
+    "padding it out changes nothing",
+  );
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "x".repeat(10_000) }), "unknown", "nonsense isn't an address");
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9:51234" }), "203.0.113.9", "a port is dropped");
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "[2001:db8::1]:443" }), "2001:db8:0:0::/64");
+});
+
+test("a CDN in front, connecting from public addresses, is trusted once its ranges are listed", () => {
+  const cdn = ["173.245.48.0/20", "2400:cb00::/32"];
+  assert.equal(addressKey({ remoteAddress: "173.245.48.5", forwardedFor: "203.0.113.9" }), "173.245.48.5", "unlisted: the CDN's own address (safe, if shared)");
+  assert.equal(addressKey({ remoteAddress: "173.245.48.5", forwardedFor: "203.0.113.9" }, cdn), "203.0.113.9");
+  assert.equal(addressKey({ remoteAddress: "2400:cb00:2049::1", forwardedFor: "2001:db8:1:2::9" }, cdn), "2001:db8:1:2::/64");
+  assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9, 173.245.63.200" }, cdn), "203.0.113.9", "CDN, then a load balancer");
+  assert.equal(addressKey({ remoteAddress: "173.245.64.1", forwardedFor: "203.0.113.9" }, cdn), "173.245.64.1", "just outside the range: not trusted");
+  for (const bad of [["nonsense"], ["10.0.0.0/33"], ["10.0.0.0/8/8"], ["::/129"], ["10.0.0.0/x"]])
+    assert.throws(() => addressKey({ remoteAddress: "203.0.113.9" }, bad), /trustedProxies/, bad[0]);
+  assert.throws(() => addressKey({ remoteAddress: "203.0.113.9" }, "10.0.0.0/8" as never), /list/);
 });
 
 test("an IPv4 address carried in IPv6 counts as that IPv4 address, so IPv4 visitors through NAT64 don't share one allowance", () => {

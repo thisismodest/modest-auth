@@ -43,7 +43,7 @@ round modest-auth.
 | Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and an email either way (for a sign-in link to an email with no account, one saying so, with no link), sent after the answer | `auth.ts`, `handler.ts` |
 | Flooding an inbox, or keeping its owner from getting a link | At most 3 links of each kind to one address in 15 minutes, the rest quietly not sent; every link sent stays usable at least until those 15 minutes end; each kind counted apart, so sign-in requests can't block a password link (nor the reverse); each exact address counted alone, so another spelling can't use up its owner's | `auth.ts` |
 | Emailing strangers in bulk through sign-up | At most 5 links asked for from one address, and 20 from one IPv6 /48, in 15 minutes | `auth.ts` |
-| A stuck or slow email service | 10 sends at once, 1,000 waiting, the rest dropped and logged; an email whose link has run out while it waited isn't sent; failures logged without the email's text | `handler.ts` |
+| A stuck or slow email service | `sendEmail` is given a signal that aborts after 30 seconds; 10 sends at once, 1,000 waiting, the rest dropped and logged; an email whose link has run out while it waited isn't sent; failures logged without the email's text | `handler.ts` |
 | An address a mail program would read as an option or a pipe (`-X/file@…`, `\|cmd@…`) | Refused | `emails.ts` |
 | Moving someone's account to your address | Needs the account's password and a session, and a link to the new address, opened where the account is signed in (so a link sent to anyone else does nothing); a move asked for while the password changed isn't stored | `auth.ts`, `handler.ts` |
 | Attaching your account to someone else's address (sending them your own move link) | Only the account being moved, signed in, can use its link | `auth.ts`, `handler.ts` |
@@ -58,8 +58,9 @@ round modest-auth.
 | Guessing the password with a stolen session (through a password change) | The owner's own checks are capped at 10 an hour, per account | `auth.ts` |
 | Pausing accounts by flooding sign-in until it's "busy" | A try refused as busy isn't counted against the account | `auth.ts`, `passwords.ts` |
 | Flooding the limits to push a count out, or restarting to reset them | Limits kept in the database: nothing is evicted, and they outlive the process | `limits.ts` |
-| Forging X-Forwarded-For to dodge limits | Only believed through the number of proxies declared, counted from the right; ports dropped; IPv6 read as numbers, so one address can't be written many ways | `limits.ts`, `handler.ts` |
-| Every IPv4 visitor sharing one allowance (through NAT64, or a forgotten `proxies`) | An IPv4 address carried in IPv6 counts as that IPv4 address; a forwarded address with no proxies declared is warned about | `limits.ts`, `handler.ts` |
+| Forging X-Forwarded-For to dodge limits | Only believed from a proxy that's trusted (on this machine or a private network, or in `trustedProxies`); read from the right, past each trusted proxy, to the first address that isn't one, so whatever a client writes is further left and never reached; ports dropped; IPv6 read as numbers, so one address can't be written many ways | `limits.ts`, `handler.ts` |
+| Every visitor sharing one allowance (through NAT64, or a proxy in front) | An IPv4 address carried in IPv6 counts as that IPv4 address; proxies on this machine or a private network are trusted without being declared, however many, on any path; a CDN that should be listed is warned about once, naming the setting | `limits.ts`, `handler.ts` |
+| Getting the proxy setup wrong | There's nothing to count: the only setting is a CDN's ranges, and leaving it out is safe (its visitors share its address), not exploitable | `limits.ts`, `handler.ts` |
 | Locking someone out by guessing at their account | The per-account-and-address limit only pauses that address; the per-account limit is high, and doesn't stop the signed-in owner changing the password or deleting the account; and a sign-in link, always offered, isn't paused by it | `auth.ts` |
 | A sign-in racing a password change (or an account's deletion) | A session starts only for a user whose password was just checked, and only if it's still the account's; upgrading an old hash only replaces the hash that was checked | `auth.ts` |
 | A session someone else started, left running | The owner sees every session (when each started and was last used) and can end any one, by a name that can't sign anyone in | `auth.ts`, `handler.ts` |
@@ -94,6 +95,12 @@ round modest-auth.
   address has 7 days to undo it; after that, the account belongs to its new address.
   So an account handed on to someone else (sold, or given to a colleague) can be taken
   back by its old address for 7 days.
+- **Someone on the app's own private network is trusted as a proxy is,** so could write
+  their own address into `X-Forwarded-For`: for an app used on an intranet, they can
+  dodge the per-address limits (not the per-account ones).
+- **A CDN in front that isn't listed in `trustedProxies`** makes its visitors share its
+  addresses for the limits (safe, but a busy CDN address can pause); the handler logs
+  it once, naming the setting.
 - **Someone with an account's password and a session can move it,** and has the
   account until its old address undoes the move (and, if they also read the old
   inbox, for good). That's why the undo link also makes the password useless.
