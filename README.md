@@ -1,6 +1,6 @@
 # modest-auth
 
-Email and password authentication for Node.js, with sessions. No dependencies.
+Zero-dependency authentication for Node.js: sign-in by password or emailed link, with sessions.
 
 > **Status: early (0.x).** The core
 > works and is tested; see [ROADMAP.md](ROADMAP.md) for what comes next, and don't
