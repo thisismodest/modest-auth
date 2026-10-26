@@ -215,6 +215,26 @@ test("its tables can share the app's own database", async () => {
   assert.equal(count(db, "auth_users"), 1, "made again on the same database: nothing lost");
 });
 
+test("deleting an account takes the app's own rows linked to it, and an app row can't name an account that isn't there", async () => {
+  // Even on a connection opened with foreign keys off: createAuth turns them on.
+  const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
+  const auth = createAuth(db);
+  db.exec("CREATE TABLE members (user TEXT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE, club TEXT)");
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const bob = await signUp(auth, "bob@example.org", PASSWORD, HERE);
+  db.prepare("INSERT INTO members VALUES (?, 'ware'), (?, 'ware')").run(ann.id, bob.id);
+  assert.throws(() => db.prepare("INSERT INTO members VALUES ('no-such-account', 'ware')").run(), /FOREIGN KEY/);
+  await auth.deleteAccount(ann.id, PASSWORD, HERE);
+  assert.deepEqual(
+    db
+      .prepare("SELECT user FROM members")
+      .all()
+      .map((row) => row.user),
+    [bob.id],
+    "only the deleted account's row goes",
+  );
+});
+
 test("a sign-in still checking when the password changes gets no session", async () => {
   const { auth } = fresh();
   const user = await signUp(auth, "editor@example.org", PASSWORD, HERE);
