@@ -1,6 +1,6 @@
 {
   "name": "modest-auth",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Zero-dependency authentication for Node.js: sign-in by password or emailed link, with sessions.",
   "license": "MIT",
   "author": "Modest Industries Ltd",

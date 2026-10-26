@@ -6,6 +6,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.4.0] - 2026-10-26
+
 ### Added
 
 - **A name for the site's emails:** `createHandler`'s optional `name`, such as
