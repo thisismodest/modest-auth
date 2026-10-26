@@ -44,6 +44,12 @@ export type HandlerOptions = {
   /** Where the routes live. */
   base?: string;
   /**
+   * The site's name for its emails, such as "Ware Business Club". Their subjects use it, and their
+   * text gives it with the site's address ("Ware Business Club (example.org)"), which a copycat can't
+   * borrow. Without it, the address alone. Up to 60 characters, on one line, with nothing invisible.
+   */
+  name?: string;
+  /**
    * The app's page that emailed links open, such as "/account/link". The token
    * follows "#" ("#password=…" or "#sign-in=…"), which browsers never send to a
    * server. The page reads it (before any other script can), asks /auth/link which
@@ -139,43 +145,56 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
   }
 }
 
-/** The email for a link, in plain text. */
-function linkEmail(link: Link, site: string, url: string, origin: string): { subject: string; text: string } {
+/**
+ * The site's name for its emails, if it has one: one short, plain line. A line break could add a line
+ * of its own to an email (a header, in a mail program that writes them), and an invisible character
+ * (one that reverses text, say) could disguise the name.
+ */
+function siteName(name: unknown): string | null {
+  if (name === undefined) return null;
+  if (typeof name !== "string" || name.length === 0 || name.length > 60 || name.trim() !== name || /[\p{C}\p{Zl}\p{Zp}]/u.test(name)) {
+    throw new Error('name must be the site\'s name for its emails, such as "Ware Business Club": up to 60 characters, on one line, with nothing invisible.');
+  }
+  return name;
+}
+
+/** The email for a link, in plain text: `title` heads it, `site` is named in it. */
+function linkEmail(link: Link, title: string, site: string, url: string, origin: string): { subject: string; text: string } {
   /** The link, and how long it lasts. */
   const within = (minutes: number, where = "") => `within ${minutes} minutes${where}:\n\n${url}\n\n`;
   const notYou = "If it wasn't you, you can ignore this email.\n";
   if (link.kind === "email" && link.token === null) {
     return {
-      subject: `Your email address on ${site}`,
+      subject: `Your email address on ${title}`,
       text: `Someone asked to use this email address for an account on ${site}, but it has an account of its own already, so nothing has changed.\n\n${notYou}`,
     };
   }
   if (link.kind === "email") {
     return {
-      subject: `Confirm your new email address on ${site}`,
+      subject: `Confirm your new email address on ${title}`,
       text: `To use this email address for your account on ${site}, open this link ${within(EMAIL_LINK_MINUTES, ", in a browser where you're signed in to that account")}Using it signs you out everywhere. If you didn't ask, you can ignore this email: nothing changes without it.\n`,
     };
   }
   if (link.token === null) {
     return {
-      subject: `Sign in to ${site}`,
+      subject: `Sign in to ${title}`,
       text: `Someone asked to sign in to ${site} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\n${notYou}`,
     };
   }
   if (link.kind === "sign-in") {
     return {
-      subject: `Sign in to ${site}`,
+      subject: `Sign in to ${title}`,
       text: `To sign in to ${site}, open this link ${within(SIGN_IN_LINK_MINUTES)}If you didn't ask to sign in, you can ignore this email.\n`,
     };
   }
   if (link.account) {
     return {
-      subject: `Choose a new password for ${site}`,
+      subject: `Choose a new password for ${title}`,
       text: `To choose a new password for your account on ${site}, open this link ${within(PASSWORD_LINK_MINUTES)}Choosing one signs you out everywhere else. If you didn't ask, you can ignore this email: your password stays as it is.\n`,
     };
   }
   return {
-    subject: `Finish signing up to ${site}`,
+    subject: `Finish signing up to ${title}`,
     text: `To finish signing up to ${site}, choose a password at this link ${within(PASSWORD_LINK_MINUTES)}If you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
   };
 }
@@ -186,7 +205,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage))
     throw new Error('linkPage must be a path on the site, such as "/account/link".');
   if (typeof sendEmail !== "function") throw new Error("sendEmail must be a function that sends an email: (to, subject, text).");
-  const site = new URL(origin).host;
+  const name = siteName(options.name);
+  const host = new URL(origin).host;
+  // Subjects carry the name; the text the name and the address, which a copycat can't borrow.
+  const title = name ?? host;
+  const site = name ? `${name} (${host})` : host;
   // A slow or stuck email service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
   const sending = atMost(10, 1000);
   // Why, but never the email's text (it holds the link) nor the service's own message (which may repeat it).
@@ -216,11 +239,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     });
   const send = (link: Link | null) => {
     if (!link) return;
-    const { subject, text } = linkEmail(link, site, `${origin}${linkPage}#${link.kind}=${link.token}`, origin);
+    const { subject, text } = linkEmail(link, title, site, `${origin}${linkPage}#${link.kind}=${link.token}`, origin);
     queue(link.to, subject, text, link.expires);
   };
   /** A notice of a change to an account, to its email: so its owner hears of a change they didn't make. */
-  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${site}`, `${text}\n`, Date.now() + DAY);
+  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${title}`, `${text}\n`, Date.now() + DAY);
   const passwordChanged = (to: string) =>
     notify(
       to,

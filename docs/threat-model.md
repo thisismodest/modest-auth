@@ -80,6 +80,7 @@ round modest-auth.
 | A crafted email that makes checking it slow | Length checked first; plain string checks, no backtracking pattern | `emails.ts` |
 | One account passing for another (compatibility forms, or invisible characters) | Emails normalised (NFKC), so `ａｎｎ` and `ann` are one address, and domains kept in their ASCII form, so `bücher.de` and `xn--bcher-kva.de` are one; control, format, and invisible characters (anything drawn as nothing) refused | `emails.ts` |
 | Markup or headers carried in an email | Quotes, brackets, and line breaks refused | `emails.ts` |
+| The site's name in emails adding a line to one, hiding text, or standing in for the address | Up to 60 characters on one line, with no control, invisible, or line-separating characters, or it's refused when the handler is made; the text always gives the site's address with it | `handler.ts` |
 | Writing into the cookie header | Tokens checked against a strict pattern when written and read | `cookies.ts` |
 | Reading a signed-in person's details from another site | Responses are JSON with no CORS headers, and `no-store` | `handler.ts` |
 | Crashing the app with a malformed request (an odd method, a broken URL, a body cut off) | The Node adapter never throws; every such request gets an answer | `node.ts`, `handler.ts` |

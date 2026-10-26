@@ -270,6 +270,10 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
               <p>Optional: given a 5-character prefix of a password's SHA-1, gives Have I Been Pwned's range for it; breached passwords are refused.</p>
             </div>
             <div>
+              <h3><code>name</code></h3>
+              <p>Optional: your site's name for its emails, such as <code>"Ware Business Club"</code>. Subjects use it ("Sign in to Ware Business Club"), and the text gives it with your address ("Ware Business Club (example.org)"), which a copycat can't borrow. Left out, emails use the address alone.</p>
+            </div>
+            <div>
               <h3><code>base</code></h3>
               <p>Where the routes live. <code>"/auth"</code> unless you say otherwise.</p>
             </div>

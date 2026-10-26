@@ -65,10 +65,10 @@ type Json = {
   [key: string]: unknown;
 };
 
-const setup = () => {
+const setup = (more: { name?: string } = {}) => {
   const { auth } = fresh();
   const emails: { to: string; subject: string; text: string }[] = [];
-  const handler = createHandler(auth, { ...EMAIL, origin: ORIGIN, sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
+  const handler = createHandler(auth, { ...EMAIL, ...more, origin: ORIGIN, sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
   let cookie = "";
   /** A request from the site's own page, as a browser sends it (carrying the cookie it was given). */
   const send = async (path: string, body?: unknown, headers: Record<string, string> = {}) => {
@@ -500,6 +500,39 @@ test("a link's token is after the #, which browsers never send to a server, on t
   await afterwards();
   assert.match(must(emails[0]).text, /^https:\/\/app\.example\.org\/account\/link#password=[\w-]{43}$/m);
   assert.doesNotMatch(must(emails[0]).text, /\?/, "nothing in a query string, which servers log and pages pass on");
+});
+
+test("a site's name heads its emails, and its address stays in their text, which a copycat can't borrow", async () => {
+  const { send, emails, signUp } = setup({ name: "Ware Business Club" });
+  await signUp("ann@example.org");
+  await send("/auth/send-sign-in-link", { email: "ann@example.org" });
+  await send("/auth/password", { current: PASSWORD, next: "a different long password" });
+  await afterwards();
+  assert.deepEqual(
+    emails.map((e) => e.subject),
+    ["Finish signing up to Ware Business Club", "Sign in to Ware Business Club", "Your password was changed on Ware Business Club"],
+  );
+  for (const { text } of emails) assert.match(text, /Ware Business Club \(app\.example\.org\)/);
+});
+
+test("a name that could add a line to an email, or hide text, is refused when the handler is made", () => {
+  const { auth } = fresh();
+  for (const name of [
+    "",
+    " Club",
+    "Club ",
+    "Club\nBcc: x@example.org",
+    "Club\r",
+    "Club\tX",
+    "Club\u202Ebulc",
+    "Club\u200B",
+    "Club\u2028X",
+    "C".repeat(61),
+    42,
+  ]) {
+    assert.throws(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: name as string }), /name must be/, JSON.stringify(name));
+  }
+  assert.doesNotThrow(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: "Ware Business Club & Friends: 2026" }));
 });
 
 test("a sign-in link signs this browser in with a fresh session, ending the one it had", async () => {

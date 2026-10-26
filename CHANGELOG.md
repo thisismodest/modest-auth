@@ -6,6 +6,14 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+### Added
+
+- **A name for the site's emails:** `createHandler`'s optional `name`, such as
+  `"Ware Business Club"`. Subjects use it, and the text gives it with the site's
+  address ("Ware Business Club (example.org)"), so an email still says where it's from.
+  Without it, emails are as before. A name that could add a line to an email, or hide
+  text, is refused when the handler is made.
+
 ## [0.3.0] - 2026-10-24
 
 Nothing to get quietly wrong: what can be set wrong now is safe when left out, and says

@@ -157,6 +157,8 @@ const handler = createHandler(auth, {
   // sendEmail: (to, subject, text) => console.log(to, subject, text),
   // Only behind a proxy (see "Behind a proxy" below), such as:
   // trustedProxies: ["loopback"],
+  // Optional: your site's name for its emails ("Sign in to Example"); their text still gives the address.
+  // name: "Example",
 });
 
 const server = createServer(async (req, res) => {
