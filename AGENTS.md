@@ -62,6 +62,7 @@ state the promise ("a wrong password and an unknown email get the same answer").
 
 ## Status
 
-Unreleased, and `"private": true` in package.json until it's ready to publish (so it
-can't be published by accident). It grew out of the sign-in written for a
-magazine-layout app, which will move onto it.
+Early (0.x), and on npm: published by the release workflow from a version tag (see
+docs/maintaining.md). 1.0 waits for an independent security audit (ROADMAP.md,
+"Before 1.0"). It grew out of the sign-in written for a magazine-layout app, which will
+move onto it; Ware Business Club's members' area already uses it.
