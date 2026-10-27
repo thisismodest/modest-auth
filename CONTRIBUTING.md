@@ -35,7 +35,7 @@ library stays small enough to trust.
 
 ## Working on it
 
-Node 24 or later.
+Node 26 (24 or later works).
 
 ```sh
 npm ci            # development tools only; install scripts are off (.npmrc)

@@ -165,8 +165,9 @@ round modest-auth.
 - **No pepper:** password hashes don't also use a secret kept outside the database
   (NIST suggests one). A copy of the database alone is enough to start guessing, at
   scrypt's cost, against passwords of 15 or more characters.
-- **`node:sqlite` is marked experimental** in Node 24 (it prints a warning). It's
-  SQLite underneath; the API around it may still change.
+- **`node:sqlite` is marked experimental** in Node 24 (it prints a warning), and a
+  release candidate in Node 26. It's SQLite underneath; the API around it may still
+  change.
 - **Letters from other alphabets that look alike** (a Cyrillic `а` in `аnn@example.org`)
   make a different address, and so a different account, that looks the same. An app
   that shows emails to other people should bear that in mind.
