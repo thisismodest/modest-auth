@@ -3,7 +3,20 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { askForLink, freshEmail, freshIp, freshPassword, type Harness, rawRequest, rawStatus, signUp, startHarness, wait, whoIs } from "./harness.ts";
+import {
+  askForLink,
+  freshEmail,
+  freshIp,
+  freshPassword,
+  type Harness,
+  isRefusal,
+  rawRequest,
+  rawStatus,
+  signUp,
+  startHarness,
+  wait,
+  whoIs,
+} from "./harness.ts";
 
 let h: Harness;
 before(async () => {
@@ -11,7 +24,6 @@ before(async () => {
 });
 after(() => h.close());
 
-const isRefusal = (status: number) => status >= 400 && status < 500;
 const POSTS = [
   "send-password-link",
   "send-sign-in-link",

@@ -9,6 +9,7 @@ import {
   freshEmail,
   freshPassword,
   type Harness,
+  isRefusal,
   moveAccount,
   rowsMentioning,
   signIn,
@@ -25,7 +26,6 @@ before(async () => {
 });
 after(() => h.close());
 
-const isRefusal = (status: number) => status >= 400 && status < 500;
 const signsIn = async (email: string, password: string) => (await unlessBusy(() => h.visitor().post("/auth/sign-in", { email, password }))).status === 200;
 const linkStillGood = async (token: string) => (await h.visitor().post("/auth/link", { token })).status === 200;
 

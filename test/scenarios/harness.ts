@@ -10,6 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type AuthEvent, type AuthOptions, createAuth, createHandler, type Handler, type HandlerOptions, handleNode } from "../../src/index.ts";
+import { wait } from "../helpers.ts";
+
+export { wait };
+/** A 4xx answer: refused, as opposed to accepted or failed. */
+export const isRefusal = (status: number) => status >= 400 && status < 500;
 
 export const ORIGIN = "https://example.org";
 export const LINK_PAGE = "/account/link";
@@ -99,10 +104,6 @@ export const freshEmail = (name = "person") => {
 export const freshPassword = () => `Tq-${randomBytes(15).toString("base64url")}`;
 
 const LINK = /#(password|sign-in|email|undo)=([^\s"'<>]+)/;
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-export { wait };
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
   const folder = mkdtempSync(join(tmpdir(), "modest-auth-scenarios-"));

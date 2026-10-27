@@ -10,6 +10,7 @@ import {
   freshEmail,
   freshPassword,
   type Harness,
+  isRefusal,
   LINK_PAGE,
   moveAccount,
   rawRequest,
@@ -28,7 +29,6 @@ before(async () => {
 });
 after(() => h.close());
 
-const isRefusal = (status: number) => status >= 400 && status < 500;
 const tokenOf = (visitor: Visitor) => visitor.cookies.get(h.cookieName ?? "") ?? "";
 const withCookie = (cookie: string) => {
   const visitor = h.visitor();

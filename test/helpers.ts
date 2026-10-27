@@ -1,7 +1,7 @@
 // What the tests share. Kept out of src/, so it's never published or counted as the library.
 
 import assert from "node:assert/strict";
-import { scryptSync } from "node:crypto";
+import { createHash, scryptSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,8 @@ export const later = () => new Promise((done) => setImmediate(done));
 /** Two turns of the event loop: after an answer, once the emails it sends have gone. */
 export const afterwards = () => new Promise((done) => setImmediate(() => setImmediate(done)));
 export const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
+/** A password's SHA-1, as the breached-password set's ranges are keyed. */
+export const sha1 = (text: string) => createHash("sha1").update(text, "utf8").digest("hex").toUpperCase();
 
 /** Runs `run` in a new temporary directory, removed afterwards. */
 export const withTempDir = async (run: (dir: string) => Promise<void> | void) => {

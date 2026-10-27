@@ -6,7 +6,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { BODY_READ, type Handler } from "./handler.ts";
+import { BODY_READ, type Handler, HEADERS } from "./handler.ts";
 
 /**
  * The request's path, if it's a plain one ("/auth/sign-in", not "http://host/...",
@@ -56,7 +56,6 @@ function webRequest(req: IncomingMessage, withBody: boolean): Request {
   return new Request(`http://localhost${plainPath(req.url) ?? "/"}`, { method, headers, ...body } as RequestInit);
 }
 
-/** Answers the request if it's for one of the handler's routes; false if it isn't (for the app to answer). */
 /**
  * Where a request's connection came from: its address; on a Unix socket (the server listening on a file,
  * with a proxy on this machine in front), this machine's; and nothing for a connection already gone, whose
@@ -69,6 +68,7 @@ function connectionAddress(req: IncomingMessage): string | undefined {
   return !req.socket.destroyed && typeof server?.address() === "string" ? "127.0.0.1" : undefined;
 }
 
+/** Answers the request if it's for one of the handler's routes; false if it isn't (for the app to answer). */
 export async function handleNode(handler: Handler, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const path = plainPath(req.url);
   if (!path || (path !== handler.base && !path.startsWith(`${handler.base}/`))) return false;
@@ -92,10 +92,7 @@ export async function handleNode(handler: Handler, req: IncomingMessage, res: Se
   } catch (error) {
     console.error("modest-auth:", error instanceof Error ? error.message : error);
     if (res.headersSent) res.destroy();
-    else
-      res
-        .writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" })
-        .end('{"error":{"code":"failed","message":"Something went wrong."}}');
+    else res.writeHead(500, HEADERS).end('{"error":{"code":"failed","message":"Something went wrong."}}');
   }
   return true;
 }

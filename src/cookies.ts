@@ -10,8 +10,7 @@
 // flags but no Secure or prefix, and a name of its own with the port in it, so other
 // apps on localhost (which share cookies across ports), this one's too, don't overwrite it.
 
-import { LONGEST_TOKEN, SESSION_DAYS } from "./auth.ts";
-import { DAY } from "./time.ts";
+import { LONGEST_TOKEN, SESSION_MS } from "./auth.ts";
 
 /** The site's origin, checked: just a scheme, host, and port; HTTPS, or plain HTTP on this machine. Whether it's HTTPS, and the cookie's name. */
 export function siteOrigin(given: string): { origin: string; secure: boolean; cookie: string } {
@@ -40,7 +39,7 @@ function cookie(origin: string, value: string, seconds: number): string {
 /** The Set-Cookie header that starts a session, for the site at `origin`. */
 export function sessionCookie(token: string, origin: string): string {
   if (!TOKEN.test(token)) throw new Error("That isn't a session token.");
-  return cookie(origin, token, (SESSION_DAYS * DAY) / 1000);
+  return cookie(origin, token, SESSION_MS / 1000);
 }
 
 /** The Set-Cookie header that ends one (on signing out). */

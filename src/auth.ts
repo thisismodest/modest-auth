@@ -17,7 +17,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { cleanEmail } from "./emails.ts";
 import { AuthError } from "./errors.ts";
-import { databaseLimits, type Limit, settingUp } from "./limits.ts";
+import { blockOf, databaseLimits, type Limit, settingUp } from "./limits.ts";
 import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGEST_TYPED, unmatchableHash } from "./passwords.ts";
 import { readAtMost } from "./streams.ts";
 import { DAY, HOUR, MINUTE } from "./time.ts";
@@ -210,14 +210,16 @@ const SCHEMA = `
 /** A new token: 256 random bits, base64url (43 characters). */
 const newToken = () => randomBytes(32).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
-/** An IPv6 /64 (as addressKey gives it)'s /48: the block a single site or customer is often given. */
-const blockOf = (from: string) => (from.endsWith("::/64") ? `${from.split(":").slice(0, 3).join(":")}::/48` : null);
+/** How long a session lasts at most. */
+export const SESSION_MS = SESSION_DAYS * DAY;
 /** When a session started, from when it runs out. */
-const startedAt = (expires: number) => expires - SESSION_DAYS * DAY;
-/** A session's name for its owner: a hash of its stored hash, so it can't be used to sign in. */
+const startedAt = (expires: number) => expires - SESSION_MS;
 /** The longest token a cookie can carry: longer is no token of ours (they're 43 characters). */
 export const LONGEST_TOKEN = 100;
 const SESSION_ID_LENGTH = 22;
+/** A session's id as sessionId makes it. */
+const SESSION_ID = new RegExp(`^[A-Za-z0-9_-]{${SESSION_ID_LENGTH}}$`);
+/** A session's name for its owner: a hash of its stored hash, so it can't be used to sign in. */
 const sessionId = (stored: string) => createHash("sha256").update(`session\0${stored}`).digest("base64url").slice(0, SESSION_ID_LENGTH);
 /** A session that hasn't run out or gone unused, as SQL over auth_sessions, with `live(now)` for its two values. */
 const LIVE = "expires > ? AND seen > ?";
@@ -249,9 +251,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
   if (onEvent !== undefined && typeof onEvent !== "function") throw new Error("onEvent must be a function.");
   if (breachedRange !== undefined && typeof breachedRange !== "function") throw new Error("breachedRange must be a function.");
   /** An event, told after the answer has gone: the same whatever it is, so it can't show anything by its timing. */
-  const emit = (type: AuthEvent["type"], details: Omit<AuthEvent, "type" | "at"> = {}) => {
+  const emit = (type: AuthEvent["type"], details: { [K in keyof Omit<AuthEvent, "type" | "at">]?: AuthEvent[K] | undefined } = {}) => {
     if (!onEvent) return;
-    const event: AuthEvent = { type, at: Date.now(), ...details };
+    // Details not known (such as where a sign-out came from, when the app didn't say) are left out, not undefined.
+    const known = Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined));
+    const event: AuthEvent = { type, at: Date.now(), ...known };
     setImmediate(() => {
       // Whether it throws or (being async) rejects: logged, never passed on.
       Promise.resolve()
@@ -268,30 +272,26 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     if (!breachedRange) return;
     for (const form of new Set([password.normalize("NFKC"), password])) await checkBreachedForm(form, breachedRange);
   };
+  // breachedRange is passed in as checkBreached has it: known to be there.
   const checkBreachedForm = async (password: string, breachedRange: NonNullable<AuthOptions["breachedRange"]>) => {
     const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const stop = new AbortController();
+    // Given up on after 5 seconds: the signal stops the fetch, and the check fails (so the password is allowed).
+    const signal = AbortSignal.timeout(5000);
     try {
-      const late = new Promise<never>((_, fail) => {
-        timer = setTimeout(() => {
-          stop.abort();
-          fail(new Error("took over 5 seconds"));
-        }, 5000);
-      });
+      const late = new Promise<never>((_, fail) => signal.addEventListener("abort", () => fail(new Error("took over 5 seconds")), { once: true }));
       /**
        * The range as text: given as text, or read from a Response (one that isn't OK is a failure), at most 1MB
        * (a padded range is about 40KB), and let go of when 5 seconds pass, so it can't keep sending.
        */
       const fetchRange = async () => {
-        const given = await breachedRange(sha1.slice(0, 5), { signal: stop.signal });
+        const given = await breachedRange(sha1.slice(0, 5), { signal });
         if (typeof given === "string") return given;
         if (!(given instanceof Response)) throw new Error("breachedRange gave neither text nor a Response: give the fetch Response itself, or its text");
         if (!given.ok) {
           await given.body?.cancel().catch(() => {});
           throw new Error(`the range answered ${given.status}`);
         }
-        const bytes = await readAtMost(given.body, 1_000_000, stop.signal);
+        const bytes = await readAtMost(given.body, 1_000_000, signal);
         if (bytes === "too-large") throw new Error("the range was over 1MB");
         return bytes.toString("utf8");
       };
@@ -306,8 +306,6 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     } catch (error) {
       if (error instanceof AuthError) throw error;
       console.error("modest-auth: the breached-password check failed, so the password was allowed:", error instanceof Error ? error.message : typeof error);
-    } finally {
-      clearTimeout(timer);
     }
   };
   // Several processes can share the file: they wait up to two seconds for another
@@ -539,7 +537,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     swept = now;
     db.prepare(
       "DELETE FROM auth_sessions WHERE token IN (SELECT token FROM auth_sessions WHERE expires <= ? UNION SELECT token FROM auth_sessions WHERE seen <= ? LIMIT 2000)",
-    ).run(now, now - IDLE_DAYS * DAY);
+    ).run(...live(now));
     // Links hold the emails of people who may have no account: once they've gone, not left in the WAL either.
     const cleared = db.prepare("DELETE FROM auth_links WHERE token IN (SELECT token FROM auth_links WHERE expires <= ? LIMIT 2000)").run(now).changes;
     if (cleared || unflushed) flush(false);
@@ -630,7 +628,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       // Only while the account exists and still has the password and email that were checked.
       const started = db
         .prepare("INSERT INTO auth_sessions (token, user, expires, seen) SELECT ?, id, ?, ? FROM auth_users WHERE id = ? AND password = ? AND email = ?")
-        .run(tokenHash(token), now + SESSION_DAYS * DAY, now, user.id, hash, user.email);
+        .run(tokenHash(token), now + SESSION_MS, now, user.id, hash, user.email);
       if (started.changes === 0) throw WRONG();
       emit("signed-in", { userId: user.id, from: how.from, by: how.by });
       db.prepare(
@@ -655,11 +653,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     endSession(token, from) {
       if (typeof token !== "string" || !token) return;
       const ended = db.prepare("DELETE FROM auth_sessions WHERE token = ? RETURNING user").get(tokenHash(token)) as { user: string } | undefined;
-      if (ended) emit("signed-out", { userId: ended.user, ...(from ? { from } : {}) });
+      if (ended) emit("signed-out", { userId: ended.user, from });
     },
 
     endAllSessions(userId, from) {
-      if (endAllSessions(userId)) emit("signed-out-everywhere", { userId, ...(from ? { from } : {}) });
+      if (endAllSessions(userId)) emit("signed-out-everywhere", { userId, from });
     },
 
     sessionsOf(userId, token) {
@@ -674,11 +672,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
     },
 
     endSessionOf(userId, id, from) {
-      if (typeof id !== "string" || id.length !== SESSION_ID_LENGTH || !/^[\w-]+$/.test(id)) return false;
+      if (typeof id !== "string" || !SESSION_ID.test(id)) return false;
       const rows = db.prepare("SELECT token FROM auth_sessions WHERE user = ?").all(userId) as { token: string }[];
       const found = rows.find((row) => sessionId(row.token) === id);
       const ended = !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
-      if (ended) emit("session-ended", { userId, ...(from ? { from } : {}) });
+      if (ended) emit("session-ended", { userId, from });
       return ended;
     },
 
@@ -728,7 +726,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       const token = newToken();
       const expires = linkExpires("email");
       // To an address with an account already, one that does nothing (for the same work), and an email saying so.
-      // Only while the password just checked is still the account's: a reset meanwhile ends the request too.
+      // Only while the password just checked is still the account's: a reset meanwhile ends the request too. That
+      // condition is why this is its own INSERT, not makeLink's.
       const stored = db
         .prepare("INSERT INTO auth_links (token, kind, email, expires, user) SELECT ?, ?, ?, ?, id FROM auth_users WHERE id = ? AND password = ?")
         .run(tokenHash(token), taken ? "none" : "email", email, expires, userId, hash);

@@ -1,15 +1,15 @@
 // Scenarios 40 to 45 of docs/scenarios.md: the rules for new passwords, and the breached-password check.
 
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { after, before, test } from "node:test";
-import { askForLink, freshEmail, freshPassword, type Harness, signUp, startHarness, unlessBusy, wait, whoIs } from "./harness.ts";
+import { sha1 } from "../helpers.ts";
+import { askForLink, freshEmail, freshPassword, type Harness, isRefusal, signUp, startHarness, unlessBusy, wait, whoIs } from "./harness.ts";
 
 let h: Harness;
 const prefixes: string[] = [];
 let breachMode: "answer" | "hang" = "answer";
 let breached = "";
-const sha1 = (text: string) => createHash("sha1").update(text, "utf8").digest("hex").toUpperCase();
 
 before(async () => {
   h = await startHarness({
@@ -23,7 +23,6 @@ before(async () => {
 });
 after(() => h.close());
 
-const isRefusal = (status: number) => status >= 400 && status < 500;
 /** Characters chosen at random out of `alphabet`, as code points. */
 const randomFrom = (alphabet: string[], length: number) => Array.from({ length }, () => alphabet[(randomBytes(1)[0] as number) % alphabet.length]).join("");
 const ascii = [..."abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789-_"];

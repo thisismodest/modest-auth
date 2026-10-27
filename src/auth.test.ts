@@ -17,6 +17,7 @@ import {
   oldHash,
   openSession,
   PASSWORD,
+  sha1,
   wait,
   watchCrashes,
   withClock,
@@ -60,8 +61,6 @@ const onDisk = (run: (db: DatabaseSync, dir: string) => Promise<void> | void) =>
 const assertGone = (dir: string, text: string) => {
   for (const file of ["auth.db", "auth.db-wal"]) assert.equal(fileHas(join(dir, file), text), false, file);
 };
-
-const sha1 = (text: string) => createHash("sha1").update(text).digest("hex").toUpperCase();
 
 test("an account is an email and a password of 15 to 200 characters, one per email", async () => {
   const { db, auth } = fresh();

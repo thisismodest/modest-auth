@@ -737,7 +737,7 @@ test("my data comes as a file to save, only to the account itself", async () => 
   assert.equal((await send("/auth/my-data")).status, 401);
 });
 
-test("a body read before the handler (a body parser mounted in front) is said plainly, not taken as empty", async () => {
+test("a body read before the handler (a body parser mounted in front) is said plainly, not taken as empty, with every answer's headers", async () => {
   const request = new Request(`${ORIGIN}/auth/sign-in`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
   await request.text();
   await assert.rejects(setup().handler.handle(request, HERE), /before any body parser/);
@@ -759,6 +759,9 @@ test("a body read before the handler (a body parser mounted in front) is said pl
         body: JSON.stringify({ email: "a@example.org", password: PASSWORD }),
       });
       assert.equal(res.status, 500);
+      // The same headers as every other answer: JSON, never kept, never sniffed as anything else.
+      assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+      assert.equal(res.headers.get("cache-control"), "no-store");
     });
     assert.match(String(errors), /before any body parser/);
   } finally {

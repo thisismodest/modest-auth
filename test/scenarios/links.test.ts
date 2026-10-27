@@ -8,6 +8,7 @@ import {
   freshEmail,
   freshPassword,
   type Harness,
+  isRefusal,
   moveAccount,
   rowsMentioning,
   signIn,
@@ -22,8 +23,6 @@ before(async () => {
   h = await startHarness();
 });
 after(() => h.close());
-
-const isRefusal = (status: number) => status >= 400 && status < 500;
 
 test("one password link sent by 20 requests at once makes one account and signs in only one of them (1)", async (t) => {
   const email = freshEmail();

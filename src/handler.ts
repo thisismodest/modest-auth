@@ -26,7 +26,7 @@
 import { type Auth, EMAIL_LINK_MINUTES, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
-import { atMost, traceClient, trusting } from "./limits.ts";
+import { atMost, blockOf, traceClient, trusting } from "./limits.ts";
 import { readAtMost } from "./streams.ts";
 import { DAY } from "./time.ts";
 
@@ -108,7 +108,8 @@ const TOO_SLOW = "sendEmail didn't finish in 30 seconds: pass its signal on to y
 /** The largest body a route reads. */
 const BODY_LIMIT = 4096;
 
-const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
+/** Every answer's headers: JSON, never kept, and never read as anything else (the Node adapter's own failures use them too). */
+export const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
 
 function reply(status: number, body: unknown, cookie?: string, retryAfter?: number): Response {
   const headers = new Headers(HEADERS);
@@ -202,7 +203,7 @@ function linkEmail(link: Link, title: string, site: string, url: string, origin:
 }
 
 export function createHandler(auth: Auth, options: HandlerOptions): Handler {
-  const { origin } = siteOrigin(options.origin);
+  const { origin, secure } = siteOrigin(options.origin);
   const { linkPage, sendEmail } = options;
   if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage))
     throw new Error('linkPage must be a path on the site, such as "/account/link".');
@@ -230,13 +231,13 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   let notesSaid = 0;
   let notesUnsaid = 0;
   let notesMinute = 0;
-  const notSent = (why: string) => {
+  const notSent = (reason: string) => {
     const now = Math.floor(Date.now() / 60_000);
     if (now !== notesMinute) {
       if (notesUnsaid) console.error(`modest-auth: ${notesUnsaid} more emails weren't sent in the minute before (not each said)`);
       [notesMinute, notesSaid, notesUnsaid] = [now, 0, 0];
     }
-    if (notesSaid++ < 5) console.error(`modest-auth: ${why}`);
+    if (notesSaid++ < 5) console.error(`modest-auth: ${reason}`);
     else notesUnsaid++;
   };
   /** Sent after the answer, so a slow email service doesn't hold it up; not at all if it's no use by then. */
@@ -274,7 +275,8 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     );
   }
   const trusted = trusting(options.trustedProxies);
-  const secure = origin.startsWith("https://");
+  /** This site's own pages, to tell a setting that's off from an attack. */
+  const ownPage = pageOf(origin);
 
   // Setup mistakes, said once each in the log: a few of each kind at most, so nobody can flood it or use them up.
   const said = new Map<string, Set<string>>();
@@ -293,15 +295,15 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       // up to hide another.
       sayOnce(
         "public proxy",
-        trace.key.endsWith("/64") ? `${trace.key.split(":").slice(0, 3).join(":")}::/48` : trace.key,
+        blockOf(trace.key) ?? trace.key,
         `a request from ${proxy.address} passed X-Forwarded-For on. If that's a CDN or proxy in front of this server, add its address ranges to trustedProxies, or its visitors share its sign-in limits; if it's a visitor's own proxy, ignore this.`,
       );
     } else if (proxy) {
-      const name = proxy.where === "loopback" ? "loopback" : "private";
+      const setting = proxy.where === "loopback" ? "loopback" : "private";
       sayOnce(
         "internal proxy",
         proxy.address,
-        `a proxy at ${proxy.address} passes X-Forwarded-For on but isn't trusted, so every visitor counts as it. Add trustedProxies: ["${name}"], and check it adds the client's address rather than passing on the visitor's (${NGINX}).`,
+        `a proxy at ${proxy.address} passes X-Forwarded-For on but isn't trusted, so every visitor counts as it. Add trustedProxies: ["${setting}"], and check it adds the client's address rather than passing on the visitor's (${NGINX}).`,
       );
     }
     if (trace.quietProxy && secure) {
@@ -428,17 +430,17 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     async handle(request, address) {
       const path = new URL(request.url).pathname;
       if (path !== base && !path.startsWith(`${base}/`)) return null;
-      const name = path.slice(base.length + 1);
-      const read = Object.hasOwn(reads, name) ? reads[name] : undefined;
+      const which = path.slice(base.length + 1);
+      const read = Object.hasOwn(reads, which) ? reads[which] : undefined;
       if (read && request.method === "GET") return read(request);
-      const route = Object.hasOwn(routes, name) ? routes[name] : undefined;
+      const route = Object.hasOwn(routes, which) ? routes[which] : undefined;
       if (!route) return refuse(404, "not-found", "Not found.");
       if (request.method !== "POST") return refuse(405, "post-only", "Use POST.");
       if (!fromSite(request)) {
         // This site's own pages at another address (www., or a port) than the one set: the setting, not an attack.
         // Only this site's host is said, so nobody can fill the log, or use the message up, with others.
         const page = pageOf(request.headers.get("origin"));
-        if (page && page.host === pageOf(origin)?.host) {
+        if (page && page.host === ownPage?.host) {
           const came = page.origin;
           // Keyed by scheme and host, without the port: at most four (http or https, with or without www.), all this site's.
           sayOnce(

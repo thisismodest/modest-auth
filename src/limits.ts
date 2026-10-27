@@ -124,7 +124,7 @@ function ipv6(text: string): number[] | null {
 }
 
 /** An address, read: IPv4 as four numbers, IPv6 as eight. */
-export type Address = { v4: number[] } | { v6: number[] };
+type Address = { v4: number[] } | { v6: number[] };
 
 /**
  * An address as written by a connection or a proxy, or null if it isn't one. A port and brackets
@@ -213,7 +213,7 @@ const keyOf = (address: Address) =>
         .join(":")}::/64`;
 
 /** The whole address, as it's written in a message. */
-const written = (address: Address) => ("v4" in address ? address.v4.join(".") : address.v6.map((n) => n.toString(16)).join(":"));
+const asText = (address: Address) => ("v4" in address ? address.v4.join(".") : address.v6.map((n) => n.toString(16)).join(":"));
 
 /**
  * Who a request came from, for limits, and any sign that the proxies in front aren't set up as they
@@ -247,10 +247,13 @@ export function traceClient(
   return {
     key: keyOf(client),
     connection: !!connection,
-    untrustedProxy: hops.length && !trusted(client) ? { address: written(client), where } : null,
+    untrustedProxy: hops.length && !trusted(client) ? { address: asText(client), where } : null,
     quietProxy,
   };
 }
 
 /** Who a request came from, for limits (see traceClient), trusting the proxies in `trustedProxies` and no others. */
 export const addressKey = (client: ClientAddress, trustedProxies: readonly string[] = []): string => traceClient(client, trusting(trustedProxies)).key;
+
+/** An IPv6 /64 (as addressKey gives it)'s /48: the block one home, site, or customer is often given. Null for IPv4. */
+export const blockOf = (key: string) => (key.endsWith("::/64") ? `${key.split(":").slice(0, 3).join(":")}::/48` : null);
