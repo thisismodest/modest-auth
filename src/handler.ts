@@ -225,11 +225,25 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
           : error.name === "TimeoutError" || error.name === "AbortError"
             ? "the email service didn't answer in 30 seconds"
             : error.name;
+  // Emails not sent, said at most 5 times a minute, with a count of the rest: a flood can't fill the log, and an
+  // email service that's down still shows.
+  let notesSaid = 0;
+  let notesUnsaid = 0;
+  let notesMinute = 0;
+  const notSent = (why: string) => {
+    const now = Math.floor(Date.now() / 60_000);
+    if (now !== notesMinute) {
+      if (notesUnsaid) console.error(`modest-auth: ${notesUnsaid} more emails weren't sent in the minute before (not each said)`);
+      [notesMinute, notesSaid, notesUnsaid] = [now, 0, 0];
+    }
+    if (notesSaid++ < 5) console.error(`modest-auth: ${why}`);
+    else notesUnsaid++;
+  };
   /** Sent after the answer, so a slow email service doesn't hold it up; not at all if it's no use by then. */
   const queue = (to: string, subject: string, text: string, until: number) =>
     setImmediate(() => {
       sending(async () => {
-        if (Date.now() >= until) return console.error("modest-auth: an email wasn't sent: its link ran out while it waited");
+        if (Date.now() >= until) return notSent("an email wasn't sent: its link ran out while it waited");
         // Waited for until it ends, or a second after its signal aborts at 30 seconds (time for a send that passed the
         // signal on to stop): one that ignores the signal can't hold a place.
         const signal = AbortSignal.timeout(30_000);
@@ -237,7 +251,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
           signal.addEventListener("abort", () => setTimeout(() => fail(new Error(TOO_SLOW)), 1000).unref(), { once: true }),
         );
         await Promise.race([Promise.resolve().then(() => sendEmail(to, subject, text, { signal })), late]);
-      }).catch((error: unknown) => console.error("modest-auth: an email couldn't be sent:", why(error)));
+      }).catch((error: unknown) => notSent(`an email couldn't be sent: ${why(error)}`));
     });
   const send = (link: Link | null) => {
     if (!link) return;
