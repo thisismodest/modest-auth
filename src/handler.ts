@@ -307,9 +307,9 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     return token && user ? { token, user } : null;
   };
   const userOf = (request: Request) => signedInAs(request)?.user ?? null;
-  const signedIn = (user: User, old: string | null) => {
+  const signedIn = (user: User, old: string | null, from: string) => {
     // A fresh session at each sign-in, and the one the browser had ended: nobody can plant a session and wait.
-    if (old) auth.endSession(old);
+    if (old) auth.endSession(old, from);
     return reply(200, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
   };
   /** Signed out: the session cookie cleared. */
@@ -342,30 +342,30 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     link: (_r, b, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
     "set-password": async (r, b, from) => {
       const user = await auth.usePasswordLink(b.token ?? "", b.password ?? "", from);
-      const answer = signedIn(user, tokenOf(r));
+      const answer = signedIn(user, tokenOf(r), from);
       if (!user.made) passwordChanged(user.email);
       return answer;
     },
-    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r)),
-    "sign-in": async (r, b, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r)),
-    "sign-out": (r) => {
+    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
+    "sign-in": async (r, b, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r), from),
+    "sign-out": (r, _b, from) => {
       const token = tokenOf(r);
-      if (token) auth.endSession(token);
+      if (token) auth.endSession(token, from);
       return signedOut();
     },
-    "sign-out-everywhere": (r) => {
+    "sign-out-everywhere": (r, _b, from) => {
       const user = userOf(r);
-      if (user) auth.endAllSessions(user.id);
+      if (user) auth.endAllSessions(user.id, from);
       return signedOut();
     },
-    "end-session": own(({ token, user }, b: Body) => {
+    "end-session": own(({ token, user }, b: Body, from: string) => {
       const current = auth.sessionsOf(user.id, token).find((session) => session.current)?.id === b.id;
-      if (!auth.endSessionOf(user.id, b.id ?? "")) return refuse(404, "not-found", "There's no such session.");
+      if (!auth.endSessionOf(user.id, b.id ?? "", from)) return refuse(404, "not-found", "There's no such session.");
       return reply(200, {}, current ? clearedCookie(origin) : undefined);
     }),
     password: own(async ({ user }, b: Body, from: string) => {
       const changed = await auth.changePassword(user.id, b.current ?? "", b.next ?? "", from);
-      const answer = signedIn(changed, null);
+      const answer = signedIn(changed, null, from);
       passwordChanged(changed.email);
       return answer;
     }),

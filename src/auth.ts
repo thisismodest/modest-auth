@@ -160,17 +160,17 @@ export type Auth = {
   startSession(user: User): string;
   /** Who a session's token belongs to, while it lasts. */
   userOf(token: string): User | null;
-  /** Signing out: the session ends. */
-  endSession(token: string): void;
-  /** Signing out everywhere: every session of the user ends. */
-  endAllSessions(userId: string): void;
+  /** Signing out: the session ends. `from`, where it came from, for the event. */
+  endSession(token: string, from?: string): void;
+  /** Signing out everywhere: every session of the user ends. `from`, where it came from, for the event. */
+  endAllSessions(userId: string, from?: string): void;
   /**
    * The user's sessions, the most recently used first (`lastUsed` is written down at most hourly). `token`: the
    * session asking, marked `current`.
    */
   sessionsOf(userId: string, token: string): Session[];
   /** Ends one of the user's sessions, by its `id`; false if it has none of that id. */
-  endSessionOf(userId: string, id: string): boolean;
+  endSessionOf(userId: string, id: string, from?: string): boolean;
   /** Everything kept about the user's account, or null if there's no such account. */
   dataOf(userId: string): AccountData | null;
   /** A new password, given the current one. Every session of the user ends. */
@@ -652,14 +652,14 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       return { id: row.id, email: row.email };
     },
 
-    endSession(token) {
+    endSession(token, from) {
       if (typeof token !== "string" || !token) return;
       const ended = db.prepare("DELETE FROM auth_sessions WHERE token = ? RETURNING user").get(tokenHash(token)) as { user: string } | undefined;
-      if (ended) emit("signed-out", { userId: ended.user });
+      if (ended) emit("signed-out", { userId: ended.user, ...(from ? { from } : {}) });
     },
 
-    endAllSessions(userId) {
-      if (endAllSessions(userId)) emit("signed-out-everywhere", { userId });
+    endAllSessions(userId, from) {
+      if (endAllSessions(userId)) emit("signed-out-everywhere", { userId, ...(from ? { from } : {}) });
     },
 
     sessionsOf(userId, token) {
@@ -673,12 +673,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions = {}): Auth {
       return rows.map((row) => ({ id: sessionId(row.token), started: startedAt(row.expires), lastUsed: row.seen, current: row.token === mine }));
     },
 
-    endSessionOf(userId, id) {
+    endSessionOf(userId, id, from) {
       if (typeof id !== "string" || id.length !== SESSION_ID_LENGTH || !/^[\w-]+$/.test(id)) return false;
       const rows = db.prepare("SELECT token FROM auth_sessions WHERE user = ?").all(userId) as { token: string }[];
       const found = rows.find((row) => sessionId(row.token) === id);
       const ended = !!found && db.prepare("DELETE FROM auth_sessions WHERE token = ? AND user = ?").run(found.token, userId).changes > 0;
-      if (ended) emit("session-ended", { userId });
+      if (ended) emit("session-ended", { userId, ...(from ? { from } : {}) });
       return ended;
     },
 
