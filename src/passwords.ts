@@ -80,7 +80,12 @@ export function checkNewPassword(password: string, email: string): void {
   const local = reduce(email.slice(0, email.indexOf("@")));
   const fromEmail = characters(local) >= 6 && reduced.includes(local);
   const list = commonPasswords();
-  const common = list.has(reduced) || list.has(reduced.replace(/\p{N}+$/u, ""));
+  // A common password with numbers on the end ("password2024", or an all-digit one with a year): try it
+  // without all its trailing digits, and without just the last few, so the digits of a common one remain.
+  const trailing = (/\p{N}+$/u.exec(reduced)?.[0] ?? "").length;
+  const bare = [reduced, reduced.slice(0, reduced.length - trailing)];
+  for (let n = 1; n <= Math.min(trailing, 8); n++) bare.push(reduced.slice(0, -n));
+  const common = bare.some((guess) => guess && list.has(guess));
   if (new Set(normal.toLowerCase()).size < 4 || fromEmail || common) {
     throw new AuthError("common-password", "That password is too easy to guess. Please choose another: a few unrelated words together works well.");
   }
