@@ -20,6 +20,11 @@ Every change that affects how it's used, or what it promises. The format follows
 - `HASHING`: how many hashes run at once on this machine, and how many may wait,
   beyond which a sign-in is refused as busy.
 
+### Fixed
+
+- The Node adapter's own failure answer (a 500) has every other answer's headers,
+  `x-content-type-options: nosniff` included.
+
 ## [0.4.1] - 2026-10-27
 
 ### Fixed
