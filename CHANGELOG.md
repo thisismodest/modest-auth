@@ -6,6 +6,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.5.0] - 2026-10-27
+
 ### Changed
 
 - Password hashing is sized to the machine, not fixed at two at a time: no more hashes
