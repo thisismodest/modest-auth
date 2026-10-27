@@ -41,6 +41,15 @@ function webRequest(req: IncomingMessage, withBody: boolean): Request {
     if (value === undefined) continue;
     for (const one of Array.isArray(value) ? value : [value]) headers.append(name, one);
   }
+  // Node keeps only the first of two Content-Type headers, so "application/json" then "text/plain" would pass
+  // as JSON: every one is passed on instead, and the handler, which takes exactly one type, refuses them.
+  const types = req.rawHeaders.filter((_, i) => i % 2 === 0 && req.rawHeaders[i]?.toLowerCase() === "content-type").length;
+  if (types > 1) {
+    headers.delete("content-type");
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      if (req.rawHeaders[i]?.toLowerCase() === "content-type") headers.append("content-type", req.rawHeaders[i + 1] ?? "");
+    }
+  }
   // Methods a Web-standard Request can't carry (TRACE and the like) are treated as GET.
   const method = req.method === "POST" || req.method === "HEAD" ? req.method : "GET";
   const body = withBody && method === "POST" ? { body: Readable.toWeb(req) as ReadableStream<Uint8Array>, duplex: "half" } : {};

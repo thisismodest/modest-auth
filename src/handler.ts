@@ -123,7 +123,9 @@ const refuse = (status: number, code: string, message: string, retryAfter?: numb
 async function readBody(request: Request): Promise<Record<string, string> | Response> {
   // Read already, by a body parser in front: a mistake in how the handler is mounted, said plainly (or every route would see no fields).
   if (request.bodyUsed) throw new Error(BODY_READ);
-  if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return refuse(415, "json-only", "Send JSON.");
+  // Exactly JSON, with nothing but a charset after it: not "application/jsonx", nor two types run together
+  const type = (request.headers.get("content-type") ?? "").toLowerCase();
+  if (!/^application\/json\s*(;\s*charset=[\w-]+\s*)?$/.test(type)) return refuse(415, "json-only", "Send JSON.");
   if (Number(request.headers.get("content-length") ?? 0) > BODY_LIMIT) return refuse(413, "too-large", "That's too large.");
   let bytes: Buffer | "too-large";
   try {
