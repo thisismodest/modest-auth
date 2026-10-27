@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { code, must, oldHash } from "../test/helpers.ts";
-import { checkNewPassword, checkPassword, hashPassword } from "./passwords.ts";
+import { checkNewPassword, checkPassword, hashesAtOnce, hashPassword, memoryToUse, threadPool } from "./passwords.ts";
 
 test("a password is kept only as a salted scrypt hash, which records its cost", async () => {
   const stored = await hashPassword("correct horse battery");
@@ -105,4 +105,49 @@ test("a password that would be too long to sign in with is refused at sign-up to
 test("strong passwords without letters are fine: digits, symbols, or emoji", () => {
   for (const p of ["83920174659283746510", "#%&*+=?@^~|!$<>[]", "🌲🦊🌙🍄🪵🐝🌊🔥🍂🦉🌾🪨🌻🐌🌿"])
     assert.doesNotThrow(() => checkNewPassword(p, "ann@example.org"), p);
+});
+
+const GB = 1024 ** 3;
+const MB = 1024 ** 2;
+
+test("hashes at once fit the machine: its cores, half its memory, and Node's thread pool less two (85)", () => {
+  const cases: [string, { cores: number; memory: number; pool: number }, number][] = [
+    ["1 core", { cores: 1, memory: 1 * GB, pool: 4 }, 1],
+    ["a 512MB container", { cores: 4, memory: 512 * MB, pool: 4 }, 2],
+    ["many cores and plenty of memory, with Node's usual pool", { cores: 12, memory: 24 * GB, pool: 4 }, 2],
+    ["16 cores, 32GB, and a pool of 10", { cores: 16, memory: 32 * GB, pool: 10 }, 8],
+    ["a huge machine", { cores: 128, memory: 1024 * GB, pool: 1024 }, 16],
+    ["too little memory for even one", { cores: 8, memory: 100 * MB, pool: 8 }, 1],
+    ["a pool of 1", { cores: 8, memory: 8 * GB, pool: 1 }, 1],
+    ["nonsense figures", { cores: Number.NaN, memory: -1, pool: 0 }, 1],
+  ];
+  for (const [what, machine, expected] of cases) assert.equal(hashesAtOnce(machine), expected, what);
+  // However big the flood, hashing takes at most half the memory (but for the one it always allows)
+  for (const memory of [256 * MB, 512 * MB, 1 * GB, 3 * GB, 64 * GB]) {
+    const atOnce = hashesAtOnce({ cores: 64, memory, pool: 64 });
+    assert.ok(atOnce === 1 || atOnce * 128 * MB <= memory / 2, `${memory / MB}MB: ${atOnce} at once`);
+  }
+});
+
+test("the memory it sizes from is the container's limit, or the machine's when there's none, or the limit is more than the machine (86)", () => {
+  assert.equal(memoryToUse({ limit: 512 * MB, total: 8 * GB }), 512 * MB);
+  assert.equal(memoryToUse({ limit: 0, total: 8 * GB }), 8 * GB, "Node says 0 when there's no limit");
+  assert.equal(memoryToUse({ limit: 2 ** 62, total: 8 * GB }), 8 * GB, "a limit of 'no limit' as a huge number");
+  assert.equal(memoryToUse({ limit: Number.NaN, total: 8 * GB }), 8 * GB);
+});
+
+test("the thread pool is read as libuv reads UV_THREADPOOL_SIZE, or as fewer where the setting is odd: never more threads than there are (87)", () => {
+  const cases: [string | undefined, number][] = [
+    [undefined, 4],
+    ["", 1],
+    ["abc", 1],
+    ["0", 1],
+    ["6", 6],
+    [" 6", 6],
+    ["6x", 6],
+    ["-3", 1], // libuv makes 1,024 of this; reading it as 1 only means fewer hashes at once
+    ["2000", 1024],
+    ["1024", 1024],
+  ];
+  for (const [setting, expected] of cases) assert.equal(threadPool(setting), expected, JSON.stringify(setting));
 });

@@ -112,6 +112,14 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 73. Busy, unknown and known emails get 503 at the same rate.
 74. Whether `set-password`, `password`, and `delete-account` go through the same gate, and whether busy there counts towards the 10 an hour.
 
+### Sized to the machine (added with 0.5.0, before the code)
+
+85. How many hashes at once, for machines of each shape: 1 core gives 1; a 512MB container gives 2; many cores and plenty of memory, with Node's usual pool of 4 threads, gives 2; 16 cores, 32GB, and a pool of 10 give 8; nothing gives more than 16, or fewer than 1. However big the flood, hashing never takes more than half the memory the process may use.
+86. The memory it sizes from: a container's limit when there is one; the machine's when there's none (Node says 0), or when the "limit" is more than the machine has.
+87. A thread-pool setting that's odd (unset, empty, `abc`, `0`, `-3`, `6x`, `2000`): read as Node's own libuv reads it, and never taken as more threads than there are.
+88. `HASHING` says how many at once and how many may wait (25 for each), matching what a flood meets: sign-ins beyond both are refused as busy.
+89. While hashing is as busy as it gets, reading a file (which shares Node's thread pool) still takes moments, not seconds.
+
 ## Events and the log
 
 75. **[LIKELY]** A full run's stdout, stderr, and every onEvent: no password, token, cookie value, email, or token's SHA-256.
@@ -136,7 +144,7 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 - "Counted as characters": code points or grapheme clusters?
 - The 4KB body limit may refuse 200-character passwords the rules allow.
 - "The same work" and "the same timing" have no stated tolerance.
-- The hashing queue's size and the busy threshold aren't stated.
+- The hashing queue's size and the busy threshold aren't stated. (From 0.5.0: `HASHING` states them.)
 - Log notes are "a few times each at most" in one place, "5 sources" in another.
 - "Ranges wide enough to be much of the internet": no threshold.
 - "Opened where the account is signed in": the same session, or any of the account's?

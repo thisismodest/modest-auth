@@ -6,7 +6,7 @@ it brings. Nothing here is a promise of a date.
 ## Now: the core (0.x, unreleased)
 
 - [x] Accounts: email and password
-- [x] Passwords: scrypt at OWASP's cost, constant-time checks, hashing two at a time
+- [x] Passwords: scrypt at OWASP's cost, constant-time checks, hashing a few at a time, sized to the machine
 - [x] Sessions: hashed 256-bit tokens, sign out, sign out everywhere
 - [x] The session cookie: `__Host-`, `Secure`, `HttpOnly`, `SameSite=Lax`
 - [x] Limits per account and address, per account, and per address; IPv6 by /64;
@@ -65,10 +65,10 @@ without becoming a plugin system.
   NIST AAL2.
 - **More sign-ins at once,** for a site with a few thousand people signing in around
   the same time. Checking a session is already cheap; a password sign-in is costly by
-  design (about 170 ms and 130MB each, two at a time per process). First a benchmark
-  anyone can run, with published numbers; then using more of the server, such as
-  several processes sharing one database, tested and documented, or more checks at
-  once where the memory allows. Never by lowering the hashing cost.
+  design (about 170 ms and 130MB each; from 0.5.0, as many at once as the machine's
+  cores, memory, and thread pool allow). First a benchmark anyone can run, with
+  published numbers; then several processes sharing one database, tested and
+  documented. Never by lowering the hashing cost.
 
 ## Never
 

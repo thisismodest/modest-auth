@@ -24,4 +24,4 @@ export { AuthError, type AuthErrorCode } from "./errors.ts";
 export { createHandler, type Handler, type HandlerOptions } from "./handler.ts";
 export { addressKey, type ClientAddress } from "./limits.ts";
 export { handleNode, toRequest } from "./node.ts";
-export { LONGEST_PASSWORD, SHORTEST_PASSWORD } from "./passwords.ts";
+export { HASHING, LONGEST_PASSWORD, SHORTEST_PASSWORD } from "./passwords.ts";

@@ -105,9 +105,11 @@ this is for you.
   each give the same answer, after the same work, whether or not the email has one;
   and an email goes either way (for a sign-in link to an email with no account, one
   saying so). See the threat model for one small exception.
-- **Sign-ins can't take the server down:** password hashing runs two at a time, with a
-  short queue. Under a flood, further sign-ins are refused as "busy" (without counting
-  against anyone) until it passes.
+- **Sign-ins can't take the server down:** password hashing runs only a few at a time,
+  sized to the machine (no more than its cores, half its memory, or Node's thread pool
+  less two, so file reads always keep a thread), with a short queue. Under a flood,
+  further sign-ins are refused as "busy" (without counting against anyone) until it
+  passes.
 - **Only the site's own pages can change anything:** every route that does requires
   the site's own `Origin`, and a small JSON body (which another site's page can't send
   without the browser asking first).
@@ -351,6 +353,11 @@ Worth knowing:
   network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
   shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one
   organisation) shares 200, and 20 links.
+- **Hashing is sized when modest-auth loads,** from the machine: 2 at once on most
+  small servers, 1 on a single core, and up to 16 on a large one. `HASHING` says how
+  many run at once and how many may wait. Node's thread pool is 4 threads unless
+  `UV_THREADPOOL_SIZE` is set before Node starts, so a machine with more cores hashes
+  more at once only once that's raised (to the cores plus two, say).
 - **With `trustedProxies: ["private"]`,** anyone on your own private network is trusted
   as a proxy would be, so could write their own address into `X-Forwarded-For`: name
   the proxy's address instead if strangers can reach that network.

@@ -13,6 +13,7 @@
 
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { availableParallelism, totalmem } from "node:os";
 import { AuthError } from "./errors.ts";
 import { atMost } from "./limits.ts";
 
@@ -30,15 +31,56 @@ export const LONGEST_TYPED = LONGEST_PASSWORD * 2;
 
 type Cost = typeof CURRENT;
 
-// Each hash takes about 128MB and one of Node's few worker threads (which file
-// reads share): two at once, so a flood of sign-ins can't stall the server.
-const twoAtOnce = atMost(2, 50);
+/** The memory one hash takes: 128 × N × r bytes (128MB at the current cost). */
+const HASH_MEMORY = 128 * 2 ** CURRENT.ln * CURRENT.r;
+/** More at once than this is never needed: a site this busy wants more servers, not more threads. */
+const MOST_AT_ONCE = 16;
+
+/**
+ * How many hashes run at once on a machine: no more than its cores (more makes none
+ * faster), than fit in half its memory (so a flood of sign-ins can't take the rest),
+ * or than Node's thread pool less two (hashing runs there, and file reads and DNS
+ * lookups share it, so they always keep a thread). At least one, at most 16.
+ */
+export function hashesAtOnce({ cores, memory, pool }: { cores: number; memory: number; pool: number }): number {
+  const fits = Math.min(cores, Math.floor(memory / 2 / HASH_MEMORY), pool - 2, MOST_AT_ONCE);
+  return Number.isFinite(fits) && fits >= 1 ? Math.floor(fits) : 1;
+}
+
+/** The memory the process may use: its container's limit, or the machine's if there's none (Node says 0) or it's more than the machine has. */
+export const memoryToUse = ({ limit, total }: { limit: number; total: number }) => (limit > 0 && limit < total ? limit : total);
+
+/**
+ * Node's thread pool, from UV_THREADPOOL_SIZE as libuv reads it (a leading number, 4
+ * if unset, 1 if none, at most 1,024), or 1 where the setting is odd: never more
+ * threads than there are.
+ */
+export function threadPool(setting: string | undefined): number {
+  if (setting === undefined) return 4;
+  const leading = /^\s*(\d+)/.exec(setting)?.[1];
+  return leading ? Math.min(Math.max(Number(leading), 1), 1024) : 1;
+}
+
+const atOnce = hashesAtOnce({
+  cores: availableParallelism(),
+  memory: memoryToUse({ limit: process.constrainedMemory(), total: totalmem() }),
+  pool: threadPool(process.env.UV_THREADPOOL_SIZE),
+});
+
+/**
+ * Password hashing on this machine: how many hashes run at once, and how many may wait
+ * (25 for each); beyond both, a sign-in is refused as busy. Worked out once, when
+ * modest-auth is loaded: set UV_THREADPOOL_SIZE before Node starts to give it more.
+ */
+export const HASHING: { readonly atOnce: number; readonly waiting: number } = Object.freeze({ atOnce, waiting: 25 * atOnce });
+
+const gate = atMost(HASHING.atOnce, HASHING.waiting);
 
 /** Throws "busy" if hashing is too far behind to take another. Checked before a try is counted, so refusals cost nobody a try. */
-export const checkHashingFree = () => twoAtOnce.check();
+export const checkHashingFree = () => gate.check();
 
 const derive = (password: string, salt: Buffer, { ln, r, p }: Cost) =>
-  twoAtOnce(
+  gate(
     () =>
       new Promise<Buffer>((done, fail) =>
         scrypt(password.normalize("NFKC"), salt, HASH_BYTES, { N: 2 ** ln, r, p, maxmem: 256 * 1024 * 1024 }, (error, key) =>

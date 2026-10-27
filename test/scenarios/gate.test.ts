@@ -1,7 +1,9 @@
-// Scenarios 72 to 74 of docs/scenarios.md: the concurrency gate on password hashing.
+// Scenarios 72 to 74, and 88 and 89, of docs/scenarios.md: the concurrency gate on password hashing.
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
+import { HASHING } from "../../src/index.ts";
 import { type Answer, askForLink, freshEmail, freshPassword, type Harness, signUp, startHarness, unlessBusy, wait } from "./harness.ts";
 
 let h: Harness;
@@ -73,4 +75,40 @@ test("set-password, password, and delete-account wait at the same gate, and busy
     if (answer.status === 429) break;
   }
   assert.equal(checked, 10, "the busy refusals cost the account none of its 10");
+});
+
+/** Sign-ins sent all at once, by `count` visitors, each to an email with no account. */
+const flood = (count: number) =>
+  Array.from({ length: count }, () => h.visitor().post("/auth/sign-in", { email: freshEmail("nobody"), password: freshPassword() }));
+
+test("HASHING says how many hash at once and how many may wait, and that's what a flood meets (88)", async (t) => {
+  t.diagnostic(`on this machine: ${HASHING.atOnce} at once, ${HASHING.waiting} waiting`);
+  assert.ok(HASHING.atOnce >= 1 && HASHING.atOnce <= 16);
+  assert.equal(HASHING.waiting, 25 * HASHING.atOnce);
+  const within = await Promise.all(flood(HASHING.atOnce + HASHING.waiting));
+  assert.deepEqual(
+    within.filter((a) => a.status === 503).map((a) => a.status),
+    [],
+    "as many as may hash or wait: none refused",
+  );
+  const beyond = await Promise.all(flood(HASHING.atOnce + HASHING.waiting + 30));
+  assert.ok(
+    beyond.some((a) => a.status === 503 && a.json?.error?.code === "busy"),
+    "beyond both: some refused as busy",
+  );
+});
+
+test("while hashing is as busy as it gets, reading a file still takes moments (89)", async (t) => {
+  const sends = flood(HASHING.atOnce + HASHING.waiting);
+  await wait(30);
+  const took: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    const started = performance.now();
+    await readFile(new URL(import.meta.url));
+    took.push(performance.now() - started);
+  }
+  await Promise.all(sends);
+  const middle = [...took].sort((a, b) => a - b)[5] ?? 0;
+  t.diagnostic(`file reads during the flood: ${took.map((ms) => ms.toFixed(1)).join(", ")} ms`);
+  assert.ok(middle < 25, `a file read took ${middle.toFixed(1)} ms in the middle, waiting behind the hashing`);
 });

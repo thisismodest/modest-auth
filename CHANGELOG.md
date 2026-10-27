@@ -6,6 +6,20 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+### Changed
+
+- Password hashing is sized to the machine, not fixed at two at a time: no more hashes
+  at once than its cores, than fit in half the memory the process may use (a
+  container's limit, if there is one), or than Node's thread pool less two (so file
+  reads and DNS lookups always keep a thread), from 1 to 16. The queue is 25 for each.
+  Most small servers still hash 2 at once; a single core hashes 1 (as fast, with half
+  the memory). For more, raise `UV_THREADPOOL_SIZE` before Node starts.
+
+### Added
+
+- `HASHING`: how many hashes run at once on this machine, and how many may wait,
+  beyond which a sign-in is refused as busy.
+
 ## [0.4.1] - 2026-10-27
 
 ### Fixed
