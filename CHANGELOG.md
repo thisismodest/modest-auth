@@ -6,6 +6,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.4.1] - 2026-10-27
+
 ### Fixed
 
 Found by scenario tests written from the README and threat model alone, by a reviewer
