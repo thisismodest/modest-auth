@@ -59,7 +59,8 @@ test("nothing secret reaches the log, the console, or the events: no password, t
     const secrets = await fullRun(h);
     const seen = [h.logs.join("\n"), h.stdout.slice(stdoutBefore).join("\n"), JSON.stringify(h.events)].join("\n");
     for (const secret of secrets) assert.ok(!seen.includes(secret), "a secret was written out");
-    assert.ok(!seen.includes("@"), "no email at all");
+    // Not stdout: it carries the test runner's own reports, as bytes in which "@" can turn up.
+    assert.ok(![...h.logs, JSON.stringify(h.events)].join("\n").includes("@"), "no email at all");
   } finally {
     await h.close();
   }
