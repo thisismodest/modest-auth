@@ -6,6 +6,27 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+### Fixed
+
+Found by scenario tests written from the README and threat model alone, by a reviewer
+who didn't see the code (`test/scenarios/`, `docs/scenarios.md`).
+
+- A common password made only of digits, with numbers added on the end (such as
+  `1234567890123452024`), is refused, as the README promised. Before, taking the
+  trailing numbers off left nothing to compare.
+- Only `application/json` is taken (with a charset, or none): `application/jsonx`,
+  two types run together, and two `Content-Type` headers are refused. Before, any type
+  starting `application/json` was taken, and Node kept only the first of two headers.
+  A browser asks before sending any of these from another site, so they were never a
+  way round the Origin check.
+- The `signed-out`, `signed-out-everywhere`, and `session-ended` events say where they
+  came from, as every event does. `endSession`, `endAllSessions`, and `endSessionOf`
+  take it as an optional last argument.
+- Emails not sent (a full queue, or a failing email service) are logged at most 5 times
+  a minute, with a count of the rest, so a flood can't fill the log.
+- The README says plainly that using a link ends the address's other links, and that
+  asking for too many links is answered `429`.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added

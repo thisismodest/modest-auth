@@ -30,7 +30,7 @@
     "zero-dependency"
   ],
   "scripts": {
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test \"src/**/*.test.ts\" \"test/scenarios/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && cp src/common-passwords.txt dist/",
     "check": "npm run rules && npm run typecheck && npm test && npm run build",

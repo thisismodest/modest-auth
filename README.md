@@ -59,9 +59,9 @@ this is for you.
 - **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
   choose a password, 15 to sign in). The token follows `#` in the link, which browsers
   never send to a server, so it stays out of logs and `Referer` headers. At most 3 of
-  each kind to one address in 15 minutes, and every one sent stays usable for at least
-  that long, so nobody can flood an inbox, or (while the email queue isn't full) stop
-  its owner getting a link.
+  each kind to one address in 15 minutes, and asking for more never ends the ones sent
+  (using one does: then the address's other links end too), so nobody can flood an
+  inbox, or (while the email queue isn't full) stop its owner getting a link.
 - **New passwords** follow NIST SP 800-63B: 15 to 200 characters (counted as
   characters, not bytes), any characters at all, no rules about mixing them, but not
   one of the 5,500 passwords that long in two public lists of common ones (one from
@@ -194,8 +194,9 @@ The routes take and give JSON:
 | `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to choose a new password |
 | `POST /auth/delete-account` | `{ password }` | Deletes the account and its sessions |
 
-The two that send a link answer `202` and `{}` whatever happens, so nobody can tell
-whether an email has an account. Every `POST` must come from the site's own pages, with
+The two that send a link answer `202` and `{}` whether or not the email has an account,
+so nobody can tell which. (An address that has asked for too many links is answered `429`,
+with `Retry-After`, again whether or not the email has one.) Every `POST` must come from the site's own pages, with
 `Content-Type: application/json` (even with no body). A refusal is `{ error: { code, message } }`, with an HTTP status to
 match (and `Retry-After` when paused or busy); the message is fit to show. [`examples/node-http.ts`](examples/node-http.ts) is a whole working app
 in one file: run it with `node examples/node-http.ts`.
