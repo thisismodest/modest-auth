@@ -1193,7 +1193,7 @@ test("allow: someone it stops allowing can't use a link sent before, start a ses
   assert.throws(() => auth.startSession(signedIn), code("wrong-credentials"));
   assert.throws(() => auth.requestEmailChange(session, "ann@new.example", HERE), code("sign-in-again"));
   allowed = true;
-  assert.deepEqual(auth.userOf(session), ann, "allowed again, the session is theirs again");
+  assert.equal(auth.userOf(session), null, "allowed again, they sign in again: the old session ended for good");
 });
 
 test("allow: a move to an address it refuses sends nothing, and the link can't be used if it's refused later", async () => {
@@ -1224,4 +1224,53 @@ test("allow: a mistake in it is a refusal, said in the log without its details",
     assert.match(String(logged), /refusal/);
     assert.doesNotMatch(String(logged), /secret|ann@/);
   }
+});
+
+test("the copy of an account's data looks the same whether a move it asked for is to a taken, free, or refused address", async () => {
+  const { auth } = fresh({ allow: ({ email }) => email !== "refused@example.org" });
+  await signUp(auth, "bob@example.org", PASSWORD, "192.0.2.220");
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = auth.startSession(ann);
+  const shown = (to: string, from: string) => {
+    auth.requestEmailChange(session, to, from);
+    return must(auth.dataOf(ann.id))
+      .links.filter((link) => link.email === to)
+      .map((link) => link.kind);
+  };
+  assert.deepEqual(shown("bob@example.org", "192.0.2.221"), ["email"], "taken");
+  assert.deepEqual(shown("free@example.org", "192.0.2.222"), ["email"], "free");
+  assert.deepEqual(shown("refused@example.org", "192.0.2.223"), ["email"], "refused");
+});
+
+test("a session allow refuses ends for good: allowed again, it doesn't come back", async () => {
+  let allowed = true;
+  const { auth } = fresh({ allow: () => allowed });
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = auth.startSession(ann);
+  allowed = false;
+  assert.equal(auth.userOf(session), null);
+  allowed = true;
+  assert.equal(auth.userOf(session), null, "still signed out");
+});
+
+test("a password check refuses an address allow refuses, as a wrong password, even before any session starts", async () => {
+  let allowed = true;
+  const { auth } = fresh({ allow: () => allowed });
+  await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  allowed = false;
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, HERE), code("wrong-credentials"));
+});
+
+test("a password change still hashing when its session is signed out changes nothing", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const thief = auth.startSession(ann);
+  const changing = auth.changePassword(thief, "the thief's own long password", "192.0.2.230").then(
+    () => null,
+    (error: unknown) => error,
+  );
+  // The owner ends every session while the thief's change is hashing.
+  auth.endAllSessions(ann.id);
+  assert.ok(code("sign-in-again")(await changing));
+  assert.equal((await auth.signIn("ann@example.org", PASSWORD, "192.0.2.231")).id, ann.id, "the password is the owner's still");
 });

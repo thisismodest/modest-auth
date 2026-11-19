@@ -49,7 +49,8 @@ safely, this is for you.
   one; where there aren't, opening a sign-in link makes the account.
 - **Who may have an account,** if not everyone: your `allow(contact)` is asked before a
   link is sent, an account made, or a session started or used, so someone you stop
-  allowing is signed out at their next request. It can only refuse, never let anyone in,
+  allowing is signed out at their next request, for good (their sessions end). It can
+  only refuse, never let anyone in,
   and the answer to whoever's asking is the same either way.
 - **Changes need a recent sign-in:** changing the password or email, or deleting the
   account, needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older
@@ -63,8 +64,8 @@ safely, this is for you.
   password link (or, without passwords, a sign-in link) at the old address does the
   same. So for 7 days the old address can take the account back, even one handed on to
   someone else.
-- **Notices:** a message to the account when its password changes, and to the old
-  address when its email does.
+- **Notices:** a message to the account when its password changes or it's deleted, and
+  to the old address when its email does.
 - **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
   was made, its sessions, and links waiting to be used; nothing that signs anyone in.
 - **A record of events,** if you want one: sessions started, wrong passwords, pauses,

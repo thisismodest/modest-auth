@@ -1059,3 +1059,12 @@ test("without passkeys, their routes aren't there", async () => {
   }
   assert.equal((await send("/auth/passkeys")).status, 404);
 });
+
+test("deleting an account tells its address, and every answer says only the site's own pages may read it", async () => {
+  const { send, messages, signUp } = setup();
+  await signUp("ann@example.org");
+  const deleted = await send("/auth/delete-account", {});
+  assert.equal(deleted.headers.get("cross-origin-resource-policy"), "same-origin");
+  await afterwards();
+  assert.deepEqual(messages.at(-1), { kind: "account-deleted", to: { email: "ann@example.org" } });
+});

@@ -37,7 +37,7 @@ round modest-auth.
 | Threat | Mitigation | Where |
 | --- | --- | --- |
 | A way in the site didn't choose | How people sign in must be given (`signInWith`): a link always, and beside it a password, a passkey, or both; anything else refused at start-up. A way that isn't chosen is off entirely: its routes aren't there, and its functions refuse to run | `auth.ts`, `handler.ts` |
-| Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
+| Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request, for good: their sessions end, so none comes back if it allows them again. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
 | Signing up with someone else's email | An account is made only by a link emailed to the address: where there are passwords, whoever opens it chooses one; where there aren't, opening a sign-in link makes it | `auth.ts` |
 | Guessing, reusing, or stretching a link | 256-bit tokens, kept only as SHA-256 hashes; single-use, taken in one statement; 60 minutes to choose a password, 15 to sign in; a password link can't sign in, nor a sign-in link choose a password; a password refused at a link doesn't use it up; using a link, a new password, or deleting the account ends the email's other links | `auth.ts` |
 | A link leaking from its URL | The token follows `#`, which browsers never send to a server or in `Referer`; the link page takes it out of the address bar; a mail service that opens links to check them can't use one | `handler.ts`, `examples/node-http.ts` |
@@ -61,8 +61,8 @@ round modest-auth.
 | A stolen session changing the account (its password, its email, or deleting it) | Each needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older one is told to sign in again, by any way the site has. Nothing asks for the password, so a stolen session can't be used to guess it | `auth.ts` |
 | Attaching your account to someone else's address (sending them your own move link) | Only the account being moved, signed in, can use its link | `auth.ts`, `handler.ts` |
 | A stolen password used to move an account away for good | The old address is told, with a link (for 7 days) that moves it back, signs everyone out, makes the password useless, and sends a link to get back in (to choose a new password, or, without passwords, to sign in; made by the undo itself, so no limit can stop it); the link that makes accounts (a password link, or without passwords a sign-in link) to that address does the same. Every move gets one; nothing done to the account (a new password, another move) ends it, and using one ends only the same account's later moves' undo links, so a thief's own can't cancel the owner's; such a link restores the account only when just one account was moved away from that address | `auth.ts`, `handler.ts` |
-| Learning who has an account by asking to move yours to their address | The same answer and work either way, and an email either way (to an address with an account, one saying so) | `auth.ts`, `handler.ts` |
-| A change its owner didn't make, unnoticed | A notice to the account's email when its password changes, and to the old address when its email does | `handler.ts` |
+| Learning who has an account by asking to move yours to their address | The same answer and work either way, and an email either way (to an address with an account, one saying so); the copy of the account's data shows the request the same way whatever the address | `auth.ts`, `handler.ts` |
+| A change its owner didn't make, unnoticed | A notice to the account's email when its password changes or it's deleted, and to the old address when its email does | `handler.ts` |
 | Anything checked going ahead after the account changed (a session starting, a move being stored, a password changing, an account going) | Every account has a stamp, a random value replaced whenever how it's reached changes (a new password, a new email, an undone move); each of these goes ahead only while the stamp is still the one that was checked. One rule for every race | `auth.ts` |
 | Guessing a password | scrypt at OWASP's cost (about 50ms a guess); limits per account and address, per account, and per address, counted before hashing so tries sent at once count too | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Easily guessed passwords, sprayed across many accounts | At least 15 characters; 5,500 common passwords that long refused, compared as letters and digits only and without trailing numbers (so adding spaces, punctuation, capitals, or a year doesn't get one through); ones made from the email, or a few characters repeated, refused too | `passwords.ts`, `common-passwords.txt` |
@@ -95,7 +95,7 @@ round modest-auth.
 | Markup or headers carried in an email | Quotes, brackets, and line breaks refused | `emails.ts` |
 | The site's name in emails adding a line to one, hiding text, or standing in for the address | In `emailFor`: up to 60 characters on one line, with no control, invisible, or line-separating characters, or it's refused; the text always gives the site's address with it | `messages.ts` |
 | Writing into the cookie header | Tokens checked against a strict pattern when written and read | `cookies.ts` |
-| Reading a signed-in person's details from another site | Responses are JSON with no CORS headers, and `no-store` | `handler.ts` |
+| Reading a signed-in person's details from another site | Responses are JSON with no CORS headers, `no-store`, and `Cross-Origin-Resource-Policy: same-origin` (so not even a sibling subdomain can load them) | `handler.ts` |
 | Crashing the app with a malformed request (an odd method, a broken URL, a body cut off) | The Node adapter never throws; every such request gets an answer | `node.ts`, `handler.ts` |
 | Stepping round a proxy's rule with an odd path (`/auth\x`, `//x`, `/x/../auth`, `%2e%2e`, a full URL) | With the Node adapter, only plain paths reach the routes. Other servers give the handler a URL they've already worked out; a proxy's rules should match that worked-out path | `node.ts` |
 | Disturbing the app's own requests | The Node adapter doesn't touch a request that isn't for its routes | `node.ts` |
@@ -217,3 +217,8 @@ round modest-auth.
 - **An account with a passkey is still reachable by its link** (and its password, if
   it has one), so it's only as strong as those. Choosing passkeys only, for an account,
   is on the roadmap.
+- **A session that's ended doesn't stop a change already checked against it,** except a
+  password change, which lands only while its session is there. The others don't wait
+  on anything, so there's no gap to use.
+- **Turning passwords off keeps the stored hashes,** unused; turned back on, they work
+  again. Clear them first if that's not wanted.
