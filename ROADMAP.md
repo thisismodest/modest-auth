@@ -100,6 +100,11 @@ give one).
 ## Before 1.0
 
 - [ ] A paid, independent security audit of a release candidate, and its findings fixed
+- [ ] The OpenSSF Best Practices badge (bestpractices.dev), applied for once the audit is
+      done: Passing first (met now), then Silver, which also needs an assurance case (the
+      threat model is most of it), who decides and who releases, how to repeat a build
+      exactly, and who carries the project on if its maintainer can't. Gold needs a
+      second, unaffiliated maintainer reviewing changes.
 - [ ] A requirement-by-requirement check against OWASP ASVS 5.0 (authentication and
       sessions), in `docs/asvs.md`
 - [ ] Two sites using it in production
