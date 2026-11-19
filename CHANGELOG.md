@@ -105,8 +105,9 @@ Found by three rounds of adversarial review of this release.
   so a thief could make the warning say to ignore it. Notices no longer name the passkey
   (the `passkey-added` and `passkey-removed` messages have no `name`), and a name can't
   hold a full stop, so a web address, wherever an app shows it.
-- A passkey sign-in in another process, between a recovery's (or a passkey removal's)
-  new stamp and its passkeys going, could keep a session. Passkeys now go first.
+- A passkey sign-in, or a passkey being added, in another process as a fresh start
+  landed could outlast it. A fresh start now ends every session, passkey, and challenge
+  both before and after the stamp changes, and removing a passkey deletes it first.
 - Moving an account back by hand, to an address a thief had moved it from, sent the
   thief's address an undo link that outlasted the owner's. Moving back while that
   move's undo link lasts is now that undo, and sends none (`useEmailLink`'s `undo` can

@@ -353,3 +353,36 @@ test("an undo takes every passkey before the stamp changes, too", async () => {
   auth.useUndoLink(must(must(moved.undo).token), HERE);
   assert.deepEqual(seen(), [0]);
 });
+
+/**
+ * Another process's passkey and session, stored just as a fresh start clears the account's first (both checked against
+ * the stamp it had then). How many of them are left.
+ */
+const arriveLate = (db: DatabaseSync) => {
+  db.exec(`CREATE TEMP TABLE arrived (done INTEGER);
+    CREATE TEMP TRIGGER arriving AFTER DELETE ON auth_passkeys WHEN NOT EXISTS (SELECT 1 FROM arrived)
+    BEGIN
+      INSERT INTO arrived VALUES (1);
+      INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) VALUES ('late', OLD.user, x'00', -7, 0, 'Late', 0);
+      INSERT INTO auth_sessions (token, user, expires, seen) VALUES ('late', OLD.user, 9000000000000000, 0);
+    END`);
+  return () => count(db, "auth_passkeys WHERE id = 'late'") + count(db, "auth_sessions WHERE token = 'late'");
+};
+
+test("a passkey or session stored in another process as a fresh start begins doesn't outlast it", async () => {
+  {
+    const { db, auth, session } = await setup();
+    add(auth, session);
+    const left = arriveLate(db);
+    auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE, { reset: true });
+    assert.equal(left(), 0, "a reset sign-in link");
+  }
+  {
+    const { db, auth, ann, session } = await setup();
+    add(auth, session);
+    const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
+    const left = arriveLate(db);
+    auth.useUndoLink(must(must(moved.undo).token), HERE);
+    assert.equal(left(), 0, "an undo");
+  }
+});

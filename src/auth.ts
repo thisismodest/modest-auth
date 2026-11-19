@@ -581,12 +581,27 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   };
   /**
    * Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may
-   * have added their own. Always before the stamp changes, so a passkey sign-in in another process either finds no
-   * passkey or read the old stamp, and gets no session (or one that's ended next).
+   * have added their own.
    */
   const forgetPasskeys = (userId: string) => {
     db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
     endChallenges(userId);
+  };
+  /**
+   * A fresh start for the account: `change` gives it a new stamp (and whatever else), and every session, passkey, and
+   * challenge ends, both before and after. Another process can't hold one of these across the stamp's change: one
+   * stored before it (a passkey sign-in's session, a passkey being added, both checked against the old stamp) goes
+   * with the second clearing, and none can be stored after it, as each needs the stamp it checked.
+   */
+  const freshStart = (userId: string, change: () => string) => {
+    const clear = () => {
+      endAllSessions(userId);
+      forgetPasskeys(userId);
+    };
+    clear();
+    const stamp = change();
+    clear();
+    return stamp;
   };
   /** Challenges given to the account to add a passkey, not yet used: they end when anything about how it's reached changes. */
   const endChallenges = (userId: string) => void db.prepare("DELETE FROM auth_challenges WHERE user = ?").run(userId);
@@ -740,9 +755,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
     // Every passkey goes too: whoever moved it may have added their own.
-    forgetPasskeys(userId);
-    const stamp = moveTo(userId, email, { password });
-    endAllSessions(userId);
+    const stamp = freshStart(userId, () => moveTo(userId, email, { password }));
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
       userId,
@@ -802,10 +815,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       endLinks(email);
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
-    forgetPasskeys(row.id);
-    const stamp = newStamp();
     // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
-    db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
+    const stamp = freshStart(row.id, () => {
+      const next = newStamp();
+      db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, next, row.id);
+      return next;
+    });
     afterNewPassword(row.id, email);
     emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
     return { id: row.id, email, made: false, stamp };
@@ -1249,7 +1264,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const row = recent(session, from);
       const passkey = passkeysOf(row.id).find((p) => p.id === id);
       if (!passkey) return null;
-      // Gone before the stamp changes, as in forgetPasskeys.
+      // Gone before the stamp changes, as in freshStart.
       db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
       restamp(row.id, row.stamp);
       // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
