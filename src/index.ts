@@ -20,6 +20,7 @@ export {
   type PasskeyCreationOptions,
   type PasskeyRequestOptions,
   RECENT_MINUTES,
+  type Refusal,
   SESSION_DAYS,
   type Session,
   SIGN_IN_LINK_MINUTES,

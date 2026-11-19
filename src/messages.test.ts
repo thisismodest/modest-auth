@@ -41,22 +41,22 @@ test("emailFor names the site with its host, which a copycat can't borrow", () =
   assert.match(text, /Example Club \(app\.example\.org\)/);
 });
 
-test("messageFor: each link becomes the message that fits it, and an undo link isn't one on its own", () => {
-  const link = (kind: "password" | "sign-in" | "email" | "undo", token: string | null, account: boolean) => ({
-    kind,
-    to: "ann@example.org",
-    token,
-    account,
-    expires: soon(),
-  });
+test("messageFor: each link becomes the message that fits it, a refused one by the reason it was refused, and an undo link isn't one on its own", () => {
   const url = `${ORIGIN}/account/link#x`;
-  assert.equal(messageFor(link("password", "t", false), url).kind, "sign-up");
-  assert.equal(messageFor(link("password", "t", true), url).kind, "new-password");
-  assert.equal(messageFor(link("sign-in", "t", false), url).kind, "sign-up");
-  assert.equal(messageFor(link("sign-in", "t", true), url).kind, "sign-in");
-  assert.deepEqual(messageFor(link("sign-in", null, false), url), { kind: "no-account", to });
-  assert.equal(messageFor(link("email", "t", false), url).kind, "confirm-email");
-  assert.deepEqual(messageFor(link("email", null, true), url), { kind: "email-in-use", to });
-  assert.deepEqual(messageFor(link("sign-in", null, true), url), { kind: "passkey-only", to });
-  assert.throws(() => messageFor(link("undo", "t", true), url), /email-changed/);
+  const open = (kind: "password" | "sign-in" | "email" | "undo", account: boolean) => ({ kind, to: "ann@example.org", token: "t", account, expires: soon() });
+  const refused = (kind: "sign-in" | "email", why: "no-account" | "email-in-use" | "passkey-only", account: boolean) =>
+    ({ kind, to: "ann@example.org", token: null, refused: why, account, expires: soon() }) as const;
+  assert.equal(messageFor(open("password", false), url).kind, "sign-up");
+  assert.equal(messageFor(open("password", true), url).kind, "new-password");
+  assert.equal(messageFor(open("sign-in", false), url).kind, "sign-up");
+  assert.equal(messageFor(open("sign-in", true), url).kind, "sign-in");
+  assert.equal(messageFor(open("email", false), url).kind, "confirm-email");
+  for (const [kind, why, account] of [
+    ["sign-in", "no-account", false],
+    ["email", "email-in-use", true],
+    ["sign-in", "passkey-only", true],
+  ] as const) {
+    assert.deepEqual(messageFor(refused(kind, why, account), url), { kind: why, to });
+  }
+  assert.throws(() => messageFor(open("undo", true), url), /email-changed/);
 });

@@ -71,8 +71,8 @@ type Json = {
   [key: string]: unknown;
 };
 
-const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passkey")[] } = {}) => {
-  const { auth } = fresh(more.signInWith ? { signInWith: more.signInWith } : {});
+const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passkey")[]; recovery?: "link" | "app" } = {}) => {
+  const { auth } = fresh({ ...(more.signInWith ? { signInWith: more.signInWith } : {}), ...(more.recovery ? { recovery: more.recovery } : {}) });
   const emails: { to: string; subject: string; text: string }[] = [];
   const messages: Message[] = [];
   const handler = createHandler(auth, {
@@ -1078,14 +1078,12 @@ test("deleting an account tells its address, and every answer says only the site
 test("sign-in link routes only where links are sent, and the strict site's answer is the same whoever asks", async () => {
   const passwordsOnly = setup({ signInWith: ["password"] });
   for (const route of ["send-sign-in-link", "sign-in-with-link"]) assert.equal((await passwordsOnly.send(`/auth/${route}`, {})).status, 404, route);
-  const { auth } = fresh({ signInWith: ["passkey"], recovery: "app" });
-  const messages: Message[] = [];
-  const strict = createHandler(auth, { ...EMAIL, origin: ORIGIN, deliver: (message) => void messages.push(message) });
-  auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE);
+  const { auth, messages, send } = setup({ signInWith: ["passkey"], recovery: "app" });
+  auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.245")).token), "192.0.2.245");
   const answers = [];
   for (const email of ["ann@example.org", "nobody@example.org"]) {
-    const res = must(await post(strict, "send-sign-in-link", { email }, "192.0.2.244"));
-    answers.push([res.status, await res.text()]);
+    const res = await send("/auth/send-sign-in-link", { email });
+    answers.push([res.status, res.json]);
   }
   assert.deepEqual(answers[0], answers[1]);
   await afterwards();

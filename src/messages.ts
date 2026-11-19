@@ -48,7 +48,7 @@ export function messageFor(link: Link, url: string): Message {
   if (link.kind === "undo") throw new Error('An undo link goes in an "email-changed" message, with the address the account moved to.');
   const to = { email: link.to };
   const { expires } = link;
-  if (link.token === null) return { kind: link.kind === "email" ? "email-in-use" : link.account ? "passkey-only" : "no-account", to };
+  if (link.token === null) return { kind: link.refused, to };
   if (link.kind === "email") return { kind: "confirm-email", to, link: url, expires };
   if (!link.account) return { kind: "sign-up", to, link: url, expires };
   return { kind: link.kind === "password" ? "new-password" : "sign-in", to, link: url, expires };

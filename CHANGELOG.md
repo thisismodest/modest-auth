@@ -63,7 +63,7 @@ account's version is one stamp, and messages are data for the app to send. Sever
   sent or used, an account made, or a session started or used, so someone the app stops
   allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
   refusal. A refused address is answered as any other and sent nothing.
-- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`, `recoveryLink`, `auth.signInLinks`
+- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`, `recoveryLink`, `Refusal` (why a link asked for has nothing to open, on the link itself), `auth.signInLinks`
   (a link's message, for apps using the parts), and `auth.signInWith`.
 
 - A notice to the account's address when it's deleted (`account-deleted`), and the
