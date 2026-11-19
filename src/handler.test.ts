@@ -101,8 +101,10 @@ const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passk
   const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
     await afterwards();
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
-    const prefix = `${ORIGIN}${EMAIL.linkPage}#${kind}=`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const token = new RegExp(`^${prefix}([\\w-]{43})$`, "m").exec(text)?.[1];
+    // The line holding the link, and the token after its "#kind=": a 43-character token, nothing else.
+    const prefix = `${ORIGIN}${EMAIL.linkPage}#${kind}=`;
+    const found = text.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length);
+    const token = found && /^[\w-]{43}$/.test(found) ? found : undefined;
     assert.ok(token, `a ${kind} link was emailed to ${to}`);
     return token;
   };
