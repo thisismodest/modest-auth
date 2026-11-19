@@ -48,7 +48,7 @@ it brings. Nothing here is a promise of a date.
 - [ ] A paid, independent security audit of a release candidate, and its findings fixed
 - [ ] A requirement-by-requirement check against OWASP ASVS 5.0 (authentication and
       sessions), in `docs/asvs.md`
-- [ ] Pressday, and one more site, using it in production
+- [ ] Two sites using it in production
 - [ ] Published to npm with provenance; GitHub's private vulnerability reporting on
 - [ ] The public API settled: from 1.0, breaking changes only in major versions
 
