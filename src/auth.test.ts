@@ -1390,3 +1390,34 @@ test("the per-account pause says to wait the whole hour, so it doesn't tell when
     assert.equal(paused.retryAfter, 3600);
   });
 });
+
+/** Runs `sql` (another process's change, with OLD.user the account) once, just as the account's sessions first end. */
+const whenSessionsEnd = (db: DatabaseSync, sql: string) =>
+  db.exec(`CREATE TEMP TABLE happened (done INTEGER);
+    CREATE TEMP TRIGGER elsewhere AFTER DELETE ON auth_sessions WHEN NOT EXISTS (SELECT 1 FROM happened)
+    BEGIN INSERT INTO happened VALUES (1); ${sql} END`);
+
+test("of two undo links used at once in different processes, the earlier one wins", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const first = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
+  const second = await move(auth, first, PASSWORD, "thief2@evil.example", "192.0.2.150");
+  await openSession(auth, "thief2@evil.example", "192.0.2.151");
+  // Ann's undo (the earlier) lands in another process as the thief's begins: the account back, later undo links ended.
+  whenSessionsEnd(
+    db,
+    "UPDATE auth_users SET email = 'ann@example.org', stamp = 'undone' WHERE id = OLD.user; DELETE FROM auth_links WHERE kind = 'undo' AND email = 'thief@evil.example';",
+  );
+  assert.throws(() => auth.useUndoLink(must(must(second.undo).token), "192.0.2.152"), code("invalid-link"));
+  assert.equal(must(db.prepare("SELECT email FROM auth_users").get()).email, "ann@example.org");
+});
+
+test("a password link doesn't land on an account moved meanwhile in another process, so that move's undo link stays", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  await openSession(auth, ann.email, HERE);
+  const forgot = must(auth.requestLink("password", "ann@example.org", HERE));
+  whenSessionsEnd(db, "UPDATE auth_users SET email = 'thief@evil.example', stamp = 'moved' WHERE id = OLD.user;");
+  await assert.rejects(auth.usePasswordLink(must(forgot.token), "ann's new long password", HERE), code("invalid-link"));
+  assert.equal(must(db.prepare("SELECT stamp FROM auth_users").get()).stamp, "moved", "the move stands, its stamp unchanged");
+});

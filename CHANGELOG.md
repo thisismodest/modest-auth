@@ -108,6 +108,11 @@ Found by three rounds of adversarial review of this release.
 - A passkey sign-in, or a passkey being added, in another process as a fresh start
   landed could outlast it. A fresh start now ends every session, passkey, and challenge
   both before and after the stamp changes, and removing a passkey deletes it first.
+- Two more races between processes: a later undo link, used as an earlier one was,
+  could overwrite it; and a recovery could land on an account moved meanwhile, leaving
+  that move with no undo link. An undo now moves the account only while its link is
+  there (so the earlier wins, and a failed one isn't used up), and a recovery lands
+  only while the stamp is the one it read.
 - Moving an account back by hand, to an address a thief had moved it from, sent the
   thief's address an undo link that outlasted the owner's. Moving back while that
   move's undo link lasts is now that undo, and sends none (`useEmailLink`'s `undo` can

@@ -708,9 +708,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     if (!row) throw EXPIRED();
     return row;
   };
-  /** Uses a link of `kind`, once only, for an address the app still allows. */
-  const takeLink = (token: string, kind: LinkKind) => {
-    const link = findLink(token, [kind], true);
+  /** Uses a link of `kind`, once only (or, `take` false, only looks at it), for an address the app still allows. */
+  const takeLink = (token: string, kind: LinkKind, take = true) => {
+    const link = findLink(token, [kind], take);
     if (!allowed(link.email)) throw EXPIRED();
     return link;
   };
@@ -724,13 +724,17 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * Gives the account `userId` the address `email` (and `password`, if given: null for none), with a new stamp;
    * "invalid-link" if another account has the address. The new stamp.
    */
-  const moveTo = (userId: string, email: string, { password, was }: { password?: string | null; was?: string } = {}) => {
+  const moveTo = (userId: string, email: string, { password, was, undo }: { password?: string | null; was?: string; undo?: { expires: number } } = {}) => {
     const holder = userRow("email", email);
     if (holder && holder.id !== userId) throw EXPIRED();
     const stamp = newStamp();
-    // With `was`, only while the account still has that stamp: nothing changed it (an undo, say) meanwhile.
-    const unchanged = was === undefined ? "" : " AND stamp = ?";
-    const still = was === undefined ? [] : [was];
+    // With `was`, only while the account still has that stamp: nothing changed it (an undo, say) meanwhile. With
+    // `undo`, only while that undo link to `email` is still there: an earlier one, used meanwhile in another process,
+    // ends it, and holds the claim.
+    const unchanged =
+      (was === undefined ? "" : " AND stamp = ?") +
+      (undo === undefined ? "" : " AND EXISTS (SELECT 1 FROM auth_links WHERE kind = 'undo' AND user = auth_users.id AND email = ? AND expires = ?)");
+    const still = [...(was === undefined ? [] : [was]), ...(undo === undefined ? [] : [email, undo.expires])];
     let moved: number;
     try {
       moved =
@@ -755,7 +759,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
     // Every passkey goes too: whoever moved it may have added their own.
-    const stamp = freshStart(userId, () => moveTo(userId, email, { password }));
+    const stamp = freshStart(userId, () => moveTo(userId, email, { password, undo: { expires: undoExpires } }));
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
       userId,
@@ -816,9 +820,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
     // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
+    // Only while the account is as it was read: one moved meanwhile in another process keeps that move's undo link.
     const stamp = freshStart(row.id, () => {
       const next = newStamp();
-      db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, next, row.id);
+      if (db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ?").run(password, next, row.id, row.stamp).changes === 0) {
+        throw EXPIRED();
+      }
       return next;
     });
     afterNewPassword(row.id, email);
@@ -1152,7 +1159,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
     useUndoLink(token, from) {
       fromWhere(from);
-      const link = takeLink(token, "undo");
+      // Looked at, not used: moveBack moves the account only while this link is there, and then ends it, so of two
+      // undo links used at once in different processes, the earlier one wins.
+      const link = takeLink(token, "undo", false);
       const { email, expires } = link;
       // Gone (or, in moveBack, the address since taken by another account): nothing to move back.
       const row = accountOf(link);
