@@ -13,6 +13,7 @@ const EVERY: Message[] = [
   { kind: "sign-in", to, link, expires: soon() },
   { kind: "new-password", to, link, expires: soon() },
   { kind: "no-account", to },
+  { kind: "passkey-only", to },
   { kind: "confirm-email", to, link, expires: soon() },
   { kind: "email-in-use", to },
   { kind: "password-changed", to },
@@ -31,7 +32,7 @@ test("emailFor writes every kind: the link exactly once where there is one, and 
 
 test("emailFor says how long a link lasts: in minutes, or in days for an undo", () => {
   assert.match(emailFor({ kind: "sign-in", to, link, expires: Date.now() + 15 * MINUTE }, { origin: ORIGIN }).text, /within 15 minutes/);
-  assert.match(emailFor(EVERY[8] as Message, { origin: ORIGIN }).text, /within 7 days/);
+  assert.match(emailFor(EVERY[9] as Message, { origin: ORIGIN }).text, /within 7 days/);
 });
 
 test("emailFor names the site with its host, which a copycat can't borrow", () => {
@@ -56,5 +57,6 @@ test("messageFor: each link becomes the message that fits it, and an undo link i
   assert.deepEqual(messageFor(link("sign-in", null, false), url), { kind: "no-account", to });
   assert.equal(messageFor(link("email", "t", false), url).kind, "confirm-email");
   assert.deepEqual(messageFor(link("email", null, true), url), { kind: "email-in-use", to });
+  assert.deepEqual(messageFor(link("sign-in", null, true), url), { kind: "passkey-only", to });
   assert.throws(() => messageFor(link("undo", "t", true), url), /email-changed/);
 });

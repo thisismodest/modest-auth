@@ -21,6 +21,8 @@ export type Message =
   | { kind: "new-password"; to: Contact; link: string; expires: number }
   /** A sign-in link was asked for an address with no account, on a site where accounts are made by choosing a password. */
   | { kind: "no-account"; to: Contact }
+  /** A sign-in link was asked for an account that signs in by passkey only, where only the site can send a way back in. */
+  | { kind: "passkey-only"; to: Contact }
   /** A link that moves an account to this, its new address, opened where the account is signed in. */
   | { kind: "confirm-email"; to: Contact; link: string; expires: number }
   /** An account asked to move to this address, which has an account of its own: nothing changed. */
@@ -46,7 +48,7 @@ export function messageFor(link: Link, url: string): Message {
   if (link.kind === "undo") throw new Error('An undo link goes in an "email-changed" message, with the address the account moved to.');
   const to = { email: link.to };
   const { expires } = link;
-  if (link.token === null) return { kind: link.kind === "email" ? "email-in-use" : "no-account", to };
+  if (link.token === null) return { kind: link.kind === "email" ? "email-in-use" : link.account ? "passkey-only" : "no-account", to };
   if (link.kind === "email") return { kind: "confirm-email", to, link: url, expires };
   if (!link.account) return { kind: "sign-up", to, link: url, expires };
   return { kind: link.kind === "password" ? "new-password" : "sign-in", to, link: url, expires };
@@ -100,6 +102,11 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
       return {
         subject: `Sign in to ${title}`,
         text: `Someone asked to sign in to ${where} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\n${notYou}`,
+      };
+    case "passkey-only":
+      return {
+        subject: `Sign in to ${title}`,
+        text: `Someone asked for a link to sign in to ${where} with this email address. Your account signs in with a passkey only, so no link is sent: use your passkey at ${origin}. If you've lost every passkey, ask the site to help you back in.\n\n${notYou}`,
       };
     case "confirm-email":
       return {

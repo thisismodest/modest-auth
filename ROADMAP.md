@@ -45,10 +45,12 @@ it brings. Nothing here is a promise of a date.
 
 ## Sign-in methods (0.6.0)
 
-- [x] **How people sign in is the site's choice,** and must be made (`signInWith`): a
-      link alone, or a password and a link. A password never comes without a link,
-      which is how someone who forgets it gets back in. A method not chosen is off
+- [x] **How people sign in is the site's choice,** and must be made (`signInWith`): any
+      of a link, a password, and a passkey, each on its own. A method not chosen is off
       entirely: no routes, and its functions refuse.
+- [x] **Getting back in is separate from signing in** (`recovery`): a link to the
+      account's email by default, or, on a site that signs in by passkey alone, only a
+      link the app's own code makes (`recoveryLink`), so an inbox is never a way in.
 - [x] **One stamp per account,** replaced whenever how it's reached changes, so every
       "only if nothing changed meanwhile" check is one rule.
 - [x] **Changes need a recent sign-in,** by any method, instead of the password: the
@@ -92,10 +94,11 @@ give one).
       the account's. A method a site adds later reaches an existing account only once
       its owner, signed in, confirms it (an old address may have changed hands).
       Removing a method is refused if it would leave an account no way in.
-- [ ] **Passkeys only,** for an account that chooses it, and then for a site: no link or
-      password sign-in, so there's nothing left to phish. Accounts are still made by a
-      link that proves the address; recovery is the app's, by a link its own code makes
-      (an admin, support), never from a route.
+- [x] **Passkeys only, for a site** (`signInWith: ["passkey"], recovery: "app"`): no
+      link or password sign-in, so there's nothing left to phish. Accounts are still made
+      by a link that proves the address; recovery is the app's, by a link its own code
+      makes (an admin, support), never from a route.
+- [ ] **Passkeys only, for an account that chooses it,** on a site that offers more.
 
 ## Before 1.0
 
@@ -121,14 +124,28 @@ without becoming a plugin system.
   each site can use any standard library.
 - **Two-step sign-in** with an authenticator app (TOTP): the step to ASVS Level 2 and
   NIST AAL2, for sites that keep passwords. Passkeys are the stronger way there.
-- **Other contacts:** a phone number, or push notifications once there's a standard,
-  beside email: another kind of `Contact`, and messages delivered by text or push. Each
-  needs its own rows in the threat model first: a SIM swap gives away a number, so a
-  number is only as safe as its carrier; a code typed from a text can be phished and
-  guessed, so it needs few tries and short lives, and to work only where it was asked
-  for; texts cost money, so attackers send them to premium numbers they own, which needs
-  limits by number range and country; and prompts to approve a sign-in get approved by
-  people worn down by them.
+- **Phone numbers as contacts,** beside email or instead of it. Built only when a site
+  needs it; the shape, worked out:
+  - **A `contact` setting** (`"email"` by default, so nothing changes for anyone) for
+    which kinds a site takes, and a module of contact kinds, each with its own
+    cleaning, checks, and limits.
+  - **An account has one or more contacts:** an `auth_contacts` table (the account, the
+    kind, the address, when it was confirmed), each address unique within its kind. Sign
+    up by either; add the other while signed in, confirmed by a message to it, as an
+    email move is; never fewer than one.
+  - **Notices go to every contact,** so a change made by someone holding the phone is
+    told to the email, and the other way round.
+  - **A phone receives notices but doesn't sign in until its owner says so:** an account
+    is only as strong as its weakest contact, and a number is weaker than an inbox.
+  - **`User` becomes `{ id, email?, phone? }`.**
+  - **A typed code** (`"code"`, a sign-in method of its own) where a link won't do.
+  - **Its own rows in the threat model first:** a SIM swap gives away a number, so it's
+    only as safe as its carrier; a typed code can be phished and guessed, so it needs
+    few tries, short lives, and to work only where it was asked for; texts cost money,
+    so attackers send them to premium numbers they own, which needs limits by number
+    range and country.
+- **Push** isn't a contact: it reaches a device, not a person, and proves nothing about
+  who's there. It can carry notices already, as `deliver` gets each message as data.
 - **More sign-ins at once,** for a site with a few thousand people signing in around
   the same time. Checking a session is already cheap; a password sign-in is costly by
   design (about 170 ms and 130MB each; from 0.5.0, as many at once as the machine's

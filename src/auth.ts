@@ -36,8 +36,9 @@ export type User = { id: string; email: string };
 export type Contact = { email: string };
 
 /**
- * How people sign in: by an emailed link, and besides it by a password, a passkey, or both. A link is always
- * there: it's how an account is made, and how someone who forgets a password, or loses every passkey, gets back in.
+ * How people sign in day to day: by an emailed link, a password, a passkey, or any mix. Each works on its own.
+ * Getting back in (a forgotten password, every passkey lost) isn't one of them: that's a link to the account's
+ * email, whatever the site's methods, or only one the app makes (`recovery: "app"`).
  */
 export type SignInMethod = "link" | "password" | "passkey";
 const METHODS: readonly SignInMethod[] = ["link", "password", "passkey"];
@@ -68,8 +69,15 @@ export type AuthEvent = {
 // came from.
 
 export type AuthOptions = {
-  /** How people sign in: ["link"], with "password", "passkey", or both beside it. Required, so nobody gets a way in the site didn't choose. */
+  /** How people sign in: any of "link", "password", and "passkey". Required, so nobody gets a way in the site didn't choose. */
   signInWith: readonly SignInMethod[];
+  /**
+   * How people get back in. By default, a link to the account's email: a link to choose a new password where the
+   * site has passwords, else one that signs in once, to add a passkey. "app" only with `signInWith: ["passkey"]`:
+   * no link to an existing account is ever sent at anyone's asking, so an inbox is never a way in, and only the
+   * app's own code can make one (`recoveryLink`), for someone it has vouched for another way.
+   */
+  recovery?: "link" | "app";
   /**
    * Who may have an account, if not everyone: true to allow `contact`, anything else to refuse. Asked before a
    * link is sent, an account made, or a session started or used, so someone the app stops allowing is signed out
@@ -177,6 +185,15 @@ export type Link = { kind: LinkKind; to: string; token: string | null; account: 
 export type Auth = {
   /** How people sign in here, as given. */
   readonly signInWith: readonly SignInMethod[];
+  /** Whether sign-in links are sent here (`send-sign-in-link`): where "link" is a method, or there are no passwords (to make accounts, and to get back in). */
+  readonly signInLinks: boolean;
+  /**
+   * A link into the account at `email`, for the app's own code to send to someone it has vouched for another way
+   * (an admin, support): the way back in where `recovery` is "app". A link to choose a new password where the site
+   * has passwords, else one that signs in once. Null if there's no such account, or `allow` refuses it. Never from
+   * a route, and never to anyone the app hasn't checked: whoever opens it is in.
+   */
+  recoveryLink(email: string): Link | null;
   /**
    * A link to send to `email`, or null if none should be: at most 3 of each kind to one address in 15 minutes,
    * and the rest quietly aren't sent, so nobody can flood an inbox; every link sent in those 15 minutes still
@@ -350,22 +367,28 @@ const LIFETIME: Record<LinkKind, number> = {
 };
 const linkExpires = (kind: LinkKind) => Date.now() + LIFETIME[kind];
 
-/** The sign-in methods given, checked: known ones, each once, and always a link. */
+/** The sign-in methods given, checked: known ones, each once, at least one. */
 function methodsOf(given: unknown): readonly SignInMethod[] {
   const methods = Array.isArray(given) ? given : [];
   const known = methods.every((method) => METHODS.includes(method));
-  if (!known || new Set(methods).size !== methods.length || !methods.includes("link")) {
-    throw new Error(
-      'signInWith must list how people sign in: "link", and "password", "passkey", or both beside it (a link is how an account is made, and the way back in).',
-    );
+  if (!known || methods.length === 0 || new Set(methods).size !== methods.length) {
+    throw new Error('signInWith must list how people sign in: any of "link", "password", and "passkey", each once.');
   }
   return Object.freeze([...methods]);
+}
+
+/** How people get back in, checked: by link, or (only on a site that signs in by passkey alone) only by the app. */
+function recoveryOf(given: unknown, methods: readonly SignInMethod[]): "link" | "app" {
+  if (given === undefined || given === "link") return "link";
+  if (given === "app" && methods.length === 1 && methods[0] === "passkey") return "app";
+  throw new Error('recovery must be "link", or "app" with signInWith: ["passkey"] (with a link or password on offer, an inbox is a way in anyway).');
 }
 
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
 export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const { allow, onEvent, breachedRange } = options ?? {};
   const signInWith = methodsOf(options?.signInWith);
+  const recovery = recoveryOf(options?.recovery, signInWith);
   if (allow !== undefined && typeof allow !== "function") throw new Error("allow must be a function: (contact) => true or false.");
   if (onEvent !== undefined && typeof onEvent !== "function") throw new Error("onEvent must be a function.");
   if (breachedRange !== undefined && typeof breachedRange !== "function") throw new Error("breachedRange must be a function.");
@@ -374,8 +397,15 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const needs = (method: SignInMethod) => {
     if (!signInWith.includes(method)) throw new Error(`This site doesn't sign in with ${method}s: add "${method}" to signInWith first.`);
   };
-  /** The link that makes accounts: a password link where there are passwords (whoever opens it chooses one), else a sign-in link. */
+  /**
+   * The link that makes accounts, and that gets someone back into theirs: a password link where there are passwords
+   * (whoever opens it chooses one), else a sign-in link (opened once, to add a passkey).
+   */
   const makes: LinkKind = passwords ? "password" : "sign-in";
+  /** Whether sign-in links are sent: to sign in, where that's a method; else to make accounts and get back in, where there are no passwords. */
+  const signInLinks = signInWith.includes("link") || !passwords;
+  /** Whether anyone may ask for a link into an existing account (to sign in, or to get back in): not where only the app may. */
+  const linksIntoAccounts = recovery === "link";
 
   /** Whether the app allows an account at `email`: only a plain true is a yes, and a mistake in allow is a no. */
   const allowed = (email: string) => {
@@ -840,10 +870,20 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
   return {
     signInWith,
+    signInLinks,
+
+    recoveryLink(given) {
+      const email = emailOrRefuse(given);
+      const row = userRow("email", email);
+      if (!row || !allowed(email)) return null;
+      // The app's own code, vouching for someone: not counted against the inbox, and made whatever `recovery` says.
+      return newLink(makes, email);
+    },
 
     requestLink(kind, given, from) {
       if (kind === "password") needs("password");
       else if (kind !== "sign-in") throw new Error('kind must be "password" or "sign-in" (an email link comes from requestEmailChange).');
+      else if (!signInLinks) throw new Error('This site doesn\'t send sign-in links: add "link" to signInWith (people get back in by a password link here).');
       fromWhere(from);
       countLinkFrom(from);
       const email = emailOrRefuse(given);
@@ -853,8 +893,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const here = !!userRow("email", email);
       const takeBack = kind === makes && !!undoTo(email);
       const account = here || takeBack;
-      // With no account, only the kind that makes one has anything to open.
-      return offer(kind, email, { usable: account || kind === makes, account });
+      // With no account, only the kind that makes one has anything to open; into an existing account, only where
+      // anyone may ask for one (where only the app may, the message says the account signs in by passkey).
+      return offer(kind, email, { usable: account ? linksIntoAccounts : kind === makes, account });
     },
 
     lookUpLink(token, from) {
@@ -876,6 +917,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     },
 
     useSignInLink(token, from) {
+      if (!signInLinks) throw new Error('This site doesn\'t send sign-in links: add "link" to signInWith first.');
       fromWhere(from);
       const { email } = takeLink(token, "sign-in");
       const row = userRow("email", email);

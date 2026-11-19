@@ -6,9 +6,7 @@
 // the same way every time.
 //
 //   GET  /auth/session               who's signed in: { user: { email } | null }
-//   POST /auth/send-sign-in-link     { email }: to sign in (or, on a site without passwords, to sign up)
 //   POST /auth/link                  { token }: which email a link is for, and its kind
-//   POST /auth/sign-in-with-link     { token }: from a sign-in link
 //   POST /auth/sign-out               (no fields: an empty body, or {})
 //   POST /auth/sign-out-everywhere    (no fields)
 //   GET  /auth/sessions              the account's sessions: { sessions: [{ id, started, lastUsed, current }] }
@@ -18,6 +16,12 @@
 //   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
 //   POST /auth/undo-email            { token }: from the notice to the old address
 //   POST /auth/delete-account         (no fields; signed in recently)
+//
+// Where sign-in links are sent (a site that signs in by link, or has no passwords, so links make accounts and
+// get people back in):
+//
+//   POST /auth/send-sign-in-link     { email }: to sign in (or sign up, or get back in)
+//   POST /auth/sign-in-with-link     { token }: from a sign-in link
 //
 // And only on a site with passwords:
 //
@@ -315,6 +319,11 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   type Route = (request: Request, body: Body, from: string) => Promise<Response> | Response;
   /** A notice to an account's email that a passkey was added or removed, naming it. */
   const passkeyNotice = (kind: "passkey-added" | "passkey-removed", email: string, name: string) => queue({ kind, to: { email }, name });
+  /** The routes for sign-in links: where they're sent (to sign in, or, without passwords, to make accounts and get back in). */
+  const linkRoutes: Record<string, Route> = {
+    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
+    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
+  };
   /** The routes for passwords: only on a site that uses them. */
   const passwordRoutes: Record<string, Route> = {
     "send-password-link": (_r, b, from) => sent(auth.requestLink("password", b.email ?? "", from)),
@@ -356,9 +365,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     }),
   };
   const routes: Record<string, Route> = {
-    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
     link: (_r, b, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
-    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
     "sign-out": (r, _b, from) => {
       const token = tokenOf(r);
       if (token) auth.endSession(token, from);
@@ -395,6 +402,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       queue({ kind: "account-deleted", to: { email: user.email } });
       return signedOut();
     }),
+    ...(auth.signInLinks ? linkRoutes : {}),
     ...(passwords ? passwordRoutes : {}),
     ...(passkeys ? passkeyRoutes : {}),
   };

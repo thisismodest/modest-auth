@@ -32,11 +32,14 @@ safely, this is for you.
 
 ## What it does
 
-- **How people sign in is the site's choice,** and has to be made: by an emailed link
-  alone (`signInWith: ["link"]`), and beside it a password, a passkey, or both
-  (`["link", "password", "passkey"]`). A link is always there: it's how an account is
-  made, and how someone who forgets a password, or loses every passkey, gets back in.
-  Any other choice is refused at start-up.
+- **How people sign in is the site's choice,** and has to be made (`signInWith`): any of
+  an emailed link, a password, and a passkey, each on its own or mixed. Every account
+  is still made by a link to its email, which proves the address.
+- **Getting back in is separate:** a link to the account's email, whatever the methods
+  (to choose a new password where there are passwords, else to sign in once and add a
+  passkey). Or, on a site that signs in by passkey alone, `recovery: "app"`: no link
+  into an existing account is sent at anyone's asking, so an inbox is never a way in,
+  and only the app's own code makes one (`recoveryLink`), for someone it has vouched for.
 - **Passkeys** (WebAuthn), which can't be phished: added after a recent sign-in, and
   used without typing an email (the device offers the site's passkeys). Checked with
   nothing but `node:crypto`, step by step as the spec numbers them; no attestation, which
@@ -209,9 +212,7 @@ The routes take and give JSON:
 | Route | Body | Does |
 | --- | --- | --- |
 | `GET /auth/session` | | `{ user: { email } }`, or `{ user: null }` |
-| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in (without passwords, to an email with no account, one that signs up) |
 | `POST /auth/link` | `{ token }` | Which email a link is for, and its kind: `{ kind, email }` |
-| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in (without passwords, making the account if need be) |
 | `POST /auth/sign-out` | none, or `{}` | Ends this session |
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
 | `GET /auth/sessions` | | The account's sessions: `{ sessions: [{ id, started, lastUsed, current }] }` |
@@ -222,7 +223,15 @@ The routes take and give JSON:
 | `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to get back in |
 | `POST /auth/delete-account` | none, or `{}` | Deletes the account and its sessions (signed in recently) |
 
-And only where there are passwords (otherwise they're not there at all):
+Where sign-in links are sent: a site that signs in by link, or has no passwords (where
+these links make accounts and get people back in). Otherwise they're not there at all:
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in, sign up, or get back in (with `recovery: "app"`, only to sign up) |
+| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in, making the account if need be |
+
+And only where there are passwords:
 
 | Route | Body | Does |
 | --- | --- | --- |
@@ -363,6 +372,7 @@ each message as data: what it's for, who it's to, and the link in it, if any.
 | `sign-in` | an account | `link`, `expires` |
 | `new-password` | an account | `link`, `expires`: a forgotten password, or after an undone move |
 | `no-account` | an address with no account, that asked to sign in where there are passwords | |
+| `passkey-only` | an account that signs in by passkey only, where someone asked for a link into it (`recovery: "app"`) | |
 | `confirm-email` | an account's new address | `link`, `expires` |
 | `email-in-use` | an address with an account of its own, that another account asked to move to | |
 | `password-changed` | an account | |
@@ -476,6 +486,11 @@ work out the caller's address with `addressKey`; and for links, turn the link
 link page, with `#`, the kind, `=`, and the token), send it after answering, whatever it
 says, and answer the same either way; when it gives null, send nothing. Never send a
 link back to whoever asked: it goes only to its address.
+
+`recoveryLink(email)` is the one link made for the app's own code alone: the way back
+in where `recovery` is `"app"`, for someone the app has vouched for another way (an
+admin, support). Whoever opens it is in, so it's never a route, and never sent to anyone
+the app hasn't checked.
 
 ```ts
 // Who's asking (behind a proxy, name it as a second argument, such as ["loopback"]).
