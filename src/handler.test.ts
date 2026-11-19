@@ -503,16 +503,16 @@ test("a link's token is after the #, which browsers never send to a server, on t
 });
 
 test("a site's name heads its emails, and its address stays in their text, which a copycat can't borrow", async () => {
-  const { send, emails, signUp } = setup({ name: "Ware Business Club" });
+  const { send, emails, signUp } = setup({ name: "Example Club" });
   await signUp("ann@example.org");
   await send("/auth/send-sign-in-link", { email: "ann@example.org" });
   await send("/auth/password", { current: PASSWORD, next: "a different long password" });
   await afterwards();
   assert.deepEqual(
     emails.map((e) => e.subject),
-    ["Finish signing up to Ware Business Club", "Sign in to Ware Business Club", "Your password was changed on Ware Business Club"],
+    ["Finish signing up to Example Club", "Sign in to Example Club", "Your password was changed on Example Club"],
   );
-  for (const { text } of emails) assert.match(text, /Ware Business Club \(app\.example\.org\)/);
+  for (const { text } of emails) assert.match(text, /Example Club \(app\.example\.org\)/);
 });
 
 test("a name that could add a line to an email, or hide text, is refused when the handler is made", () => {
@@ -532,7 +532,7 @@ test("a name that could add a line to an email, or hide text, is refused when th
   ]) {
     assert.throws(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: name as string }), /name must be/, JSON.stringify(name));
   }
-  assert.doesNotThrow(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: "Ware Business Club & Friends: 2026" }));
+  assert.doesNotThrow(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: "Example Club & Friends: 2026" }));
 });
 
 test("a sign-in link signs this browser in with a fresh session, ending the one it had", async () => {

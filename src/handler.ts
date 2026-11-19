@@ -44,8 +44,8 @@ export type HandlerOptions = {
   /** Where the routes live. */
   base?: string;
   /**
-   * The site's name for its emails, such as "Ware Business Club". Their subjects use it, and their
-   * text gives it with the site's address ("Ware Business Club (example.org)"), which a copycat can't
+   * The site's name for its emails, such as "Example Club". Their subjects use it, and their
+   * text gives it with the site's address ("Example Club (example.org)"), which a copycat can't
    * borrow. Without it, the address alone. Up to 60 characters, on one line, with nothing invisible.
    */
   name?: string;
@@ -156,7 +156,7 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
 function siteName(name: unknown): string | null {
   if (name === undefined) return null;
   if (typeof name !== "string" || name.length === 0 || name.length > 60 || name.trim() !== name || /[\p{C}\p{Zl}\p{Zp}]/u.test(name)) {
-    throw new Error('name must be the site\'s name for its emails, such as "Ware Business Club": up to 60 characters, on one line, with nothing invisible.');
+    throw new Error('name must be the site\'s name for its emails, such as "Example Club": up to 60 characters, on one line, with nothing invisible.');
   }
   return name;
 }

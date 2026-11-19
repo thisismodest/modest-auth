@@ -221,8 +221,8 @@ test("deleting an account takes the app's own rows linked to it, and an app row 
   db.exec("CREATE TABLE members (user TEXT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE, club TEXT)");
   const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
   const bob = await signUp(auth, "bob@example.org", PASSWORD, HERE);
-  db.prepare("INSERT INTO members VALUES (?, 'ware'), (?, 'ware')").run(ann.id, bob.id);
-  assert.throws(() => db.prepare("INSERT INTO members VALUES ('no-such-account', 'ware')").run(), /FOREIGN KEY/);
+  db.prepare("INSERT INTO members VALUES (?, 'chess'), (?, 'chess')").run(ann.id, bob.id);
+  assert.throws(() => db.prepare("INSERT INTO members VALUES ('no-such-account', 'chess')").run(), /FOREIGN KEY/);
   await auth.deleteAccount(ann.id, PASSWORD, HERE);
   assert.deepEqual(
     db
@@ -960,7 +960,7 @@ test("events: a sign-in link's session is told as one", async () => {
 });
 
 test("breached passwords: one typed in another Unicode form is still found", async () => {
-  const breached = "Widford village magazine";
+  const breached = "lakeside village newsletter";
   const { auth } = fresh({
     breachedRange: (prefix) => (sha1(breached).startsWith(prefix) ? `${sha1(breached).slice(5)}:7` : ""),
   });

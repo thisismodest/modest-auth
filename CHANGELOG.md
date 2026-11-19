@@ -55,8 +55,8 @@ who didn't see the code (`test/scenarios/`, `docs/scenarios.md`).
 ### Added
 
 - **A name for the site's emails:** `createHandler`'s optional `name`, such as
-  `"Ware Business Club"`. Subjects use it, and the text gives it with the site's
-  address ("Ware Business Club (example.org)"), so an email still says where it's from.
+  `"Example Club"`. Subjects use it, and the text gives it with the site's
+  address ("Example Club (example.org)"), so an email still says where it's from.
   Without it, emails are as before. A name that could add a line to an email, or hide
   text, is refused when the handler is made.
 
