@@ -467,7 +467,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         `SELECT u.id AS id, u.email AS email, u.stamp AS stamp, s.expires AS expires, s.seen AS seen FROM auth_sessions s JOIN auth_users u ON u.id = s.user WHERE s.token = ? AND ${LIVE}`,
       )
       .get(hashed, ...live(now)) as (User & { stamp: string; expires: number; seen: number }) | undefined;
-    return row && allowed(row.email) ? { ...row, hashed } : undefined;
+    if (!row) return undefined;
+    // Refused: every session of the account ends for good, so none comes back if the app allows it again.
+    if (!allowed(row.email)) return void endAllSessions(row.id);
+    return { ...row, hashed };
   };
   /** An account's live sessions, the most recently used first: each one's stored hash, and its times. */
   const liveSessions = (userId: string, now: number) =>
@@ -564,18 +567,28 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * Gives the account `userId` the address `email` (and `password`, if given: null for none), with a new stamp;
    * "invalid-link" if another account has the address. The new stamp.
    */
-  const moveTo = (userId: string, email: string, password?: string | null) => {
+  const moveTo = (userId: string, email: string, { password, was }: { password?: string | null; was?: string } = {}) => {
     const holder = userRow("email", email);
     if (holder && holder.id !== userId) throw EXPIRED();
     const stamp = newStamp();
+    // With `was`, only while the account still has that stamp: nothing changed it (an undo, say) meanwhile.
+    const unchanged = was === undefined ? "" : " AND stamp = ?";
+    const still = was === undefined ? [] : [was];
+    let moved: number;
     try {
-      if (password === undefined) db.prepare("UPDATE auth_users SET email = ?, stamp = ? WHERE id = ?").run(email, stamp, userId);
-      else db.prepare("UPDATE auth_users SET email = ?, password = ?, stamp = ? WHERE id = ?").run(email, password, stamp, userId);
+      moved =
+        password === undefined
+          ? Number(db.prepare(`UPDATE auth_users SET email = ?, stamp = ? WHERE id = ?${unchanged}`).run(email, stamp, userId, ...still).changes)
+          : Number(
+              db.prepare(`UPDATE auth_users SET email = ?, password = ?, stamp = ? WHERE id = ?${unchanged}`).run(email, password, stamp, userId, ...still)
+                .changes,
+            );
     } catch (error) {
       // Taken by another process sharing the database, between the check and the change.
       if (userRow("email", email)) throw EXPIRED();
       throw error;
     }
+    if (moved === 0) throw EXPIRED();
     return stamp;
   };
   /**
@@ -584,7 +597,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * move's undo link. The new stamp.
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
-    const stamp = moveTo(userId, email, password);
+    const stamp = moveTo(userId, email, { password });
     endAllSessions(userId);
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
@@ -758,8 +771,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const email = cleanEmail(given) ?? "";
       const row = email ? userRow("email", email) : undefined;
       const stamp = await verify(row, email || "invalid", password, from);
-      // (verify throws without an account: this only tells the type checker so.)
-      if (!row) throw WRONG();
+      // (verify throws without an account: this only tells the type checker so.) Refused by allow: as a wrong password.
+      if (!row || !allowed(row.email)) throw WRONG();
       return handOver({ id: row.id, email: row.email }, stamp, "password", from);
     },
 
@@ -830,9 +843,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         | undefined;
       if (!row) return null;
       const sessions = liveSessions(userId, now);
-      // Its own links, and those to its address, that do something: not the ones stored only to do the same work.
+      // Its own links (its move requests shown as such whatever they were stored as, so the copy can't show whether
+      // another address has an account), and those to its address that do something.
       const links = db
-        .prepare("SELECT kind, email, expires FROM auth_links WHERE (user = ? OR email = ?) AND kind != 'none' AND expires > ? ORDER BY expires")
+        .prepare(
+          "SELECT CASE WHEN kind = 'none' THEN 'email' ELSE kind END AS kind, email, expires FROM auth_links WHERE (user = ? OR (email = ? AND kind != 'none')) AND expires > ? ORDER BY expires",
+        )
         .all(userId, row.email, now) as { kind: LinkKind; email: string; expires: number }[];
       return {
         email: row.email,
@@ -850,9 +866,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const hashed = await newPassword(next, row.email);
       // Only while nothing changed since the session was checked; the email as it is now.
       const stamp = newStamp();
+      // And while the session that asked is still there: ended meanwhile (signed out everywhere), it changes nothing.
       const done = db
-        .prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ? RETURNING email")
-        .get(hashed, stamp, row.id, row.stamp) as { email: string } | undefined;
+        .prepare(
+          "UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ? AND EXISTS (SELECT 1 FROM auth_sessions WHERE token = ? AND user = id) RETURNING email",
+        )
+        .get(hashed, stamp, row.id, row.stamp, row.hashed) as { email: string } | undefined;
       if (!done) throw SIGN_IN_AGAIN();
       afterNewPassword(row.id, done.email);
       emit("password-changed", { userId: row.id, from });
@@ -878,7 +897,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const { email } = link;
       // Gone (or, in moveTo, the address taken meanwhile): nothing to move.
       const row = accountOf(link);
-      moveTo(row.id, email);
+      moveTo(row.id, email, { was: row.stamp });
       endAllSessions(row.id);
       endLinks(row.email, row.id);
       endLinks(email);

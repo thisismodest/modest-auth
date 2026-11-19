@@ -27,6 +27,8 @@ export type Message =
   | { kind: "email-in-use"; to: Contact }
   /** The account's password was just changed, and every other session ended. */
   | { kind: "password-changed"; to: Contact }
+  /** The account was just deleted, with everything kept about it. */
+  | { kind: "account-deleted"; to: Contact }
   /** To the address an account just moved from: it moved to `email`, and `link` undoes it. */
   | { kind: "email-changed"; to: Contact; email: string; link: string; expires: number };
 
@@ -109,6 +111,11 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
       return {
         subject: `Your password was changed on ${title}`,
         text: `The password for your account on ${where} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.\n`,
+      };
+    case "account-deleted":
+      return {
+        subject: `Your account was deleted on ${title}`,
+        text: `Your account on ${where} was just deleted, with everything kept about it, and every session ended.\n\nIf it wasn't you, someone could sign in to it: sign up again at ${origin}, and keep this address's inbox safe.\n`,
       };
     case "email-changed":
       return {

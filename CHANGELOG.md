@@ -45,10 +45,27 @@ messages are data for the app to send. Several changes break the API; upgrading 
 
 - `allow(contact)`: who may have an account, if not everyone. Asked before a link is
   sent or used, an account made, or a session started or used, so someone the app stops
-  allowing is signed out at their next request. It can only refuse; a mistake in it is a
+  allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
   refusal. A refused address is answered as any other and sent nothing.
 - `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`
   (a link's message, for apps using the parts), and `auth.signInWith`.
+
+- A notice to the account's address when it's deleted (`account-deleted`), and the
+  `Cross-Origin-Resource-Policy: same-origin` header on every answer.
+
+### Fixed
+
+Found by an adversarial review of this release.
+
+- The copy of an account's data (`my-data`) showed a move it asked for only when the new
+  address had no account, so anyone with an account could learn whether another address
+  had one (also true in 0.5.0). Its move requests are now shown the same either way.
+- A password change still hashing when its session was signed out still landed. It now
+  lands only while the session that asked is there.
+- A session refused by `allow` came back if `allow` later said yes; now it ends for good.
+  A password check refuses an address `allow` refuses, even for an app that only checks.
+- Accepting an email move checks the account's stamp, so an undo landing in another
+  process at that moment isn't overwritten.
 
 ### Removed
 

@@ -111,7 +111,13 @@ const TOO_SLOW = "deliver didn't finish in 30 seconds: pass its signal on to the
 const BODY_LIMIT = 4096;
 
 /** Every answer's headers: JSON, never kept, and never read as anything else (the Node adapter's own failures use them too). */
-export const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
+export const HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store",
+  "x-content-type-options": "nosniff",
+  // Read only by the site's own pages, not by another site's, even a sibling subdomain's.
+  "cross-origin-resource-policy": "same-origin",
+};
 
 function reply(status: number, body: unknown, cookie?: string, retryAfter?: number): Response {
   const headers = new Headers(HEADERS);
@@ -349,8 +355,10 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       send(back.reset);
       return reply(200, { email: back.email });
     },
-    "delete-account": own(({ token }, _b: Body, from: string) => {
+    "delete-account": own(({ token, user }, _b: Body, from: string) => {
       auth.deleteAccount(token, from);
+      // It can't be undone: the address is told, so a deletion its owner didn't make is at least known.
+      queue({ kind: "account-deleted", to: { email: user.email } });
       return signedOut();
     }),
     ...(passwords ? passwordRoutes : {}),
