@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { HASHING } from "../../src/index.ts";
-import { type Answer, askForLink, freshEmail, freshPassword, type Harness, signUp, startHarness, unlessBusy, wait } from "./harness.ts";
+import { type Answer, askForLink, freshEmail, freshPassword, type Harness, hashTime, signUp, startHarness, unlessBusy, wait } from "./harness.ts";
 
 let h: Harness;
 before(async () => {
@@ -44,7 +44,9 @@ test("a flood of sign-ins is refused as busy, counting only those checked, the s
   for (const answer of answers) assert.ok([401, 503].includes(answer.status), `answered ${answer.status}`);
   assert.ok(Math.abs(busyKnown - busyUnknown) <= 6, "busy as often for either");
   assert.equal(session.json?.user?.email, account.email);
-  assert.ok(session.ms < 250, `the session took ${session.ms} ms`);
+  // Queued behind the flood, it would wait for dozens of hashes; a few hashes' time is noise on a busy machine.
+  const hashMs = await hashTime();
+  assert.ok(session.ms < Math.max(250, 5 * hashMs), `the session took ${session.ms.toFixed(1)} ms (a hash here: ${hashMs.toFixed(1)} ms)`);
   await wait(100);
   const failed = h.events.slice(before).filter((e) => e.type === "sign-in-failed" && e.userId === account.userId).length;
   assert.equal(failed, checkedKnown, "only those checked are counted");

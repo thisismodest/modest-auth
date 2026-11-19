@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type AuthEvent, type AuthOptions, createAuth, createHandler, type Handler, type HandlerOptions, handleNode } from "../../src/index.ts";
+import { hashPassword } from "../../src/passwords.ts";
 import { wait } from "../helpers.ts";
 
 export { wait };
@@ -425,4 +426,18 @@ export function steadyHeaders(answer: Answer): Record<string, string> {
 export function rowsMentioning(db: DatabaseSync, table: string, text: string): number {
   const rows = db.prepare(`SELECT * FROM ${table}`).all();
   return rows.filter((row) => Object.values(row).some((value) => value === text)).length;
+}
+
+/**
+ * How long one password hash takes on this machine, in ms (the median of three): a skipped hash is what a timing
+ * leak looks like, so timing checks allow noise well under it, and still catch one.
+ */
+export async function hashTime(): Promise<number> {
+  const times: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now();
+    await hashPassword("a password to time the hashing");
+    times.push(performance.now() - started);
+  }
+  return median(times);
 }
