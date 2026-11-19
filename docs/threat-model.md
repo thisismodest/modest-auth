@@ -51,9 +51,10 @@ round modest-auth.
 | Taking over someone's passkey, or adding one to someone else's account | A passkey's id is unique across every account, so one already added isn't added again; a sign-in's passkey must name, by id, the account it was added to (a sign-in naming none is refused); an address `allow` refuses can't sign in by passkey; adding one needs a session started in the last 10 minutes, and a challenge given to that account | `auth.ts` |
 | A copied passkey (cloned from a device) | Where a passkey keeps a counter, it must go up each time, or the sign-in is refused; the new count is written only while it's still the one checked, so two processes can't both take it | `auth.ts` |
 | A thief keeping a way back after the owner moves the account home | Moving back to an address the account was moved away from, while that move's undo link lasts, is that undo: later moves' undo links end, and none goes to the address it leaves | `auth.ts`, `handler.ts` |
-| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; getting back in is a fresh start: a new password chosen at a link, a sign-in link where the site doesn't sign in by link (or one opened with `reset`), and an undone move each change the stamp and end every session, link, and passkey of the account (a reset sign-in link takes the password too); a passkey, or a move's undo link, is stored only while the stamp is the one just set, so a fresh start in another process can't be outlasted | `auth.ts`, `handler.ts` |
+| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; getting back in is a fresh start: a new password chosen at a link, a sign-in link where the site doesn't sign in by link (or one opened with `reset`), and an undone move each change the stamp and end every session, link, and passkey of the account (a reset sign-in link takes the password too); a passkey, or a move's undo link, is stored only while the stamp is the one just set, and passkeys go before the stamp changes, so a fresh start in another process can't be outlasted | `auth.ts`, `handler.ts` |
 | A link opening an account it wasn't sent for | A link to an existing account names it, and opens only that one; a sign-up link opens nothing that has an account by then, so an account made, or moved to the address, after it was sent can't be taken with it | `auth.ts` |
 | An undo link as a way into a passkey account | Under `recovery: "app"`, undoing a move sends no link in: the old address can move the account back, which signs everyone out, but can't sign in | `auth.ts` |
+| A thief's words in the owner's notice | A notice of a passkey added or removed doesn't name it (whoever added it chose the name) | `messages.ts`, `handler.ts` |
 | A copy of the database signing in by passkey | Only public keys are kept | `auth.ts` |
 | Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and a message either way (for a sign-in link to an email with no account, where there are passwords, one saying so, with no link; where there aren't, one that signs up), sent after the answer | `auth.ts`, `handler.ts` |
 | Flooding an inbox, or keeping its owner from getting a link | At most 3 links of each kind to one address in 15 minutes, the rest quietly not sent; asking for more never ends a link sent (using one ends the address's others); each kind counted apart, so sign-in requests can't block a password link (nor the reverse); each exact address counted alone, so another spelling can't use up its owner's | `auth.ts` |
@@ -133,6 +134,12 @@ round modest-auth.
   inbox, for good). That's why the undo link also makes the password useless. Once
   the undo link has run out (7 days), the account's new address is its own: an owner
   who then moves it back by hand sends that address an undo link, as for any move.
+  Within those 7 days, the earliest address holds the claim: whoever reads it can take
+  the account back (by its undo link, or by moving the account there), which ends any
+  later move's undo link.
+- **The address in an "email changed" notice is chosen by whoever moved the account,**
+  so its local part can read as words (`no-action-needed@…`). It can't hold a path or
+  query, and the notice still carries the undo link.
 - **A session stolen in its first 10 minutes** can change the account: its password, its
   email, its passkeys, or deleting it. After that it must sign in again. A notice goes to the account's
   email for a password or email change, with a way back.
