@@ -101,7 +101,8 @@ const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passk
   const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
     await afterwards();
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
-    const token = new RegExp(`^${ORIGIN}${EMAIL.linkPage}#${kind}=([\\w-]{43})$`, "m").exec(text)?.[1];
+    const prefix = `${ORIGIN}${EMAIL.linkPage}#${kind}=`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const token = new RegExp(`^${prefix}([\\w-]{43})$`, "m").exec(text)?.[1];
     assert.ok(token, `a ${kind} link was emailed to ${to}`);
     return token;
   };
