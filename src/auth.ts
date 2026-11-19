@@ -752,12 +752,17 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     if (moved === 0) throw EXPIRED();
     return stamp;
   };
+  /** The account's undo links from moves later than the one whose undo link runs out at `expires`. */
+  const endLaterUndos = (userId: string, expires: number) =>
+    void db.prepare("DELETE FROM auth_links WHERE kind = 'undo' AND user = ? AND expires > ?").run(userId, expires);
   /**
    * Moves an account back to the address a move took it from (an undo, ending at `undoExpires`), with `password`
    * (null for none) and no passkeys: every session ends, and every link of the account and of both addresses, but
    * not an earlier move's undo link. The new stamp.
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
+    // Later moves' undo links end first, so none can be used, in another process, once this has moved the account.
+    endLaterUndos(userId, undoExpires);
     // Every passkey goes too: whoever moved it may have added their own.
     const stamp = freshStart(userId, () => moveTo(userId, email, { password, undo: { expires: undoExpires } }));
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
@@ -1143,11 +1148,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const home = db.prepare("SELECT expires FROM auth_links WHERE kind = 'undo' AND user = ? AND email = ? AND expires > ?").get(row.id, email, Date.now()) as
         | { expires: number }
         | undefined;
+      // Ended before the move, as in moveBack.
+      if (home) endLaterUndos(row.id, home.expires);
       const stamp = moveTo(row.id, email, { was: row.stamp });
       endAllSessions(row.id);
       endLinks(row.email, row.id);
       endLinks(email);
-      if (home) db.prepare("DELETE FROM auth_links WHERE kind = 'undo' AND user = ? AND expires > ?").run(row.id, home.expires);
       // Otherwise an undo link for the address it moved from (each move its own: using one ends only later ones),
       // stored only while the account is still as this move left it, so an undo landing meanwhile in another process
       // (which ends later moves' undo links) isn't outlasted by this one.
