@@ -1,7 +1,7 @@
 {
   "name": "modest-auth",
   "version": "0.6.0",
-  "description": "Zero-dependency authentication for Node.js: sign-in by emailed link, and a password if you choose, with sessions.",
+  "description": "Zero-dependency authentication for Node.js: sign-in by emailed link, and by password or passkey if you choose, with sessions.",
   "license": "MIT",
   "author": "Modest Industries Ltd",
   "type": "module",
@@ -26,6 +26,8 @@
     "login",
     "sessions",
     "passwords",
+    "passkeys",
+    "webauthn",
     "sqlite",
     "zero-dependency"
   ],

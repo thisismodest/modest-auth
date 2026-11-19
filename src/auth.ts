@@ -26,7 +26,9 @@ import { AuthError } from "./errors.ts";
 import { blockOf, databaseLimits, type Limit, settingUp } from "./limits.ts";
 import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGEST_TYPED, unmatchableHash } from "./passwords.ts";
 import { readAtMost } from "./streams.ts";
+import { isPlainLine } from "./text.ts";
 import { DAY, HOUR, MINUTE } from "./time.ts";
+import { ALGORITHMS, checkAssertion, checkNewPasskey, type NewPasskey, type PasskeyAssertion, relyingParty } from "./webauthn.ts";
 
 export type User = { id: string; email: string };
 
@@ -34,11 +36,11 @@ export type User = { id: string; email: string };
 export type Contact = { email: string };
 
 /**
- * How people sign in: by an emailed link, and besides it by a password. A link is always there: it's how an
- * account is made, and how someone who forgets a password gets back in.
+ * How people sign in: by an emailed link, and besides it by a password, a passkey, or both. A link is always
+ * there: it's how an account is made, and how someone who forgets a password, or loses every passkey, gets back in.
  */
-export type SignInMethod = "link" | "password";
-const METHODS: readonly SignInMethod[] = ["link", "password"];
+export type SignInMethod = "link" | "password" | "passkey";
+const METHODS: readonly SignInMethod[] = ["link", "password", "passkey"];
 
 /** Something that happened to an account, for the app to keep: never a password, token, or email. `from` is addressKey's. */
 export type AuthEvent = {
@@ -53,18 +55,20 @@ export type AuthEvent = {
     | "signed-out"
     | "signed-out-everywhere"
     | "session-ended"
+    | "passkey-added"
+    | "passkey-removed"
     | "account-deleted";
   at: number;
   userId?: string;
   from?: string;
-  /** For "signed-in" (a session started): after the password was checked, or an emailed link used. */
+  /** For "signed-in" (a session started): after the password was checked, an emailed link used, or a passkey's signature checked. */
   by?: SignInMethod;
 };
 // "sign-in-failed": a wrong email or password; "paused": a try refused by a limit, on the account or on where it
 // came from.
 
 export type AuthOptions = {
-  /** How people sign in: ["link"], or ["link", "password"]. Required, so nobody gets a way in the site didn't choose. */
+  /** How people sign in: ["link"], with "password", "passkey", or both beside it. Required, so nobody gets a way in the site didn't choose. */
   signInWith: readonly SignInMethod[];
   /**
    * Who may have an account, if not everyone: true to allow `contact`, anything else to refuse. Asked before a
@@ -103,7 +107,26 @@ export type AccountData = {
   sessions: { started: number; lastUsed: number }[];
   /** Emailed links not yet used: what each does, where it went, and when it runs out. */
   links: { kind: LinkKind; email: string; expires: number }[];
+  /** Its passkeys, by name: their public keys aren't given (they sign nothing, but they're no use to anyone). */
+  passkeys: { name: string; created: number; lastUsed: number | null }[];
 };
+
+/** One of an account's passkeys, as its owner sees it: `id` is the passkey's own (it can't sign anyone in). */
+export type Passkey = { id: string; name: string; created: number; lastUsed: number | null };
+
+/** What navigator.credentials.create needs to make a passkey, as JSON (PublicKeyCredential.parseCreationOptionsFromJSON takes it). */
+export type PasskeyCreationOptions = {
+  challenge: string;
+  rp: { id: string; name: string };
+  user: { id: string; name: string; displayName: string };
+  pubKeyCredParams: { type: "public-key"; alg: number }[];
+  timeout: number;
+  excludeCredentials: { type: "public-key"; id: string }[];
+  authenticatorSelection: { residentKey: "required"; requireResidentKey: true; userVerification: "required" };
+  attestation: "none";
+};
+/** What navigator.credentials.get needs to sign in with a passkey, as JSON (PublicKeyCredential.parseRequestOptionsFromJSON takes it). */
+export type PasskeyRequestOptions = { challenge: string; rpId: string; timeout: number; userVerification: "required"; allowCredentials: [] };
 
 /** A session lasts this long from signing in, however much it's used. */
 export const SESSION_DAYS = 30;
@@ -130,6 +153,15 @@ export type LinkKind = "password" | "sign-in" | "email" | "undo";
 export const UNDO_DAYS = 7;
 /** How long a link to move an account to a new email lasts. */
 export const EMAIL_LINK_MINUTES = 60;
+/** How long someone has to make or use a passkey once asked: the challenge lasts this long. */
+export const PASSKEY_MINUTES = 5;
+/** The longest name a passkey can be given. */
+const LONGEST_PASSKEY_NAME = 60;
+/**
+ * A passkey's name, chosen by whoever adds it and shown in the owner's alert: one plain line of letters, numbers,
+ * spaces, and ' . , ( ) - only, so it can't pass for the alert's own words, a link, or markup.
+ */
+const isPasskeyName = (name: unknown): name is string => isPlainLine(name, LONGEST_PASSKEY_NAME) && /^[\p{L}\p{N} '’.,()-]+$/u.test(name);
 
 /**
  * A link to send. `token` goes in it, and only `to` should get it. Null where there's nothing to open: a sign-in
@@ -138,6 +170,8 @@ export const EMAIL_LINK_MINUTES = 60;
  * account there, for the message's words, and must never change what the person asking is told. Not worth
  * sending after `expires`.
  */
+export type { NewPasskey, PasskeyAssertion };
+
 export type Link = { kind: LinkKind; to: string; token: string | null; account: boolean; expires: number };
 
 export type Auth = {
@@ -204,6 +238,27 @@ export type Auth = {
   changePassword(session: string, next: string, from: string): Promise<User>;
   /** The account of `session` (started in the last RECENT_MINUTES), and everything of it, gone. */
   deleteAccount(session: string, from: string): void;
+  /**
+   * To add a passkey to the account of `session` (started in the last RECENT_MINUTES), for the site at `origin`:
+   * the options for navigator.credentials.create, with a challenge good for PASSKEY_MINUTES, once.
+   */
+  passkeyOptions(session: string, origin: string, from: string): PasskeyCreationOptions;
+  /**
+   * The passkey the browser made from passkeyOptions, checked and added to the account of `session` (started in the
+   * last RECENT_MINUTES), named `name` (one plain line), or "Passkey". "invalid-passkey" if it doesn't check out.
+   */
+  addPasskey(session: string, made: NewPasskey, name: string | undefined, origin: string, from: string): Passkey;
+  /** To sign in with a passkey at the site at `origin`: the options for navigator.credentials.get, with a challenge good for PASSKEY_MINUTES, once. */
+  signInOptions(origin: string, from: string): PasskeyRequestOptions;
+  /**
+   * The account a passkey signs in to, after checking its signature against the key kept for it, for a challenge
+   * signInOptions gave. Nobody types an email: the passkey says which account, by its id. "invalid-passkey" otherwise.
+   */
+  signInWithPasskey(assertion: PasskeyAssertion, origin: string, from: string): User;
+  /** The user's passkeys, the most recently added first. */
+  passkeysOf(userId: string): Passkey[];
+  /** Removes one of the account's passkeys, by its `id`, for `session` (started in the last RECENT_MINUTES): the one removed, or null if it has none of that id. */
+  removePasskey(session: string, id: string, from: string): Passkey | null;
 };
 
 const SCHEMA = `
@@ -233,6 +288,24 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS auth_links_email ON auth_links (email);
   CREATE INDEX IF NOT EXISTS auth_links_user ON auth_links (user);
   CREATE INDEX IF NOT EXISTS auth_links_expires ON auth_links (expires);
+  CREATE TABLE IF NOT EXISTS auth_passkeys (
+    id TEXT PRIMARY KEY,
+    user TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+    public_key BLOB NOT NULL,
+    algorithm INTEGER NOT NULL,
+    counter INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created INTEGER NOT NULL,
+    used INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS auth_passkeys_user ON auth_passkeys (user);
+  CREATE TABLE IF NOT EXISTS auth_challenges (
+    challenge TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    user TEXT REFERENCES auth_users(id) ON DELETE CASCADE,
+    expires INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS auth_challenges_expires ON auth_challenges (expires);
 `;
 
 /** A new token: 256 random bits, base64url (43 characters). */
@@ -259,6 +332,7 @@ const ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3}::
 const WRONG = () => new AuthError("wrong-credentials", "That email and password don't match.");
 const EXPIRED = () => new AuthError("invalid-link", "That link has expired or been used. Please ask for a new one.");
 const SIGN_IN_AGAIN = () => new AuthError("sign-in-again", "Please sign in again to do that.");
+const BAD_PASSKEY = () => new AuthError("invalid-passkey", "That passkey couldn't be used here. Please try again, or sign in another way.");
 /** A link token as newToken makes it. */
 const LINK_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 /** The address as it's kept, or "invalid-email". */
@@ -281,7 +355,9 @@ function methodsOf(given: unknown): readonly SignInMethod[] {
   const methods = Array.isArray(given) ? given : [];
   const known = methods.every((method) => METHODS.includes(method));
   if (!known || new Set(methods).size !== methods.length || !methods.includes("link")) {
-    throw new Error('signInWith must list how people sign in: ["link"], or ["link", "password"] (a link is how an account is made, and the way back in).');
+    throw new Error(
+      'signInWith must list how people sign in: "link", and "password", "passkey", or both beside it (a link is how an account is made, and the way back in).',
+    );
   }
   return Object.freeze([...methods]);
 }
@@ -447,8 +523,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const afterNewPassword = (userId: string, email: string) => {
     endAllSessions(userId);
     endLinks(email, userId);
+    endChallenges(userId);
     flush();
   };
+  /** Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may have added their own. */
+  const forgetPasskeys = (userId: string) => {
+    db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
+    endChallenges(userId);
+  };
+  /** Challenges given to the account to add a passkey, not yet used: they end when anything about how it's reached changes. */
+  const endChallenges = (userId: string) => void db.prepare("DELETE FROM auth_challenges WHERE user = ?").run(userId);
 
   type UserRow = { id: string; email: string; password: string | null; stamp: string };
   type LinkOptions = { usable?: boolean; account?: boolean; of?: { id: string; stamp?: string } };
@@ -593,12 +677,14 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   };
   /**
    * Moves an account back to the address a move took it from (an undo, ending at `undoExpires`), with `password`
-   * (null for none): every session ends, and every link of the account and of both addresses, but not an earlier
-   * move's undo link. The new stamp.
+   * (null for none) and no passkeys: every session ends, and every link of the account and of both addresses, but
+   * not an earlier move's undo link. The new stamp.
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
     const stamp = moveTo(userId, email, { password });
     endAllSessions(userId);
+    // Every passkey goes too: whoever moved it may have added their own.
+    forgetPasskeys(userId);
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
       userId,
@@ -645,6 +731,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       .get(randomUUID(), email, password, newStamp(), Date.now()) as { id: string; stamp: string };
     if (password !== null) afterNewPassword(id, email);
     else endLinks(email);
+    // A new password chosen at a link to the address is the way back in: every passkey goes, as after an undo, so one
+    // a thief added doesn't outlast it.
+    if (password !== null && !made) forgetPasskeys(id);
     if (made) emit("account-made", { userId: id, from });
     else if (password !== null) emit("password-changed", { userId: id, from });
     return { id, email, made, stamp };
@@ -679,6 +768,39 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     const link = newLink(kind, email, { ...options, usable: allows && options.usable });
     return allows ? link : null;
   };
+  /** A new challenge for a passkey to sign, of `kind` (for `userId`, adding one), good for PASSKEY_MINUTES: kept as its hash. */
+  const newChallenge = (kind: "add" | "sign-in", userId: string | null) => {
+    const challenge = newToken();
+    db.prepare("INSERT INTO auth_challenges (challenge, kind, user, expires) VALUES (?, ?, ?, ?)").run(
+      tokenHash(challenge),
+      kind,
+      userId,
+      Date.now() + PASSKEY_MINUTES * MINUTE,
+    );
+    return challenge;
+  };
+  /** Uses a challenge of `kind`, for `userId` (or nobody), once only; "invalid-passkey" if there's no such live one. */
+  const takeChallenge = (challenge: string, kind: "add" | "sign-in", userId: string | null) => {
+    const taken = db
+      .prepare("DELETE FROM auth_challenges WHERE challenge = ? AND kind = ? AND user IS ? AND expires > ? RETURNING 1")
+      .get(tokenHash(challenge), kind, userId, Date.now());
+    if (!taken) throw BAD_PASSKEY();
+  };
+  /** The account's new stamp, for a change to how it's reached that a session asked for: only while it's still `stamp`. */
+  const restamp = (userId: string, stamp: string) => {
+    if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(newStamp(), userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
+    endChallenges(userId);
+  };
+  type PasskeyRow = { id: string; name: string; created: number; used: number | null };
+  /** The account's passkeys, the most recently added first, as its owner sees them. */
+  const passkeysOf = (userId: string): Passkey[] =>
+    (db.prepare("SELECT id, name, created, used FROM auth_passkeys WHERE user = ? ORDER BY created DESC").all(userId) as PasskeyRow[]).map((row) => ({
+      id: row.id,
+      name: row.name,
+      created: row.created,
+      lastUsed: row.used,
+    }));
+
   // Whether the WAL may still hold rows that were removed (it couldn't be emptied last time).
   let unflushed = false;
   /**
@@ -712,6 +834,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     ).run(...live(now));
     // Links hold the emails of people who may have no account: once they've gone, not left in the WAL either.
     const cleared = db.prepare("DELETE FROM auth_links WHERE token IN (SELECT token FROM auth_links WHERE expires <= ? LIMIT 2000)").run(now).changes;
+    db.prepare("DELETE FROM auth_challenges WHERE challenge IN (SELECT challenge FROM auth_challenges WHERE expires <= ? LIMIT 2000)").run(now);
     if (cleared || unflushed) flush(false);
   };
 
@@ -783,8 +906,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const how = checked.get(user);
       if (how === undefined) throw new Error("startSession needs a user just returned by signIn, a link, or changePassword, and starts one session for it.");
       checked.delete(user);
-      // Refused as the way in would be: a password that no longer matches, or a link that no longer works.
-      const refused = () => (how.by === "password" ? WRONG() : EXPIRED());
+      // Refused as the way in would be: a password that no longer matches, a link or passkey that no longer works.
+      const refused = () => (how.by === "password" ? WRONG() : how.by === "passkey" ? BAD_PASSKEY() : EXPIRED());
       if (!allowed(user.email)) throw refused();
       // Only while the account exists with the stamp it was checked with: nothing about how it's reached has changed.
       const started = db
@@ -856,6 +979,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         password: row.password ? "set" : "none",
         sessions: sessions.map((session) => ({ started: startedAt(session.expires), lastUsed: session.seen })),
         links: links.map((link) => ({ kind: link.kind, email: link.email, expires: link.expires })),
+        passkeys: passkeysOf(userId).map(({ name, created, lastUsed }) => ({ name, created, lastUsed })),
       };
     },
 
@@ -928,6 +1052,100 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       endLinks(row.email, row.id);
       flush();
       emit("account-deleted", { userId: row.id, from });
+    },
+    passkeyOptions(session, origin, from) {
+      needs("passkey");
+      const row = recent(session, from);
+      const party = relyingParty(origin);
+      return {
+        challenge: newChallenge("add", row.id),
+        rp: { id: party.id, name: party.id },
+        // The account's id, never its email, so a passkey says nothing about whose it is to anyone but its owner.
+        user: { id: Buffer.from(row.id).toString("base64url"), name: row.email, displayName: row.email },
+        pubKeyCredParams: Object.values(ALGORITHMS).map((alg) => ({ type: "public-key" as const, alg })),
+        timeout: PASSKEY_MINUTES * MINUTE,
+        excludeCredentials: passkeysOf(row.id).map(({ id }) => ({ type: "public-key" as const, id })),
+        authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
+        attestation: "none",
+      };
+    },
+
+    addPasskey(session, made, name, origin, from) {
+      needs("passkey");
+      const row = recent(session, from);
+      let checked: ReturnType<typeof checkNewPasskey>;
+      try {
+        checked = checkNewPasskey(made, relyingParty(origin));
+      } catch {
+        throw BAD_PASSKEY();
+      }
+      takeChallenge(checked.challenge, "add", row.id);
+      const passkey: Passkey = { id: checked.id, name: isPasskeyName(name) ? name : "Passkey", created: Date.now(), lastUsed: null };
+      restamp(row.id, row.stamp);
+      // A passkey's id is the device's: one already here (this account's or another's) isn't taken again.
+      const stored = db
+        .prepare("INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING")
+        .run(passkey.id, row.id, checked.publicKey, checked.algorithm, checked.counter, passkey.name, passkey.created);
+      if (stored.changes === 0) throw BAD_PASSKEY();
+      emit("passkey-added", { userId: row.id, from });
+      return passkey;
+    },
+
+    signInOptions(origin, from) {
+      needs("passkey");
+      fromWhere(from);
+      sweep(Date.now());
+      return {
+        challenge: newChallenge("sign-in", null),
+        rpId: relyingParty(origin).id,
+        timeout: PASSKEY_MINUTES * MINUTE,
+        userVerification: "required",
+        allowCredentials: [],
+      };
+    },
+
+    signInWithPasskey(assertion, origin, from) {
+      needs("passkey");
+      fromWhere(from);
+      const id = typeof assertion?.id === "string" ? assertion.id : "";
+      const row = db
+        .prepare(
+          "SELECT p.user AS user, p.public_key AS publicKey, p.algorithm AS algorithm, p.counter AS counter, u.email AS email, u.stamp AS stamp FROM auth_passkeys p JOIN auth_users u ON u.id = p.user WHERE p.id = ?",
+        )
+        .get(id) as { user: string; publicKey: Uint8Array; algorithm: number; counter: number; email: string; stamp: string } | undefined;
+      let checked: { challenge: string; counter: number };
+      try {
+        if (!row) throw BAD_PASSKEY();
+        checked = checkAssertion(assertion, relyingParty(origin), { publicKey: Buffer.from(row.publicKey), algorithm: row.algorithm });
+        // The account the passkey says it's for must be given, and be the one it was added to; and one allow allows.
+        if (assertion.userHandle !== Buffer.from(row.user).toString("base64url") || !allowed(row.email)) throw BAD_PASSKEY();
+        takeChallenge(checked.challenge, "sign-in", null);
+        // A counter that doesn't go up, where it counts at all, means a copy of the passkey: refused. Written only
+        // while it's still the counter checked, so two processes can't both take the same one.
+        if ((checked.counter > 0 || row.counter > 0) && checked.counter <= row.counter) throw BAD_PASSKEY();
+        const counted = db
+          .prepare("UPDATE auth_passkeys SET counter = ?, used = ? WHERE id = ? AND counter = ?")
+          .run(checked.counter, Date.now(), id, row.counter);
+        if (counted.changes === 0) throw BAD_PASSKEY();
+      } catch {
+        emit("sign-in-failed", { ...(row ? { userId: row.user } : {}), from });
+        throw BAD_PASSKEY();
+      }
+      return handOver({ id: row.user, email: row.email }, row.stamp, "passkey", from);
+    },
+
+    passkeysOf,
+
+    removePasskey(session, id, from) {
+      const row = recent(session, from);
+      const passkey = passkeysOf(row.id).find((p) => p.id === id);
+      if (!passkey) return null;
+      restamp(row.id, row.stamp);
+      db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
+      // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
+      db.prepare("DELETE FROM auth_sessions WHERE user = ? AND token != ?").run(row.id, row.hashed);
+      emit("passkey-removed", { userId: row.id, from });
+      return passkey;
     },
   };
 }

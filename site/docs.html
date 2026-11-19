@@ -6,7 +6,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
     <title>Docs: modest-auth, sign-in for Node.js</title>
-    <meta name="description" content="How to use modest-auth: the routes, emailed links, the errors, the settings, and what your app does round it." />
+    <meta name="description" content="How to use modest-auth: the routes, emailed links, passkeys, the errors, the settings, and what your app does round it." />
     <link rel="canonical" href="https://modest-auth.com/docs.html" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="assets/favicon-192.png" sizes="192x192" type="image/png" />
@@ -17,7 +17,7 @@
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://modest-auth.com/docs.html" />
     <meta property="og:title" content="Docs: modest-auth, sign-in for Node.js" />
-    <meta property="og:description" content="How to use modest-auth: the routes, emailed links, the errors, the settings, and what your app does round it." />
+    <meta property="og:description" content="How to use modest-auth: the routes, emailed links, passkeys, the errors, the settings, and what your app does round it." />
     <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -92,7 +92,7 @@
 <span class="k">const</span> ORIGIN = <span class="s">"https://example.org"</span>; <span class="c">// your site's address (HTTPS)</span>
 <span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
-  signInWith: [<span class="s">"link"</span>, <span class="s">"password"</span>], <span class="c">// or ["link"] alone, for no passwords at all</span>
+  signInWith: [<span class="s">"link"</span>, <span class="s">"password"</span>, <span class="s">"passkey"</span>], <span class="c">// "link" always; the others if you like</span>
 });
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: ORIGIN,
@@ -148,6 +148,20 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>POST /auth/set-password</code></td><td><code>{ token, password }</code></td><td>From a password link: makes the account or replaces its password, signs in, and ends every other session</td></tr>
                 <tr><td><code>POST /auth/sign-in</code></td><td><code>{ email, password }</code></td><td>Signs in, with a fresh session (any old one ends)</td></tr>
                 <tr><td><code>POST /auth/password</code></td><td><code>{ next }</code></td><td>Signed in recently: changes the password, and ends every other session</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>And only where there are passkeys, each part a base64url string, as the browser gives it:</p>
+          <div class="table-card">
+            <table>
+              <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
+              <tbody>
+                <tr><td><code>POST /auth/sign-in-options</code></td><td>none</td><td>Options for <code>navigator.credentials.get</code>: a challenge good for 5 minutes, once</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-passkey</code></td><td><code>{ id, clientDataJSON, authenticatorData, signature, userHandle }</code></td><td>Signs in, with a fresh session</td></tr>
+                <tr><td><code>POST /auth/passkey-options</code></td><td>none</td><td>Signed in recently: options for <code>navigator.credentials.create</code></td></tr>
+                <tr><td><code>POST /auth/add-passkey</code></td><td><code>{ clientDataJSON, attestationObject, name }</code></td><td>Signed in recently: adds the passkey made</td></tr>
+                <tr><td><code>GET /auth/passkeys</code></td><td></td><td>The account's passkeys: <code>{ passkeys: [{ id, name, created, lastUsed }] }</code></td></tr>
+                <tr><td><code>POST /auth/remove-passkey</code></td><td><code>{ id }</code></td><td>Signed in recently: removes one</td></tr>
               </tbody>
             </table>
           </div>
@@ -247,6 +261,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
                 <tr><td><code>invalid-link</code></td><td>400</td><td>The link has expired or been used</td></tr>
                 <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
                 <tr><td><code>sign-in-again</code></td><td>403</td><td>That needs a sign-in in the last 10 minutes</td></tr>
+                <tr><td><code>invalid-passkey</code></td><td>400</td><td>The passkey couldn't be used: for another site, not this account's, or not signed by it</td></tr>
                 <tr><td><code>signed-out</code></td><td>401</td><td>That needs a signed-in browser</td></tr>
                 <tr><td><code>too-many-tries</code></td><td>429</td><td>Paused: wait, then try again</td></tr>
                 <tr><td><code>busy</code></td><td>503</td><td>Too many sign-ins at once</td></tr>
@@ -285,7 +300,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>signInWith</code> <small>(createAuth)</small></h3>
-              <p>How people sign in: <code>["link"]</code> for emailed links alone, no passwords at all, or <code>["link", "password"]</code>. Required. A link is how an account is made, and the way back in when a password is forgotten.</p>
+              <p>How people sign in: <code>"link"</code> always, and beside it <code>"password"</code>, <code>"passkey"</code>, or both. Required. A link is how an account is made, and the way back in when a password is forgotten or every passkey lost.</p>
             </div>
             <div>
               <h3><code>allow</code> <small>(createAuth)</small></h3>
@@ -374,6 +389,9 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it</td></tr>
                 <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, makes its password useless, and gives a <code>reset</code> link to get back in</td></tr>
                 <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
+                <tr><td><code>passkeyOptions(session, origin, from)</code>, <code>addPasskey(session, made, name, origin, from)</code></td><td>Options to make a passkey, and adding the one made (a recent session)</td></tr>
+                <tr><td><code>signInOptions(origin, from)</code>, <code>signInWithPasskey(assertion, origin, from)</code></td><td>Options to sign in with one, and the account it signs in to</td></tr>
+                <tr><td><code>passkeysOf(userId)</code>, <code>removePasskey(session, id, from)</code></td><td>The account's passkeys, and removing one (a recent session)</td></tr>
               </tbody>
             </table>
           </div>

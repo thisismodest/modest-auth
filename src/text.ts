@@ -1,4 +1,4 @@
-// Short names an app gives (a site's name for its emails): one plain line. A line break
+// Short names people or apps give (a site's name for its emails, a passkey's name): one plain line. A line break
 // could add a line of its own to an email (a header, in a mail program that writes them), and an invisible
 // character (one that reverses text, say) could disguise what's shown.
 

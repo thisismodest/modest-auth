@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
+import { makePasskey } from "../test/authenticator.ts";
 import {
   afterwards,
   captureErrors,
@@ -70,7 +71,7 @@ type Json = {
   [key: string]: unknown;
 };
 
-const setup = (more: { name?: string; signInWith?: ("password" | "link")[] } = {}) => {
+const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passkey")[] } = {}) => {
   const { auth } = fresh(more.signInWith ? { signInWith: more.signInWith } : {});
   const emails: { to: string; subject: string; text: string }[] = [];
   const messages: Message[] = [];
@@ -1023,6 +1024,40 @@ test("an address the app doesn't allow gets the same answer as any other, and no
     messages.map((m) => m.to.email),
     ["ann@example.org"],
   );
+});
+
+test("passkeys through the routes: added after a recent sign-in, told to the account, and signing in without an email", async () => {
+  const { auth, send, messages, signUp, forget, token } = setup({ signInWith: ["link", "password", "passkey"] });
+  await signUp("ann@example.org");
+  const userHandle = Buffer.from(must(auth.userOf(token())).id).toString("base64url");
+  const options = await send("/auth/passkey-options", {});
+  assert.equal(options.status, 200);
+  const passkey = makePasskey();
+  const added = await send("/auth/add-passkey", { ...passkey.create(String(options.json.challenge), ORIGIN), name: "Phone" });
+  assert.equal(added.status, 200);
+  await afterwards();
+  assert.deepEqual(messages.at(-1), { kind: "passkey-added", to: { email: "ann@example.org" }, name: "Phone" });
+  const listed = (await send("/auth/passkeys")).json.passkeys as { id: string; name: string }[];
+  assert.deepEqual(
+    listed.map((p) => p.name),
+    ["Phone"],
+  );
+  forget();
+  const challenge = String((await send("/auth/sign-in-options", {})).json.challenge);
+  const signedIn = await send("/auth/sign-in-with-passkey", passkey.get(challenge, ORIGIN, userHandle));
+  assert.deepEqual(signedIn.json, { user: { email: "ann@example.org" } });
+  assert.equal((await send("/auth/remove-passkey", { id: must(listed[0]).id })).status, 200);
+  await afterwards();
+  assert.deepEqual(messages.at(-1), { kind: "passkey-removed", to: { email: "ann@example.org" }, name: "Phone" });
+});
+
+test("without passkeys, their routes aren't there", async () => {
+  const { send, signUp } = setup();
+  await signUp("ann@example.org");
+  for (const route of ["passkey-options", "add-passkey", "sign-in-options", "sign-in-with-passkey", "remove-passkey"]) {
+    assert.equal((await send(`/auth/${route}`, {})).status, 404, route);
+  }
+  assert.equal((await send("/auth/passkeys")).status, 404);
 });
 
 test("deleting an account tells its address, and every answer says only the site's own pages may read it", async () => {

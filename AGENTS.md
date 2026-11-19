@@ -23,10 +23,12 @@ README.md for what it promises, and docs/threat-model.md for how.
 | What | Where |
 | --- | --- |
 | Public API (everything exported) | `src/index.ts` |
-| Accounts, sign-in methods, sessions, the stamp, `allow`, and the limits on sign-in | `src/auth.ts` |
+| Accounts, sign-in methods, sessions, the stamp, `allow`, passkeys kept, and the limits on sign-in | `src/auth.ts` |
 | The routes (Web-standard Request/Response), with the Origin check | `src/handler.ts` |
 | Messages to send (data), and `emailFor`, modest-auth's own email for one | `src/messages.ts` |
-| The one-plain-line rule for names (a site's) | `src/text.ts` |
+| Passkeys: the WebAuthn checks, the CBOR reader, and public keys | `src/webauthn.ts` |
+| The one-plain-line rule for names (a site's, a passkey's) | `src/text.ts` |
+| A software passkey authenticator, for the tests | `test/authenticator.ts` |
 | Node's own http server, to and from the handler | `src/node.ts` |
 | Password hashing (scrypt, with its cost recorded), and the rules for new passwords | `src/passwords.ts` |
 | The common passwords refused (data, made by `scripts/common-passwords.ts`) | `src/common-passwords.txt` |
