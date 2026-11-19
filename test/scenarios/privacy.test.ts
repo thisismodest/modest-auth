@@ -1,14 +1,18 @@
 // Scenarios 33 and 35 to 39 of docs/scenarios.md: not telling who has an account.
-// Timing is compared by medians, with a generous tolerance: a skipped hash (about 100 to 200 ms)
-// stands far outside it, and ordinary noise doesn't.
+// Timing is compared by medians, with a tolerance tied to the leak these look for: a skipped password
+// hash, timed on this machine at the start. Noise on a busy machine (a shared CI runner) stays well
+// under half a hash; a skipped hash doesn't.
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { type Answer, freshEmail, freshPassword, type Harness, median, signUp, startHarness, steadyHeaders, unlessBusy, wait } from "./harness.ts";
+import { type Answer, freshEmail, freshPassword, type Harness, hashTime, median, signUp, startHarness, steadyHeaders, unlessBusy, wait } from "./harness.ts";
 
 let h: Harness;
+/** One password hash, here, in ms. */
+let hashMs = 0;
 before(async () => {
   h = await startHarness();
+  hashMs = await hashTime();
 });
 after(() => h.close());
 
@@ -17,10 +21,11 @@ const same = (a: Answer, b: Answer) => {
   assert.equal(a.text, b.text);
   assert.deepEqual(steadyHeaders(a), steadyHeaders(b));
 };
-/** Two medians the same within noise: 40% of the larger, or `floor` ms, whichever is more. */
+/** Two medians the same within noise: under half a password hash here, 40% of the larger, or `floor` ms, whichever is most. */
 const sameTime = (a: number[], b: number[], floor: number) => {
   const [ma, mb] = [median(a), median(b)];
-  assert.ok(Math.abs(ma - mb) <= Math.max(floor, 0.4 * Math.max(ma, mb)), `medians ${ma.toFixed(1)} ms and ${mb.toFixed(1)} ms`);
+  const allowed = Math.max(floor, hashMs / 2, 0.4 * Math.max(ma, mb));
+  assert.ok(Math.abs(ma - mb) <= allowed, `medians ${ma.toFixed(1)} ms and ${mb.toFixed(1)} ms (a hash here: ${hashMs.toFixed(1)} ms)`);
   return `${ma.toFixed(1)} ms and ${mb.toFixed(1)} ms`;
 };
 
