@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
     <meta name="referrer" content="no-referrer" />
-    <title>modest-auth: sign-in for Node.js, by link or password</title>
-    <meta name="description" content="Sign-in for Node.js by emailed link or password, with sessions. No dependencies, and no options that turn its protections off." />
+    <title>modest-auth: sign-in for Node.js, by link, password, or passkey</title>
+    <meta name="description" content="Sign-in for Node.js by emailed link, password, or passkey, with sessions. No dependencies, and no options that turn its protections off." />
     <link rel="canonical" href="https://modest-auth.com/" />
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="assets/favicon-192.png" sizes="192x192" type="image/png" />
@@ -16,14 +16,14 @@
     <meta property="og:site_name" content="modest-auth" />
     <meta property="og:locale" content="en_GB" />
     <meta property="og:url" content="https://modest-auth.com/" />
-    <meta property="og:title" content="modest-auth: sign-in for Node.js, by link or password" />
-    <meta property="og:description" content="Sign-in for Node.js by emailed link or password, with sessions. No dependencies, and no options that turn its protections off." />
+    <meta property="og:title" content="modest-auth: sign-in for Node.js, by link, password, or passkey" />
+    <meta property="og:description" content="Sign-in for Node.js by emailed link, password, or passkey, with sessions. No dependencies, and no options that turn its protections off." />
     <meta property="og:image" content="https://modest-auth.com/assets/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="modest-auth: Sign-in for Node. No dependencies. Beside it, the code that adds sign-in to a Node server." />
     <meta name="twitter:card" content="summary_large_image" />
-    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareSourceCode", "name": "modest-auth", "description": "Sign-in for Node.js by emailed link or password, with sessions. No dependencies, and no options that turn its protections off.", "url": "https://modest-auth.com/", "codeRepository": "https://github.com/thisismodest/modest-auth", "programmingLanguage": "TypeScript", "runtimePlatform": "Node.js 24", "license": "https://opensource.org/license/mit", "author": {"@type": "Organization", "name": "Modest Industries Ltd"}}</script>
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareSourceCode", "name": "modest-auth", "description": "Sign-in for Node.js by emailed link, password, or passkey, with sessions. No dependencies, and no options that turn its protections off.", "url": "https://modest-auth.com/", "codeRepository": "https://github.com/thisismodest/modest-auth", "programmingLanguage": "TypeScript", "runtimePlatform": "Node.js 24", "license": "https://opensource.org/license/mit", "author": {"@type": "Organization", "name": "Modest Industries Ltd"}}</script>
     <link rel="stylesheet" href="assets/vendor/modest-ui.min.css" />
     <link rel="stylesheet" href="assets/site.css" />
   </head>
@@ -50,7 +50,7 @@
               <span class="pill"><span class="dot amber" aria-hidden="true"></span>Early release, not yet audited</span>
               <h1>Sign-in for Node.<br /><span class="quiet">No dependencies.</span></h1>
               <p class="lead">
-                Sign-up, sign-in by emailed link (and a password, if you choose), and sessions, using only
+                Sign-up, sign-in by emailed link (and by password or passkey, if you choose), and sessions, using only
                 Node's built-in crypto and SQLite. There are no options that turn its protections off.
               </p>
               <div class="actions">
@@ -66,7 +66,7 @@
                 <pre><code><span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(<span class="s">"app.db"</span>), {
-  signInWith: [<span class="s">"link"</span>, <span class="s">"password"</span>], <span class="c">// or just ["link"]</span>
+  signInWith: [<span class="s">"link"</span>, <span class="s">"passkey"</span>], <span class="c">// and "password", if you like</span>
 });
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: <span class="s">"https://example.org"</span>,
@@ -91,8 +91,8 @@
 
         <ul class="facts" aria-label="In numbers">
           <li><strong>0</strong><span>runtime dependencies</span></li>
-          <li><strong>~2,250</strong><span>lines of source</span></li>
-          <li><strong>17</strong><span>routes</span></li>
+          <li><strong>~2,800</strong><span>lines of source</span></li>
+          <li><strong>23</strong><span>routes</span></li>
           <li><strong>1</strong><span>SQLite database</span></li>
         </ul>
 
@@ -120,7 +120,7 @@
                 <li>No packages besides itself</li>
                 <li>Node's built-in SQLite only</li>
                 <li>No options that weaken it</li>
-                <li>About 2,250 lines of code</li>
+                <li>About 2,800 lines of code</li>
               </ul>
             </div>
           </div>
@@ -133,7 +133,7 @@
           <ol class="steps">
             <li><strong>Where it came from</strong><span>Requests from other sites are refused.</span></li>
             <li><strong>How many tries</strong><span>Attempts are counted per account, per address, and per IPv6 block, before any password is checked.</span></li>
-            <li><strong>The password or link</strong><span>A password is checked against a scrypt hash, and an unknown email takes as long as a wrong one. A link works once.</span></li>
+            <li><strong>The passkey, password, or link</strong><span>A passkey's signature is checked against the key kept for it; a password against a scrypt hash, where an unknown email takes as long as a wrong one. A link works once.</span></li>
             <li><strong>The session</strong><span>A new 256-bit token replaces any old one, and only its hash is stored.</span></li>
           </ol>
         </section>
@@ -144,8 +144,8 @@
           <div class="features">
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></svg>
-              <h3>Passwords, if you want them</h3>
-              <p>Or none at all: sign-in by link alone. Where there are passwords, they're hashed with scrypt at OWASP's recommended cost, and new ones follow NIST's rules: at least 15 characters, and not one of 5,500 common passwords.</p>
+              <h3>Passkeys and passwords, if you want them</h3>
+              <p>Passkeys can't be phished, and are checked with Node's own crypto. Or sign-in by link alone. Where there are passwords, they're hashed with scrypt at OWASP's recommended cost, and new ones follow NIST's rules: at least 15 characters, and not one of 5,500 common passwords.</p>
             </div>
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>
@@ -177,8 +177,8 @@
           <figure class="window terminal" aria-label="Output of npm run check">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>terminal</span></div>
             <pre><code><span class="c">$</span> npm run check
-<span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 2245 lines.
-<span class="ok">ℹ pass 267</span>
+<span class="ok">Rules kept:</span> no dependencies; only node: and own imports; source 2808 lines.
+<span class="ok">ℹ pass 291</span>
 ℹ fail 0</code></pre>
           </figure>
         </section>

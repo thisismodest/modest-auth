@@ -36,12 +36,21 @@ round modest-auth.
 
 | Threat | Mitigation | Where |
 | --- | --- | --- |
-| A way in the site didn't choose | How people sign in must be given (`signInWith`): a link always, and a password beside it if the site wants; anything else refused at start-up. A way that isn't chosen is off entirely: its routes aren't there, and its functions refuse to run | `auth.ts`, `handler.ts` |
+| A way in the site didn't choose | How people sign in must be given (`signInWith`): a link always, and beside it a password, a passkey, or both; anything else refused at start-up. A way that isn't chosen is off entirely: its routes aren't there, and its functions refuse to run | `auth.ts`, `handler.ts` |
 | Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
 | Signing up with someone else's email | An account is made only by a link emailed to the address: where there are passwords, whoever opens it chooses one; where there aren't, opening a sign-in link makes it | `auth.ts` |
 | Guessing, reusing, or stretching a link | 256-bit tokens, kept only as SHA-256 hashes; single-use, taken in one statement; 60 minutes to choose a password, 15 to sign in; a password link can't sign in, nor a sign-in link choose a password; a password refused at a link doesn't use it up; using a link, a new password, or deleting the account ends the email's other links | `auth.ts` |
 | A link leaking from its URL | The token follows `#`, which browsers never send to a server or in `Referer`; the link page takes it out of the address bar; a mail service that opens links to check them can't use one | `handler.ts`, `examples/node-http.ts` |
 | Sending someone your own link, to sign them in to your account (login CSRF) | The link page asks `/auth/link` which email it's for, shows it, and acts only when the person does | `handler.ts`, `examples/node-http.ts` |
+| Phishing a passkey (a look-alike site, or one framing ours) | The browser's client data must name exactly the handler's origin, of the right type (making one, or signing in), not from inside another site's frame (`crossOrigin` or `topOrigin` refused); the authenticator data must be for this site's host | `webauthn.ts` |
+| Replaying a passkey's answer, or using one made for another purpose | Challenges are 256-bit, single-use, kept only as hashes, taken in one statement, kept apart by kind (making one, signing in) and, for making one, by account, and good for 5 minutes; a creation's answer can't be used as a sign-in (its type differs, and a sign-in carrying a new passkey is refused) | `auth.ts`, `webauthn.ts` |
+| A forged or altered passkey answer | Its signature is checked over exactly the bytes received (the authenticator data and the client data's hash), with the key kept when it was added; nothing is re-written before checking | `webauthn.ts` |
+| A passkey used without its owner there | The authenticator data must say the person was present and verified (a fingerprint, a face, or a PIN), both when it's made and at every sign-in | `webauthn.ts` |
+| Malformed passkey data (CBOR, keys) | Read by a strict CBOR reader taking only what passkeys use: no indefinite lengths, tags, floats, or null; no key twice; integers JavaScript holds exactly; nesting and item counts capped; nothing left over. Keys only of three algorithms (EdDSA on Ed25519, ES256 on P-256, RS256 of 2048 bits or more), each with exactly its own type, curve, and fields; points off the curve refused. Fuzzed with random and mutated input | `webauthn.ts` |
+| Taking over someone's passkey, or adding one to someone else's account | A passkey's id is unique across every account, so one already added isn't added again; a sign-in's passkey must name, by id, the account it was added to; adding one needs a session started in the last 10 minutes, and a challenge given to that account | `auth.ts` |
+| A copied passkey (cloned from a device) | Where a passkey keeps a counter, it must go up each time, or the sign-in is refused | `auth.ts` |
+| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp; an undone move (by its undo link, or a link that takes it back) removes every passkey | `auth.ts`, `handler.ts` |
+| A copy of the database signing in by passkey | Only public keys are kept | `auth.ts` |
 | Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and a message either way (for a sign-in link to an email with no account, where there are passwords, one saying so, with no link; where there aren't, one that signs up), sent after the answer | `auth.ts`, `handler.ts` |
 | Flooding an inbox, or keeping its owner from getting a link | At most 3 links of each kind to one address in 15 minutes, the rest quietly not sent; asking for more never ends a link sent (using one ends the address's others); each kind counted apart, so sign-in requests can't block a password link (nor the reverse); each exact address counted alone, so another spelling can't use up its owner's | `auth.ts` |
 | Emailing strangers in bulk through sign-up | At most 5 links asked for from one address, and 20 from one IPv6 /48, in 15 minutes | `auth.ts` |
@@ -79,6 +88,7 @@ round modest-auth.
 | Planting a session in someone's browser, then waiting (fixation) | Each sign-in starts a fresh session and ends the old one; a request carrying two session cookies is treated as signed out; a cookie whose name only resembles ours (an invisible character round it) isn't read | `handler.ts`, `cookies.ts` |
 | A session left signed in on a shared computer | Ends after 7 days unused, and 30 at most; sign out everywhere; a password change ends all others | `auth.ts` |
 | Learning who has an account at sign-in | Same answer and the same work (a hash is checked either way) for a wrong email, an unknown one, or a wrong password | `auth.ts` |
+| Learning who has an account by passkey | A passkey sign-in needs no email; options for one name nobody; a passkey names its account only by a random id, never the email | `auth.ts` |
 | Swamping the server | Hashing only a few at a time, sized to the machine (its cores, half its memory, and Node's thread pool less two, so file reads keep a thread), with a short queue; passwords over 200 characters, emails over 254, and bodies over 4KB refused before any hashing; old limit rows and sessions cleared in small batches | `passwords.ts`, `emails.ts`, `handler.ts`, `limits.ts` |
 | A crafted email that makes checking it slow | Length checked first; plain string checks, no backtracking pattern | `emails.ts` |
 | One account passing for another (compatibility forms, or invisible characters) | Emails normalised (NFKC), so `ａｎｎ` and `ann` are one address, and domains kept in their ASCII form, so `bücher.de` and `xn--bcher-kva.de` are one; control, format, and invisible characters (anything drawn as nothing) refused | `emails.ts` |
@@ -113,7 +123,7 @@ round modest-auth.
   the account until its old address undoes the move (and, if they also read the old
   inbox, for good). That's why the undo link also makes the password useless.
 - **A session stolen in its first 10 minutes** can change the account: its password, its
-  email, or deleting it. After that it must sign in again. A notice goes to the account's
+  email, its passkeys, or deleting it. After that it must sign in again. A notice goes to the account's
   email for a password or email change, with a way back.
 - **A determined attacker can pause signing in with the password to one account for up
   to an hour** by spending 100 guesses at it from several addresses. Its owner can still
@@ -199,3 +209,11 @@ round modest-auth.
 - **Nothing limits how many accounts can be made overall,** beyond the per-address
   limits and the need to read each address's inbox: someone with many addresses and
   inboxes can make many.
+- **No attestation:** a passkey isn't asked what device made it, so a site can't limit
+  passkeys to certain hardware. Nothing here relies on it.
+- **Synced passkeys don't count,** so a copy of one (in a compromised password manager,
+  say) can't be told from the original. The counter check only catches copies of
+  passkeys that count.
+- **An account with a passkey is still reachable by its link** (and its password, if
+  it has one), so it's only as strong as those. Choosing passkeys only, for an account,
+  is on the roadmap.

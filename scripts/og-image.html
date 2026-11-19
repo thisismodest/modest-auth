@@ -1,0 +1,49 @@
+<!-- The share image (site/assets/og.png), 1200 x 630. To make it again: open this in headless Chrome at 1200 x 800, e.g.
+     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1200,800 --screenshot=tall.png scripts/og-image.html
+     then crop the top 630 pixels: sips -c 630 1200 --cropOffset 0 0 tall.png --out site/assets/og.png -->
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    background-color: #fff;
+    background-image: radial-gradient(#e4e4e4 1px, transparent 1.2px);
+    background-size: 22px 22px;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 64px; box-sizing: border-box; position: relative; top: 85px;
+  }
+  .left { width: 520px; }
+  .brand { display: flex; align-items: center; gap: 16px; font: 600 32px ui-monospace, "SF Mono", Menlo, monospace; color: #151515; margin-bottom: 52px; }
+  .brand img { width: 40px; height: 40px; }
+  h1 { margin: 0; font-size: 60px; line-height: 1.12; letter-spacing: -2px; font-weight: 700; color: #111; }
+  h1 span { color: #5f5f5c; }
+  p { margin: 28px 0 0; font-size: 25px; line-height: 1.5; color: #5f5f5c; }
+  .window { width: 520px; background: #161616; border-radius: 14px; box-shadow: 0 30px 60px rgba(0,0,0,.18); overflow: hidden; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid #2a2a2a; color: #8a8a8a; font: 14px ui-monospace, "SF Mono", Menlo, monospace; }
+  .bar i { width: 11px; height: 11px; border-radius: 50%; background: #4a4a4a; display: inline-block; }
+  .bar span { margin-left: 14px; }
+  pre { margin: 0; padding: 22px 22px 26px; color: #e8e8e8; font: 14px/1.62 ui-monospace, "SF Mono", Menlo, monospace; }
+  .k { color: #9fb4ff; } .s { color: #f0c987; } .f { color: #c7d2ff; } .c { color: #7d7d7d; }
+</style></head><body>
+  <div class="left">
+    <div class="brand"><img src="../site/assets/favicon.svg" alt="">modest-auth</div>
+    <h1>Sign-in for Node.<br><span>No dependencies.</span></h1>
+    <p>Sign-in by emailed link, password, or passkey, with only Node's own crypto and SQLite.</p>
+  </div>
+  <div class="window">
+    <div class="bar"><i></i><i></i><i></i><span>server.ts</span></div>
+<pre><span class="k">const</span> auth = <span class="f">createAuth</span>(db, {
+  signInWith: [<span class="s">"link"</span>, <span class="s">"passkey"</span>],
+});
+<span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
+  origin: <span class="s">"https://example.org"</span>,
+  linkPage: <span class="s">"/account/link"</span>,
+  deliver: yourMailer,
+});
+
+<span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
+  <span class="k">if</span> (<span class="k">await</span> <span class="f">handleNode</span>(handler, req, res)) <span class="k">return</span>;
+  <span class="k">const</span> user = handler.<span class="f">userOf</span>(<span class="f">toRequest</span>(req));
+  res.<span class="f">end</span>(user ? <span class="s">`Hello, ${user.email}`</span> : <span class="s">"Hello"</span>);
+}).<span class="f">listen</span>(3000);</pre>
+  </div>
+</body></html>

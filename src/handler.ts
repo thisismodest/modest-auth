@@ -26,6 +26,15 @@
 //   POST /auth/sign-in               { email, password }
 //   POST /auth/password              { next }: a new password (signed in recently); every other session ends
 //
+// And only on a site with passkeys (each passkey part a base64url string, as the browser gives it):
+//
+//   POST /auth/sign-in-options        (no fields): options for navigator.credentials.get
+//   POST /auth/sign-in-with-passkey  { id, clientDataJSON, authenticatorData, signature, userHandle }
+//   POST /auth/passkey-options        (no fields; signed in recently): options for navigator.credentials.create
+//   POST /auth/add-passkey           { clientDataJSON, attestationObject, name }: signed in recently
+//   GET  /auth/passkeys              the account's passkeys: { passkeys: [{ id, name, created, lastUsed }] }
+//   POST /auth/remove-passkey        { id }: signed in recently
+//
 // Changing the email or password, or deleting the account, needs a session started in the last
 // RECENT_MINUTES: an older one is told "sign-in-again", and signing in again (by any way the site has)
 // starts a fresh one.
@@ -162,6 +171,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   }
   if (typeof deliver !== "function") throw new Error("deliver must be a function that sends a message: (message, { signal }).");
   const passwords = auth.signInWith.includes("password");
+  const passkeys = auth.signInWith.includes("passkey");
   // A slow or stuck service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
   const sending = atMost(10, 1000);
   // Why, but never the message (it holds the link) nor the service's own error message (which may repeat it).
@@ -297,6 +307,8 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
 
   type Body = Record<string, string>;
   type Route = (request: Request, body: Body, from: string) => Promise<Response> | Response;
+  /** A notice to an account's email that a passkey was added or removed, naming it. */
+  const passkeyNotice = (kind: "passkey-added" | "passkey-removed", email: string, name: string) => queue({ kind, to: { email }, name });
   /** The routes for passwords: only on a site that uses them. */
   const passwordRoutes: Record<string, Route> = {
     "send-password-link": (_r, b, from) => sent(auth.requestLink("password", b.email ?? "", from)),
@@ -313,6 +325,28 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       const answer = signedIn(changed, null, from);
       passwordChanged(changed.email);
       return answer;
+    }),
+  };
+  /** The routes for passkeys: only on a site that uses them. Each passkey part is a base64url string, as the browser gives it. */
+  const passkeyRoutes: Record<string, Route> = {
+    "passkey-options": own(({ token }, _b: Body, from: string) => reply(200, auth.passkeyOptions(token, origin, from))),
+    "add-passkey": own(({ token, user }, b: Body, from: string) => {
+      const made = { clientDataJSON: b.clientDataJSON ?? "", attestationObject: b.attestationObject ?? "" };
+      const passkey = auth.addPasskey(token, made, b.name, origin, from);
+      passkeyNotice("passkey-added", user.email, passkey.name);
+      return reply(200, { passkey });
+    }),
+    "sign-in-options": (_r, _b, from) => reply(200, auth.signInOptions(origin, from)),
+    "sign-in-with-passkey": (r, b, from) => {
+      const { id = "", clientDataJSON = "", authenticatorData = "", signature = "", userHandle } = b;
+      const assertion = { id, clientDataJSON, authenticatorData, signature, ...(userHandle === undefined ? {} : { userHandle }) };
+      return signedIn(auth.signInWithPasskey(assertion, origin, from), tokenOf(r), from);
+    },
+    "remove-passkey": own(({ token, user }, b: Body, from: string) => {
+      const removed = auth.removePasskey(token, b.id ?? "", from);
+      if (!removed) return refuse(404, "not-found", "There's no such passkey.");
+      passkeyNotice("passkey-removed", user.email, removed.name);
+      return reply(200, {});
     }),
   };
   const routes: Record<string, Route> = {
@@ -354,6 +388,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       return signedOut();
     }),
     ...(passwords ? passwordRoutes : {}),
+    ...(passkeys ? passkeyRoutes : {}),
   };
 
   /** The routes that only read: GET, and nothing in a body. */
@@ -363,6 +398,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       return reply(200, { user: user ? { email: user.email } : null });
     },
     sessions: own(({ token, user }) => reply(200, { sessions: auth.sessionsOf(user.id, token) })),
+    ...(passkeys ? { passkeys: own(({ user }) => reply(200, { passkeys: auth.passkeysOf(user.id) })) } : {}),
     "my-data": own(({ user }) => {
       const answer = reply(200, auth.dataOf(user.id));
       answer.headers.set("content-disposition", 'attachment; filename="my-data.json"');

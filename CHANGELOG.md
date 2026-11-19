@@ -8,8 +8,8 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## [0.6.0] - not yet released
 
-How people sign in is now the site's choice, the account's version is one stamp, and
-messages are data for the app to send. Several changes break the API; upgrading is below.
+How people sign in is now the site's choice, passkeys are one of the choices, the
+account's version is one stamp, and messages are data for the app to send. Several changes break the API; upgrading is below.
 
 ### Changed
 
@@ -43,6 +43,14 @@ messages are data for the app to send. Several changes break the API; upgrading 
 
 ### Added
 
+- **Passkeys** (WebAuthn), as a third sign-in method (`signInWith: ["link", "passkey"]`,
+  with or without `"password"`), checked with nothing but `node:crypto`: added after a
+  recent sign-in, used without typing an email, listed, and removed, each told to the
+  account's address. Routes `passkey-options`, `add-passkey`, `sign-in-options`,
+  `sign-in-with-passkey`, `passkeys`, and `remove-passkey`; functions `passkeyOptions`,
+  `addPasskey`, `signInOptions`, `signInWithPasskey`, `passkeysOf`, and `removePasskey`;
+  the error code `invalid-passkey`; the events `passkey-added` and `passkey-removed`; and
+  the messages of the same names. An undone move removes every passkey.
 - `allow(contact)`: who may have an account, if not everyone. Asked before a link is
   sent or used, an account made, or a session started or used, so someone the app stops
   allowing is signed out at their next request. It can only refuse; a mistake in it is a
@@ -56,8 +64,8 @@ messages are data for the app to send. Several changes break the API; upgrading 
 
 ### Upgrading from 0.5.0
 
-Start with an empty database: the schema changed (a `stamp` for every account, and
-`password` may be empty).
+Start with an empty database: the schema changed (a `stamp` for every account,
+`password` may be empty, and two new tables for passkeys and their challenges).
 
 ```ts
 // 0.5.0

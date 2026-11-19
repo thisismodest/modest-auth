@@ -14,8 +14,8 @@ import { createAuth, createHandler, emailFor, handleNode, toRequest } from "../s
 
 const ORIGIN = "http://localhost:3000";
 
-// People sign in with an emailed link, or a password (["link"] alone: no passwords at all).
-const auth = createAuth(new DatabaseSync("example.db"), { signInWith: ["link", "password"] });
+// People sign in with an emailed link, a password, or a passkey (["link"] alone: no passwords or passkeys at all).
+const auth = createAuth(new DatabaseSync("example.db"), { signInWith: ["link", "password", "passkey"] });
 const handler = createHandler(auth, {
   origin: ORIGIN,
   // The page emailed links open (below).
@@ -37,7 +37,9 @@ const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><ti
 <h2>Sign in</h2>
 <form method="post" data-route="sign-in"><input name="email" type="email" required> <input name="password" type="password" required> <button>Sign in</button></form>
 <form method="post" data-route="send-sign-in-link"><input name="email" type="email" required> <button>Email me a sign-in link</button></form>
+<p><button id="passkey-sign-in" type="button">Sign in with a passkey</button></p>
 <form method="post" data-route="sign-out"><button>Sign out</button></form>
+<p><button id="passkey-add" type="button">Add a passkey</button> (needs a sign-in in the last 10 minutes)</p>
 <h2>Change your email</h2>
 <form method="post" data-route="change-email"><input name="email" type="email" required> <button>Email the new address a link</button></form>
 <p>Changing your email needs a recent sign-in: if it's been a while, sign in again first.</p>
@@ -60,7 +62,10 @@ const post = `async function post(route, body) {
   const res = await fetch("/auth/" + route, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { res, json: await res.json() };
 }
-const status = (text) => (document.getElementById("status").textContent = text);`;
+const status = (text) => (document.getElementById("status").textContent = text);
+// Passkey parts travel as base64url text; the browser's own API takes and gives bytes.
+const bytes = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceAll("_", "/")), (c) => c.charCodeAt(0));
+const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");`;
 
 const script = `${post}
 for (const form of document.querySelectorAll("form")) {
@@ -71,7 +76,28 @@ for (const form of document.querySelectorAll("form")) {
     else if (res.ok) location.reload();
     else status(json.error.message);
   });
-}`;
+}
+// A passkey made on this device, for this account (the person confirms with a fingerprint, face, or PIN).
+document.getElementById("passkey-add").addEventListener("click", async () => {
+  const { res, json: o } = await post("passkey-options", {});
+  if (!res.ok) return status(o.error.message);
+  const made = await navigator.credentials.create({
+    publicKey: { ...o, challenge: bytes(o.challenge), user: { ...o.user, id: bytes(o.user.id) }, excludeCredentials: o.excludeCredentials.map((c) => ({ ...c, id: bytes(c.id) })) },
+  });
+  const { json } = await post("add-passkey", { clientDataJSON: text(made.response.clientDataJSON), attestationObject: text(made.response.attestationObject), name: "This device" });
+  status(json.passkey ? "Passkey added." : json.error.message);
+});
+// Signing in with one: no email typed; the device offers this site's passkeys.
+document.getElementById("passkey-sign-in").addEventListener("click", async () => {
+  const { json: o } = await post("sign-in-options", {});
+  const used = await navigator.credentials.get({ publicKey: { ...o, challenge: bytes(o.challenge) } });
+  const r = used.response;
+  const { res, json } = await post("sign-in-with-passkey", {
+    id: used.id, clientDataJSON: text(r.clientDataJSON), authenticatorData: text(r.authenticatorData), signature: text(r.signature), userHandle: r.userHandle ? text(r.userHandle) : undefined,
+  });
+  if (res.ok) location.reload();
+  else status(json.error.message);
+});`;
 
 // The token is after the "#", which the browser never sends to a server: read first, then taken out of the address bar.
 const linkScript = `${post}

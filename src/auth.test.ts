@@ -211,7 +211,7 @@ test("its tables can share the app's own database", async () => {
   const auth = createAuth(db, { signInWith: ["password", "link"] });
   await signUp(auth, "editor@example.org", PASSWORD, HERE);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((t) => t.name);
-  assert.deepEqual(tables, ["auth_limits", "auth_links", "auth_sessions", "auth_users", "users"]);
+  assert.deepEqual(tables, ["auth_challenges", "auth_limits", "auth_links", "auth_passkeys", "auth_sessions", "auth_users", "users"]);
   createAuth(db, { signInWith: ["password", "link"] });
   assert.equal(count(db, "auth_users"), 1, "made again on the same database: nothing lost");
 });
@@ -1053,7 +1053,7 @@ test("a copy of everything kept about an account, with nothing in it that signs 
   const session = await openSession(auth, "ann@example.org", HERE);
   const pending = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.190"));
   const data = must(auth.dataOf(ann.id));
-  assert.deepEqual(Object.keys(data), ["email", "created", "password", "sessions", "links"]);
+  assert.deepEqual(Object.keys(data), ["email", "created", "password", "sessions", "links", "passkeys"]);
   assert.equal(data.email, "ann@example.org");
   assert.equal(data.password, "set");
   assert.equal(data.sessions.length, 1);
@@ -1111,7 +1111,7 @@ test("breached passwords: a range answer over 1MB isn't read to the end; the pas
 
 test("how people sign in must be chosen: a link always, a password only with one", () => {
   const db = new DatabaseSync(":memory:");
-  for (const signInWith of [undefined, [], ["password"], ["link", "link"], ["link", "passkey"], ["Link"], "link", [1]]) {
+  for (const signInWith of [undefined, [], ["password"], ["passkey"], ["password", "passkey"], ["link", "link"], ["link", "totp"], ["Link"], "link", [1]]) {
     assert.throws(() => createAuth(db, { signInWith } as never), /signInWith must list how people sign in/, JSON.stringify(signInWith));
   }
   assert.throws(() => createAuth(db, undefined as never), /signInWith/);

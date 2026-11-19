@@ -1,6 +1,6 @@
 # modest-auth
 
-Zero-dependency authentication for Node.js: sign-in by emailed link, and a password if you choose, with sessions.
+Zero-dependency authentication for Node.js: sign-in by emailed link, and by password or passkey if you choose, with sessions.
 
 > **Status: early (0.x).** The core
 > works and is tested; see [ROADMAP.md](ROADMAP.md) for what comes next, and don't
@@ -23,20 +23,27 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 2,250 lines of source: only what sign-in needs.
+- **Small.** About 2,800 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
-If you need social sign-in, single sign-on, organisations, passkeys, or sign-in by phone
-number today, use a larger library. If you need people to sign in with an email, by a link or a
-password, safely, this is for you.
+If you need social sign-in, single sign-on, organisations, or sign-in by phone number today, use a
+larger library. If you need people to sign in with an email, by a link, a password, or a passkey,
+safely, this is for you.
 
 ## What it does
 
 - **How people sign in is the site's choice,** and has to be made: by an emailed link
-  alone (`signInWith: ["link"]`, no passwords at all), or by a password as well
-  (`["link", "password"]`). A link is always there: it's how an account is made, and
-  how someone who forgets a password gets back in. Any other choice is refused at
-  start-up.
+  alone (`signInWith: ["link"]`), and beside it a password, a passkey, or both
+  (`["link", "password", "passkey"]`). A link is always there: it's how an account is
+  made, and how someone who forgets a password, or loses every passkey, gets back in.
+  Any other choice is refused at start-up.
+- **Passkeys** (WebAuthn), which can't be phished: added after a recent sign-in, and
+  used without typing an email (the device offers the site's passkeys). Checked with
+  nothing but `node:crypto`, step by step as the spec numbers them; no attestation, which
+  is for organisations that only allow certain hardware. Only public keys are kept, so a
+  copy of the database signs nothing. A counter that doesn't go up, where a passkey
+  counts at all, means a copy of it, and is refused. Adding or removing one is told to the
+  account's email, and an undone move removes every passkey, so one a thief added goes too.
 - **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
   with someone else's email. Where there are passwords, whoever opens the link chooses
   one; where there aren't, opening a sign-in link makes the account.
@@ -222,6 +229,17 @@ And only where there are passwords (otherwise they're not there at all):
 | `POST /auth/sign-in` | `{ email, password }` | Signs in (a fresh session; any old one ends) |
 | `POST /auth/password` | `{ next }` | Changes the password (signed in recently), and ends every other session |
 
+And only where there are passkeys, each part a base64url string, as the browser gives it:
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /auth/sign-in-options` | none, or `{}` | Options for `navigator.credentials.get` (a challenge good for 5 minutes, once) |
+| `POST /auth/sign-in-with-passkey` | `{ id, clientDataJSON, authenticatorData, signature, userHandle }` | Signs in (a fresh session; any old one ends) |
+| `POST /auth/passkey-options` | none, or `{}` | Options for `navigator.credentials.create` (signed in recently) |
+| `POST /auth/add-passkey` | `{ clientDataJSON, attestationObject, name }` | Adds the passkey made (signed in recently), named as given, or "Passkey" |
+| `GET /auth/passkeys` | | The account's passkeys: `{ passkeys: [{ id, name, created, lastUsed }] }` |
+| `POST /auth/remove-passkey` | `{ id }` | Removes one (signed in recently) |
+
 "Signed in recently" is a session started in the last 10 minutes; an older one is
 refused with `403` and the code `sign-in-again`, and signing in again (by any way the
 site has) starts a fresh one.
@@ -254,6 +272,30 @@ Emailed links open your page at `linkPage`, with the token after `#`:
 
 Because the token is after `#`, a mail service that opens links to check them can't
 use one up.
+
+### Passkeys on your pages
+
+The browser's own `navigator.credentials` makes and uses them; the parts travel as
+base64url text. [`examples/node-http.ts`](examples/node-http.ts) does both:
+
+```js
+// Adding one, signed in recently.
+const o = await post("passkey-options", {});
+const made = await navigator.credentials.create({
+  publicKey: { ...o, challenge: bytes(o.challenge), user: { ...o.user, id: bytes(o.user.id) }, excludeCredentials: o.excludeCredentials.map((c) => ({ ...c, id: bytes(c.id) })) },
+});
+await post("add-passkey", { clientDataJSON: text(made.response.clientDataJSON), attestationObject: text(made.response.attestationObject), name: "Laptop" });
+
+// Signing in with one.
+const s = await post("sign-in-options", {});
+const used = await navigator.credentials.get({ publicKey: { ...s, challenge: bytes(s.challenge) } });
+const r = used.response;
+await post("sign-in-with-passkey", { id: used.id, clientDataJSON: text(r.clientDataJSON), authenticatorData: text(r.authenticatorData), signature: text(r.signature), userHandle: r.userHandle && text(r.userHandle) });
+```
+
+Where `bytes` and `text` turn base64url into bytes and back. Browsers that have
+`PublicKeyCredential.parseCreationOptionsFromJSON` and `parseRequestOptionsFromJSON` can
+take the options as they come.
 
 ### With other servers
 
@@ -323,6 +365,7 @@ each message as data: what it's for, who it's to, and the link in it, if any.
 | `email-in-use` | an address with an account of its own, that another account asked to move to | |
 | `password-changed` | an account | |
 | `email-changed` | the address an account moved from | `email` (where it went), `link` (to undo it), `expires` |
+| `passkey-added`, `passkey-removed` | an account | `name`: the passkey's |
 
 Each has `to`, a contact: `{ email }`. With TypeScript, a `switch` on `kind` that misses
 one fails to build, so a new kind in a later version can't go unsent.
@@ -446,8 +489,11 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 ## Standards
 
 - **NIST SP 800-63B:** passwords as it asks (length, blocklist, no composition rules,
-  any characters, rate limiting, salted memory-hard hashing). One factor, so
-  **Authenticator Assurance Level 1** only.
+  any characters, rate limiting, salted memory-hard hashing). A passkey that verifies
+  the person (a fingerprint, face, or PIN on the device) is phishing-resistant and two
+  factors in one, which NIST counts towards **Authenticator Assurance Level 2**; but an
+  account is only as strong as its weakest way in, and a link or a password is one
+  factor (**Level 1**). An account that keeps only passkeys is on the roadmap.
 - **OWASP ASVS 5.0:** written with its authentication and session requirements in
   mind, but not yet checked against them requirement by requirement (that mapping is
   on the roadmap), so it makes no claim to a level.
@@ -457,6 +503,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 | Not here | Why |
 | --- | --- |
 | JWTs | A session in the database can be ended at once; a JWT is valid until it expires. For a site with a server, sessions are simpler and safer. |
+| Attestation | It proves what device made a passkey, for organisations that only allow certain hardware; synced passkeys mostly can't give it, and nothing here relies on it. |
 | Plugins, adapters, hooks | Every extension point is a way to break the guarantees above. The functions you give it only deliver (`deliver`), observe (`onEvent`), or refuse (`allow`, `breachedRange`): none can let anyone in. |
 | Other databases | `node:sqlite` is built into Node; one database is one thing to get right. |
 | Social sign-in, SSO | Possibly later, one at a time, and only if they can be made as small and certain as the rest. See the roadmap. |

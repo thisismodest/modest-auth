@@ -85,7 +85,8 @@
               <tbody>
                 <tr><td>Guessing passwords</td><td>scrypt at OWASP's cost; 15 characters or more; 5,500 common passwords refused; limits per account, per address, and per IPv6 block, counted before any password is checked</td></tr>
                 <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions and emailed links only as hashes of 256-bit tokens</td></tr>
-                <tr><td>A way in the site didn't choose</td><td>How people sign in must be chosen: a link always, and a password beside it if the site wants; a way not chosen is off entirely</td></tr>
+                <tr><td>A way in the site didn't choose</td><td>How people sign in must be chosen: a link always, and a password, a passkey, or both beside it; a way not chosen is off entirely</td></tr>
+                <tr><td>Phishing</td><td>Passkeys: each answer must name exactly the site's own origin, sign a fresh single-use challenge, and come from someone present and verified on their device; only public keys are kept</td></tr>
                 <tr><td>Someone the site doesn't want</td><td>The site's <code>allow</code>, if it has one, is asked before any link, new account, or session, and can only refuse; the answer is the same either way</td></tr>
                 <tr><td>Signing up with someone else's email</td><td>An account is made only by a link emailed to the address</td></tr>
                 <tr><td>Guessing or reusing a link</td><td>256-bit tokens, single-use, 60 minutes to choose a password and 15 to sign in; using one, or a new password, ends the rest</td></tr>
@@ -116,7 +117,7 @@
             <li><strong>A session stolen in its first 10 minutes</strong> can change the account's password or email. The account's email is told, with a way back.</li>
             <li><strong>Someone with many addresses can pause signing in with the password to an account for up to an hour.</strong> Its owner can still sign in by an emailed link.</li>
             <li><strong>Letters from other alphabets that look alike</strong> (a Cyrillic "а") make a different account that looks the same.</li>
-            <li><strong>One factor only:</strong> NIST's Authenticator Assurance Level 1. Passkeys, which can't be phished, are next on the roadmap.</li>
+            <li><strong>An account is only as strong as its weakest way in:</strong> one with a passkey can still be reached by its link (and its password, if it has one). Choosing passkeys only is on the roadmap.</li>
           </ul>
         </section>
 

@@ -57,26 +57,45 @@ it brings. Nothing here is a promise of a date.
 - [x] **Messages as data,** for the app to deliver however it likes (any email service,
       its own words, any language), with `emailFor` for modest-auth's own.
 
-## Next: passkeys
+## Passkeys (0.6.0)
 
 Sign-in that can't be phished (WebAuthn), as a third method beside links and
-passwords, before the audit so the audit covers it. No dependency: everything a server
-checks is in `node:crypto`, given no attestation (which says what device made a key,
-and is for organisations that only allow certain hardware; synced passkeys mostly can't
+passwords, with nothing but `node:crypto`. No attestation (it says what device made a
+key, for organisations that only allow certain hardware; synced passkeys mostly can't
 give one).
 
-- [ ] **The checks,** in their own file, step by step as the WebAuthn spec numbers them,
-      with a strict CBOR reader for just the shapes passkeys use, and keys of three
-      algorithms (EdDSA, ES256, RS256 of 2048 bits or more).
-- [ ] **Passkeys stored:** public keys only, ids unique across every account.
-- [ ] **Challenges** single-use, short-lived, kept apart by kind, and stored hashed.
-- [ ] **Adding (after a recent sign-in), signing in without an email, listing, and
-      removing,** each told to the account's address. An undone move removes every
-      passkey.
-- [ ] **Tests** with real keys of each algorithm, recorded answers from real
-      authenticators, and the reader fuzzed.
-- [ ] **Each account's own methods,** and then **passkeys only,** for an account that
-      chooses it.
+- [x] **The checks,** in their own file (`webauthn.ts`), step by step as the spec
+      numbers them: the client data (type, challenge, exactly the handler's origin, not
+      framed by another site), the authenticator data (the site's hash, the person
+      present and verified, the counter, nothing left over), and the signature over
+      exactly the bytes received. A strict CBOR reader for just what passkeys use, and
+      keys of three algorithms (EdDSA, ES256, RS256 of 2048 bits or more), each exactly
+      its own shape.
+- [x] **Passkeys stored** in `auth_passkeys`: public keys only, ids unique across every
+      account.
+- [x] **Challenges** single-use, five minutes, hashed, kept apart by kind and account.
+- [x] **Adding, signing in without an email, listing, and removing,** with notices to
+      the account's address, and the stamp changed on every addition and removal.
+- [x] **An undone move removes every passkey.**
+- [x] **Tests** with a software authenticator making real keys of each algorithm, each
+      check shown to refuse what it should, and the CBOR reader fuzzed.
+- [x] **The example's pages** making and using one with `navigator.credentials`.
+
+## Next: what passkeys still want
+
+- [ ] **Recorded answers from real authenticators** (Apple, Google, Windows, a password
+      manager, a security key), kept as test data, and the WebAuthn spec's own test
+      vectors.
+- [ ] **Each account's own methods,** worked out from what it has: a password (a
+      hash), passkeys (its rows), and a link (`link_since`, the date its owner confirmed
+      the address for signing in). A sign-in needs the method on the site's list and on
+      the account's. A method a site adds later reaches an existing account only once
+      its owner, signed in, confirms it (an old address may have changed hands).
+      Removing a method is refused if it would leave an account no way in.
+- [ ] **Passkeys only,** for an account that chooses it, and then for a site: no link or
+      password sign-in, so there's nothing left to phish. Accounts are still made by a
+      link that proves the address; recovery is the app's, by a link its own code makes
+      (an admin, support), never from a route.
 
 ## Before 1.0
 

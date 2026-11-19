@@ -28,7 +28,11 @@ export type Message =
   /** The account's password was just changed, and every other session ended. */
   | { kind: "password-changed"; to: Contact }
   /** To the address an account just moved from: it moved to `email`, and `link` undoes it. */
-  | { kind: "email-changed"; to: Contact; email: string; link: string; expires: number };
+  | { kind: "email-changed"; to: Contact; email: string; link: string; expires: number }
+  /** A passkey, named `name`, was just added to the account. */
+  | { kind: "passkey-added"; to: Contact; name: string }
+  /** A passkey, named `name`, was just removed from the account. */
+  | { kind: "passkey-removed"; to: Contact; name: string };
 
 /**
  * The message for a link that `requestLink`, `requestEmailChange`, or `useUndoLink` (its `reset`) gave: what it's
@@ -109,6 +113,16 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
       return {
         subject: `Your password was changed on ${title}`,
         text: `The password for your account on ${where} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.\n`,
+      };
+    case "passkey-added":
+      return {
+        subject: `A passkey was added on ${title}`,
+        text: `A passkey, "${message.name}", was just added to your account on ${where}, so it can sign in.\n\nIf it wasn't you, sign in and remove it, then change your password if you have one; or choose a new one at ${origin} ("forgotten your password").\n`,
+      };
+    case "passkey-removed":
+      return {
+        subject: `A passkey was removed on ${title}`,
+        text: `A passkey, "${message.name}", was just removed from your account on ${where}, so it can no longer sign in.\n\nIf it wasn't you, sign in and check your account's passkeys and sessions.\n`,
       };
     case "email-changed":
       return {
