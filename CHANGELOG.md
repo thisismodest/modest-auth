@@ -75,7 +75,7 @@ account's version is one stamp, and messages are data for the app to send. Sever
 
 ### Fixed
 
-Found by an adversarial review of this release.
+Found by three rounds of adversarial review of this release.
 
 - The copy of an account's data (`my-data`) showed a move it asked for only when the new
   address had no account, so anyone with an account could learn whether another address
@@ -103,6 +103,17 @@ Found by an adversarial review of this release.
   (and `HEAD`) read now.
 - A passkey's name could hold a full stop, so a web address in a notice; it can't now,
   and notices quote it.
+- Moving an account back by hand, to an address a thief had moved it from, sent the
+  thief's address an undo link that outlasted the owner's. Moving back while that
+  move's undo link lasts is now that undo, and sends none (`useEmailLink`'s `undo` can
+  be null).
+- A reset sign-in link kept a password a thief had set; a fresh start takes it too.
+- A passkey added, or a move's undo link made, in one process as a fresh start landed
+  in another could outlast it. Each is stored only while the account is unchanged.
+- The per-account limit's pause told when someone last tried the email; it always
+  says to wait the whole hour now.
+- An address could hold `/`, `?`, or `#` before its `@`, so pass for a web link in a
+  notice; refused now.
 - The advice to name a CDN's address ranges in `trustedProxies` is gone: its other
   customers send from them too, with any `X-Forwarded-For`. Put a proxy you run behind
   it, and name that.

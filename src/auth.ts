@@ -232,9 +232,10 @@ export type Auth = {
   /**
    * Moves the account to the email an email link was sent to, ending every session: only for `userId`, the
    * account signed in where the link is opened (the one it moves), so a link sent to someone else does nothing.
-   * `previous` is the email it had; `undo`, a link to send there that undoes the move, for UNDO_DAYS.
+   * `previous` is the email it had; `undo`, a link to send there that undoes the move, for UNDO_DAYS. Null when
+   * it moves back to an address it was moved away from, while that move's undo link lasts: that's the undo.
    */
-  useEmailLink(token: string, userId: string, from: string): User & { previous: string; undo: Link };
+  useEmailLink(token: string, userId: string, from: string): User & { previous: string; undo: Link | null };
   /**
    * Undoes a move, from the address it moved from: the account has that email again, every session ends, and
    * its password stops working (whoever moved it may know it). `reset` is a link to send there (to choose a new
@@ -518,8 +519,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const perAddress = limit("address", 20, 15 * MINUTE);
   // 10 tries at one account from one address in 15 minutes: a stranger elsewhere can't lock its owner out.
   const perAccountAndAddress = limit("account+address", 10, 15 * MINUTE);
-  // 100 tries at one account an hour, from anywhere: guesses spread over many addresses are slowed too.
-  const perAccount = limit("account", 100, HOUR);
+  // 100 tries at one account an hour, from anywhere: guesses spread over many addresses are slowed too. Its owner's
+  // own sign-ins count, so a refusal says to wait the whole hour, not when the window started.
+  const perAccount = limit("account", 100, HOUR, { wholeWait: true });
   // 200 from one IPv6 /48 in 15 minutes: the block a single site or customer is often given, so its 65,536 /64s count together.
   const perBlock = limit("block", 200, 15 * MINUTE);
   // 3 links of each kind sent to one address in 15 minutes: no more, but quietly, so the answer is the same
@@ -763,8 +765,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * The account a link opens. A link made for an account (`account`, its id) opens only that one: still at the
    * link's address, or taken back to it after a move. A link made for none (a sign-up) only ever makes a new account,
    * so one that turns up at the address meanwhile isn't opened. With `password`, or `reset`, it's a fresh start: a
-   * new stamp (and the password), and every session, link, and passkey of the account ends, so whatever a thief added
-   * goes. Otherwise (signing in by link) the account is left as it is.
+   * new stamp, the new password (or, for a reset, none), and every session, link, and passkey of the account ends, so
+   * whatever a thief added goes. Otherwise (signing in by link) the account is left as it is.
    */
   const settle = (email: string, account: string | null, password: string | null, reset: boolean, from: string): User & { made: boolean; stamp: string } => {
     const row = userRow("email", email);
@@ -796,8 +798,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
     const stamp = newStamp();
-    if (password === null) db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ?").run(stamp, row.id);
-    else db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
+    // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
+    db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
     afterNewPassword(row.id, email);
     forgetPasskeys(row.id);
     emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
@@ -858,8 +860,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   };
   /** The account's new stamp, for a change to how it's reached that a session asked for: only while it's still `stamp`. */
   const restamp = (userId: string, stamp: string) => {
-    if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(newStamp(), userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
+    const next = newStamp();
+    if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(next, userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
     endChallenges(userId);
+    return next;
   };
   type PasskeyRow = { id: string; name: string; created: number; used: number | null };
   /** The account's passkeys, the most recently added first, as its owner sees them. */
@@ -917,7 +921,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const row = userRow("email", email);
       if (!row || !allowed(email)) return null;
       // The app's own code, vouching for someone: not counted against the inbox, made whatever `recovery` says, for
-      // this account only, and a fresh start when used. Told as an event, so the app has a record of it.
+      // this account only, and a fresh start when used wherever it's the way back in (a password link, or a sign-in
+      // link where the site doesn't sign in by link). Told as an event, so the app has a record of it.
       emit("recovery-link-made", { userId: row.id });
       return newLink(makes, email, { of: { id: row.id } });
     },
@@ -1106,12 +1111,20 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const { email } = link;
       // Gone (or, in moveTo, the address taken meanwhile): nothing to move.
       const row = accountOf(link);
-      moveTo(row.id, email, { was: row.stamp });
+      // Back to an address it was moved away from, while that move's undo link lasts: the same as using it. Later
+      // moves' undo links end, and none goes to the address it leaves, so whoever moved it there can't take it back.
+      const home = db.prepare("SELECT expires FROM auth_links WHERE kind = 'undo' AND user = ? AND email = ? AND expires > ?").get(row.id, email, Date.now()) as
+        | { expires: number }
+        | undefined;
+      const stamp = moveTo(row.id, email, { was: row.stamp });
       endAllSessions(row.id);
       endLinks(row.email, row.id);
       endLinks(email);
-      // An undo link for the address it moved from (each move its own: using one ends only later ones).
-      const undo = newLink("undo", row.email, { of: { id: row.id } });
+      if (home) db.prepare("DELETE FROM auth_links WHERE kind = 'undo' AND user = ? AND expires > ?").run(row.id, home.expires);
+      // Otherwise an undo link for the address it moved from (each move its own: using one ends only later ones),
+      // stored only while the account is still as this move left it, so an undo landing meanwhile in another process
+      // (which ends later moves' undo links) isn't outlasted by this one.
+      const undo = home ? null : newLink("undo", row.email, { of: { id: row.id, stamp } });
       flush();
       emit("email-changed", { userId: row.id, from });
       return { id: row.id, email, previous: row.email, undo };
@@ -1168,12 +1181,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       }
       takeChallenge(checked.challenge, "add", row.id);
       const passkey: Passkey = { id: checked.id, name: isPasskeyName(name) ? name : "Passkey", created: Date.now(), lastUsed: null };
-      restamp(row.id, row.stamp);
-      // A passkey's id is the device's: one already here (this account's or another's) isn't taken again.
+      const stamp = restamp(row.id, row.stamp);
+      // Stored only while the stamp is the one just set, so a fresh start landing in another process meanwhile (which
+      // ends every passkey) can't be outlasted. A passkey's id is the device's: one already here (this account's or
+      // another's) isn't taken again.
       const stored = db
-        .prepare("INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING")
-        .run(passkey.id, row.id, checked.publicKey, checked.algorithm, checked.counter, passkey.name, passkey.created);
-      if (stored.changes === 0) throw BAD_PASSKEY();
+        .prepare(
+          "INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) SELECT ?, id, ?, ?, ?, ?, ? FROM auth_users WHERE id = ? AND stamp = ? ON CONFLICT (id) DO NOTHING",
+        )
+        .run(passkey.id, checked.publicKey, checked.algorithm, checked.counter, passkey.name, passkey.created, row.id, stamp);
+      if (stored.changes === 0) throw userRow("id", row.id)?.stamp === stamp ? BAD_PASSKEY() : SIGN_IN_AGAIN();
       emit("passkey-added", { userId: row.id, from });
       return passkey;
     },

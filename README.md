@@ -220,7 +220,7 @@ The routes take and give JSON:
 | `POST /auth/end-session` | `{ id }` | Ends one of them |
 | `GET /auth/my-data` | | Everything kept about the account, as a file to save |
 | `POST /auth/change-email` | `{ email }` | Emails a link to the new address (signed in recently) |
-| `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session |
+| `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session. The old address gets a link to undo it, unless the account is moving back to an address it was moved from, while that move's undo lasts: that's the undo |
 | `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to get back in |
 | `POST /auth/delete-account` | none, or `{}` | Deletes the account and its sessions (signed in recently) |
 
