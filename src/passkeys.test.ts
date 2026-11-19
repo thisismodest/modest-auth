@@ -243,3 +243,59 @@ test("a challenge given to add a passkey ends when the account changes", async (
   const fresh = auth.startSession(changed);
   assert.throws(() => auth.addPasskey(fresh, makePasskey().create(challenge, ORIGIN), undefined, ORIGIN, HERE), code("invalid-passkey"));
 });
+
+test("on a site without link sign-in, the way back in is a fresh start: a thief's passkeys and sessions go", async () => {
+  for (const recovery of ["link", "app"] as const) {
+    const { auth } = fresh({ signInWith: ["passkey"], recovery });
+    const ann = auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE);
+    const session = auth.startSession(ann);
+    // A thief with Ann's fresh session adds their own passkey, then signs in with it.
+    const thiefs = add(auth, session).passkey;
+    const thief = auth.startSession(signInWith(auth, thiefs, ann.id));
+    // Ann gets back in: by a link she asks for, or one the app makes for her.
+    const link = recovery === "link" ? must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.60")) : must(auth.recoveryLink("ann@example.org"));
+    auth.startSession(auth.useSignInLink(must(link.token), "192.0.2.60"));
+    assert.deepEqual(auth.passkeysOf(ann.id), [], `${recovery}: every passkey gone`);
+    assert.equal(auth.userOf(thief), null, `${recovery}: the thief's session ended`);
+    assert.throws(() => signInWith(auth, thiefs, ann.id), code("invalid-passkey"), recovery);
+  }
+});
+
+test("where links are a sign-in method, signing in by one keeps passkeys, unless the person asks for a fresh start", async () => {
+  const { auth, ann, session } = await setup({ signInWith: ["link", "password", "passkey"] });
+  const { passkey } = add(auth, session);
+  const plain = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.61"));
+  auth.useSignInLink(must(plain.token), "192.0.2.61");
+  assert.equal(auth.passkeysOf(ann.id).length, 1, "an everyday sign-in changes nothing");
+  const other = auth.startSession(signInWith(auth, passkey, ann.id));
+  const fresh2 = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.62"));
+  auth.useSignInLink(must(fresh2.token), "192.0.2.62", { reset: true });
+  assert.deepEqual(auth.passkeysOf(ann.id), []);
+  assert.equal(auth.userOf(other), null);
+});
+
+test("with recovery by the app, an undo sends no way in to the old address", async () => {
+  const { auth } = fresh({ signInWith: ["passkey"], recovery: "app" });
+  const ann = auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@old.example", HERE)).token), HERE);
+  const session = auth.startSession(ann);
+  const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "ann@new.example", HERE)).token), ann.id, HERE);
+  const back = auth.useUndoLink(must(moved.undo.token), "192.0.2.63");
+  assert.deepEqual([back.reset.token, back.reset.refused], [null, "passkey-only"], "whoever reads the old inbox gets no link in");
+  assert.ok(auth.recoveryLink("ann@old.example"), "the app can still let its owner back in");
+});
+
+test("recoveryLink is told as an event, with no token in it", async () => {
+  const events: AuthEvent[] = [];
+  const { auth } = fresh({ signInWith: ["passkey"], recovery: "app", onEvent: (e) => void events.push(e) });
+  const ann = auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE);
+  const link = must(auth.recoveryLink("ann@example.org"));
+  await later();
+  assert.equal(events.find((e) => e.type === "recovery-link-made")?.userId, ann.id);
+  assert.ok(!JSON.stringify(events).includes(must(link.token)));
+});
+
+test("a passkey's name can't hold a web address", async () => {
+  const { auth, session } = await setup();
+  assert.equal(add(auth, session, makePasskey(), "iPhone, secure it at www example help com").added.name, "iPhone, secure it at www example help com");
+  assert.equal(add(auth, session, makePasskey(), "iPhone. If not you, secure it at www.example-help.com").added.name, "Passkey");
+});

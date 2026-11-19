@@ -21,7 +21,7 @@
 // get people back in):
 //
 //   POST /auth/send-sign-in-link     { email }: to sign in (or sign up, or get back in)
-//   POST /auth/sign-in-with-link     { token }: from a sign-in link
+//   POST /auth/sign-in-with-link     { token, reset }: from a sign-in link (reset "true": every session, link, and passkey ended)
 //
 // And only on a site with passwords:
 //
@@ -56,8 +56,9 @@ export type HandlerOptions = {
   origin: string;
   /**
    * The proxies in front of the server, whose X-Forwarded-For is believed: "loopback" (nginx or Caddy on
-   * this machine), "private" (a hosting platform's load balancer, or another container), a CDN's address
-   * ranges, or addresses. None by default, which is always safe (visitors behind a proxy share its
+   * this machine), "private" (a hosting platform's load balancer, or another container), or a
+   * proxy's own addresses. Never a CDN's ranges: its other customers send from them too; put a proxy you
+   * run behind it, and name that. None by default, which is always safe (visitors behind a proxy share its
    * address for limits); the log says what to set. A named proxy must add the visitor's address, not pass
    * theirs on (nginx: proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;).
    */
@@ -235,7 +236,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
   if ("proxies" in options) {
     throw new Error(
-      'proxies has gone: name the proxies in front in trustedProxies instead, such as ["loopback"] for one on this machine, ["private"] for a hosting platform\'s, or a CDN\'s address ranges.',
+      'proxies has gone: name the proxies in front in trustedProxies instead, such as ["loopback"] for one on this machine, ["private"] for a hosting platform\'s, or a proxy\'s own address.',
     );
   }
   const trusted = trusting(options.trustedProxies);
@@ -260,7 +261,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       sayOnce(
         "public proxy",
         blockOf(trace.key) ?? trace.key,
-        `a request from ${proxy.address} passed X-Forwarded-For on. If that's a CDN or proxy in front of this server, add its address ranges to trustedProxies, or its visitors share its sign-in limits; if it's a visitor's own proxy, ignore this.`,
+        `a request from ${proxy.address} passed X-Forwarded-For on. If that's a proxy you run in front of this server, add its address to trustedProxies, or its visitors share its sign-in limits (for a CDN, put a proxy you run behind it and name that); if it's a visitor's own proxy, ignore this.`,
       );
     } else if (proxy) {
       const setting = proxy.where === "loopback" ? "loopback" : "private";
@@ -322,7 +323,9 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   /** The routes for sign-in links: where they're sent (to sign in, or, without passwords, to make accounts and get back in). */
   const linkRoutes: Record<string, Route> = {
     "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
-    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
+    // `reset: "true"`: a fresh start, every session, link, and passkey of the account ended (always, where links
+    // aren't a sign-in method, as they're only the way back in there).
+    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from, { reset: b.reset === "true" }), tokenOf(r), from),
   };
   /** The routes for passwords: only on a site that uses them. */
   const passwordRoutes: Record<string, Route> = {

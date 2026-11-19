@@ -50,7 +50,9 @@ round modest-auth.
 | Malformed passkey data (CBOR, keys) | Read by a strict CBOR reader taking only what passkeys use: no indefinite lengths, tags, floats, or null; no key twice; integers JavaScript holds exactly; nesting and item counts capped; nothing left over. Keys only of three algorithms (EdDSA on Ed25519, ES256 on P-256, RS256 of 2048 bits or more counted from the top bit, odd, with an odd exponent from 3 to 2^32), each with exactly its own type, curve, and fields; P-256 points off the curve refused (an Ed25519 key is taken as given: a bad one only harms whoever added it). Fuzzed with random and mutated input | `webauthn.ts` |
 | Taking over someone's passkey, or adding one to someone else's account | A passkey's id is unique across every account, so one already added isn't added again; a sign-in's passkey must name, by id, the account it was added to (a sign-in naming none is refused); an address `allow` refuses can't sign in by passkey; adding one needs a session started in the last 10 minutes, and a challenge given to that account | `auth.ts` |
 | A copied passkey (cloned from a device) | Where a passkey keeps a counter, it must go up each time, or the sign-in is refused; the new count is written only while it's still the one checked, so two processes can't both take it | `auth.ts` |
-| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; a new password chosen at a link to the address, and an undone move (by its undo link, or a link that takes it back), remove every passkey | `auth.ts`, `handler.ts` |
+| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; getting back in is a fresh start: a new password chosen at a link, a sign-in link where the site doesn't sign in by link (or one opened with `reset`), and an undone move each change the stamp and end every session, link, and passkey of the account | `auth.ts`, `handler.ts` |
+| A link opening an account it wasn't sent for | A link to an existing account names it, and opens only that one; a sign-up link opens nothing that has an account by then, so an account made, or moved to the address, after it was sent can't be taken with it | `auth.ts` |
+| An undo link as a way into a passkey account | Under `recovery: "app"`, undoing a move sends no link in: the old address can move the account back, which signs everyone out, but can't sign in | `auth.ts` |
 | A copy of the database signing in by passkey | Only public keys are kept | `auth.ts` |
 | Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and a message either way (for a sign-in link to an email with no account, where there are passwords, one saying so, with no link; where there aren't, one that signs up), sent after the answer | `auth.ts`, `handler.ts` |
 | Flooding an inbox, or keeping its owner from getting a link | At most 3 links of each kind to one address in 15 minutes, the rest quietly not sent; asking for more never ends a link sent (using one ends the address's others); each kind counted apart, so sign-in requests can't block a password link (nor the reverse); each exact address counted alone, so another spelling can't use up its owner's | `auth.ts` |
@@ -116,7 +118,10 @@ round modest-auth.
   translate outside connections to private addresses), name the proxy's own address
   instead. A named proxy that passes a visitor's own `X-Forwarded-For` on, rather than
   adding to it, lets visitors choose their address: nginx needs
-  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+  `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. A CDN's address
+  ranges are never named: its other customers can send from them, with any
+  `X-Forwarded-For`. A proxy the site runs behind the CDN sets the address from the
+  CDN's own header instead, and is named.
 - **A proxy or CDN that isn't named** makes its visitors share its address for the
   limits (safe, but a busy address can pause); the log says so, naming the setting.
   Each kind of note is said for 5 sources at most, so someone sending from 5 networks
@@ -238,3 +243,12 @@ round modest-auth.
   site's methods) if that's not wanted.
 - **The passkey counter's two-process check** relies on SQLite's own locking, like
   every other write here.
+- **`deliver` runs after the answer,** but on the same thread: if it does synchronous
+  work before handing the message over, how long the next request waits could show
+  which addresses got one. Nothing is delivered to an address `allow` refuses or a
+  full inbox, so keep `deliver` to handing the message to a queue or service, without
+  waiting on it.
+- **Links already sent outlive a change to the site's methods** until they run out (60
+  minutes at most): turning `link` off, or `recovery` to `"app"`, doesn't end them.
+- **Under a flood, notices can be dropped** with everything else past the 1,000 waiting
+  (and logged), so an owner may not hear of a change made during one.

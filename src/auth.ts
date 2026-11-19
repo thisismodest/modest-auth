@@ -58,6 +58,8 @@ export type AuthEvent = {
     | "session-ended"
     | "passkey-added"
     | "passkey-removed"
+    | "account-reset"
+    | "recovery-link-made"
     | "account-deleted";
   at: number;
   userId?: string;
@@ -167,9 +169,9 @@ export const PASSKEY_MINUTES = 5;
 const LONGEST_PASSKEY_NAME = 60;
 /**
  * A passkey's name, chosen by whoever adds it and shown in the owner's alert: one plain line of letters, numbers,
- * spaces, and ' . , ( ) - only, so it can't pass for the alert's own words, a link, or markup.
+ * spaces, and ' , ( ) - only (no full stop, so no web address), so it can't pass for the alert's own words, a link, or markup.
  */
-const isPasskeyName = (name: unknown): name is string => isPlainLine(name, LONGEST_PASSKEY_NAME) && /^[\p{L}\p{N} '’.,()-]+$/u.test(name);
+const isPasskeyName = (name: unknown): name is string => isPlainLine(name, LONGEST_PASSKEY_NAME) && /^[\p{L}\p{N} '’,()-]+$/u.test(name);
 
 export type { NewPasskey, PasskeyAssertion };
 
@@ -213,8 +215,13 @@ export type Auth = {
   lookUpLink(token: string, from: string): { kind: LinkKind; email: string };
   /** The account, given a password link's token and the password chosen: made (`made`), or its password replaced (every session ending). */
   usePasswordLink(token: string, password: string, from: string): Promise<User & { made: boolean }>;
-  /** The account a sign-in link's token is for: made (`made`), where the site has no passwords and there wasn't one. */
-  useSignInLink(token: string, from: string): User & { made: boolean };
+  /**
+   * The account a sign-in link's token is for: made (`made`), where the site has no passwords and it was a sign-up
+   * link. A link into an existing account opens only the one it was made for. Where "link" isn't a sign-in method
+   * it's the way back in, and a fresh start: every session, link, and passkey of the account ends. Where it is, the
+   * person can ask for that (`reset`), to be rid of anything someone else added.
+   */
+  useSignInLink(token: string, from: string, options?: { reset?: boolean }): User & { made: boolean };
   /**
    * A link to send to `email`, to move the account of `session` (one started in the last RECENT_MINUTES) to it;
    * or null if none should be sent (3 to one address in 15 minutes, as for other links, and none to an address
@@ -751,34 +758,48 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     return new Set(rows.map((row) => row.user)).size === 1 ? rows[0] : undefined;
   };
   /**
-   * The account at `email`, after someone opened a link there that makes accounts: taken back (if one moved away
-   * that it can still take back), made, or, given a password, its password replaced (every session and link
-   * ending). With no password (a site without them), an account already there is left as it is.
+   * The account a link opens. A link made for an account (`account`, its id) opens only that one: still at the
+   * link's address, or taken back to it after a move. A link made for none (a sign-up) only ever makes a new account,
+   * so one that turns up at the address meanwhile isn't opened. With `password`, or `reset`, it's a fresh start: a
+   * new stamp (and the password), and every session, link, and passkey of the account ends, so whatever a thief added
+   * goes. Otherwise (signing in by link) the account is left as it is.
    */
-  const settle = (email: string, password: string | null, from: string): User & { made: boolean; stamp: string } => {
-    const back = userRow("email", email) ? undefined : undoTo(email);
-    if (back) {
+  const settle = (email: string, account: string | null, password: string | null, reset: boolean, from: string): User & { made: boolean; stamp: string } => {
+    const row = userRow("email", email);
+    if (account === null) {
+      if (row) throw EXPIRED();
+      const id = randomUUID();
+      const stamp = newStamp();
+      try {
+        db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES (?, ?, ?, ?, ?)").run(id, email, password, stamp, Date.now());
+      } catch (error) {
+        // Made by another process sharing the database, between the check and the insert.
+        if (userRow("email", email)) throw EXPIRED();
+        throw error;
+      }
+      endLinks(email);
+      emit("account-made", { userId: id, from });
+      return { id, email, made: true, stamp };
+    }
+    if (!row) {
+      const back = undoTo(email);
+      if (back?.user !== account) throw EXPIRED();
       const stamp = moveBack(back.user, back.current, email, password, back.expires);
       emit("email-change-undone", { userId: back.user, from });
       return { id: back.user, email, made: false, stamp };
     }
-    const made = !userRow("email", email);
-    // Made; or, if there's an account (or one was made meanwhile), given the new password, or left as it is.
-    const { id, stamp } = db
-      .prepare(
-        `INSERT INTO auth_users (id, email, password, stamp, created) VALUES (?, ?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET ${
-          password === null ? "stamp = stamp" : "password = excluded.password, stamp = excluded.stamp"
-        } RETURNING id, stamp`,
-      )
-      .get(randomUUID(), email, password, newStamp(), Date.now()) as { id: string; stamp: string };
-    if (password !== null) afterNewPassword(id, email);
-    else endLinks(email);
-    // A new password chosen at a link to the address is the way back in: every passkey goes, as after an undo, so one
-    // a thief added doesn't outlast it.
-    if (password !== null && !made) forgetPasskeys(id);
-    if (made) emit("account-made", { userId: id, from });
-    else if (password !== null) emit("password-changed", { userId: id, from });
-    return { id, email, made, stamp };
+    if (row.id !== account) throw EXPIRED();
+    if (password === null && !reset) {
+      endLinks(email);
+      return { id: row.id, email, made: false, stamp: row.stamp };
+    }
+    const stamp = newStamp();
+    if (password === null) db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ?").run(stamp, row.id);
+    else db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
+    afterNewPassword(row.id, email);
+    forgetPasskeys(row.id);
+    emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
+    return { id: row.id, email, made: false, stamp };
   };
   /**
    * A new link of `kind` to `email`, stored as its hash, to send. `refused`: one that does nothing (stored only so
@@ -807,7 +828,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    */
   const offer = (kind: LinkKind, email: string, options: LinkOptions) => {
     const allows = allowed(email);
-    if (!inboxHasRoom(kind, email)) return null;
+    // Past the inbox's limit: nothing sent, but a link that does nothing is still stored, so the work is the same.
+    if (!inboxHasRoom(kind, email)) {
+      newLink(kind, email, { ...options, refused: "no-account" });
+      return null;
+    }
     const link = newLink(kind, email, allows ? options : { ...options, refused: options.refused ?? "no-account" });
     return allows ? link : null;
   };
@@ -887,9 +912,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
     recoveryLink(given) {
       const email = emailOrRefuse(given);
-      if (!userRow("email", email) || !allowed(email)) return null;
-      // The app's own code, vouching for someone: not counted against the inbox, and made whatever `recovery` says.
-      return newLink(makes, email);
+      const row = userRow("email", email);
+      if (!row || !allowed(email)) return null;
+      // The app's own code, vouching for someone: not counted against the inbox, made whatever `recovery` says, for
+      // this account only, and a fresh start when used. Told as an event, so the app has a record of it.
+      emit("recovery-link-made", { userId: row.id });
+      return newLink(makes, email, { of: { id: row.id } });
     },
 
     requestLink(kind, given, from) {
@@ -902,19 +930,22 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       sweep(Date.now());
       // An account here, or one this address can take back by the link that makes accounts (so the message says
       // what it will do). Every one looked up, allowed or not: the same work whatever the answer.
-      const here = !!userRow("email", email);
-      const takeBack = kind === makes && !!undoTo(email);
-      const account = here || takeBack;
+      const here = userRow("email", email);
+      const back = kind === makes ? undoTo(email) : undefined;
+      // The account a link here would open, if any: one at the address, else one it can take back.
+      const opens = here?.id ?? back?.user;
+      const account = opens !== undefined;
       // With no account, only the kind that makes one has anything to open; into an existing account (or one this
       // address can take back), only where anyone may ask for one: where only the app may, the message says the
       // account signs in by passkey (the owner of a moved account holds its undo link).
       const refused = account ? (recovery === "link" ? undefined : "passkey-only") : kind === makes ? undefined : "no-account";
-      return offer(kind, email, { refused, account });
+      return offer(kind, email, { refused, account, ...(opens && !refused ? { of: { id: opens } } : {}) });
     },
 
     lookUpLink(token, from) {
       fromWhere(from);
-      const { kind, email } = findLink(token, ["password", "sign-in", "email", "undo"], false);
+      const kinds: LinkKind[] = ["email", "undo", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
+      const { kind, email } = findLink(token, kinds, false);
       return { kind, email };
     },
 
@@ -923,25 +954,22 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       checkHashingFree();
       fromWhere(from);
       // Looked at first, but only used once the password will do: a password refused doesn't use up the link.
-      const link = findLink(token, ["password"], false);
-      const hashed = await newPassword(password, link.email);
-      const { email } = takeLink(token, "password");
-      const { stamp, ...user } = settle(email, hashed, from);
+      const looked = findLink(token, ["password"], false);
+      const hashed = await newPassword(password, looked.email);
+      const link = takeLink(token, "password");
+      const { stamp, ...user } = settle(link.email, link.user, hashed, false, from);
       return handOver(user, stamp, "link", from);
     },
 
-    useSignInLink(token, from) {
+    useSignInLink(token, from, { reset = false } = {}) {
       needsSignInLinks();
       fromWhere(from);
-      const { email } = takeLink(token, "sign-in");
-      const row = userRow("email", email);
-      if (row) {
-        endLinks(email);
-        return handOver({ id: row.id, email, made: false }, row.stamp, "link", from);
-      }
-      // Where there are passwords, accounts are made by password links: gone meanwhile, so nothing to sign in to.
-      if (passwords) throw EXPIRED();
-      const { stamp, ...user } = settle(email, null, from);
+      const link = takeLink(token, "sign-in");
+      // Where there are passwords, accounts are made by password links, not sign-in links.
+      if (link.user === null && passwords) throw EXPIRED();
+      // Where links aren't how people sign in day to day, one into an account is only ever the way back in: a fresh
+      // start, so a thief's passkeys and sessions don't outlast it. Where they are, the person can choose one.
+      const { stamp, ...user } = settle(link.email, link.user, null, reset || !signInWith.includes("link"), from);
       return handOver(user, stamp, "link", from);
     },
 
@@ -1096,9 +1124,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const row = accountOf(link);
       // No password any more: whoever moved it may know it. The way back in is the link that makes accounts.
       moveBack(row.id, row.email, email, null, expires);
-      // Made even where only the app makes links into accounts: the undo took every passkey (whoever moved the
-      // account may have added one), so this, sent only to the address it came back to, is the one way in.
-      const reset = newLink(makes, email);
+      // The way back in, for this account: none where only the app makes links into accounts (the undo took every
+      // passkey, and whoever reads this inbox may be who it was moved away from), so the message says so instead.
+      const reset = newLink(makes, email, recovery === "link" ? { of: { id: row.id } } : { refused: "passkey-only" });
       emit("email-change-undone", { userId: row.id, from });
       return { id: row.id, email, reset };
     },

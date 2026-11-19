@@ -409,11 +409,11 @@ test("a proxy passing X-Forwarded-For but not trusted is said once, naming what 
     await send("/auth/sign-out", "", { "x-forwarded-for": "203.0.113.51" });
   });
   assert.equal(fromCdn.length, 1, "once for that address");
-  assert.match(String(fromCdn), /add its address ranges to trustedProxies/);
+  assert.match(String(fromCdn), /add its address to trustedProxies/);
   assert.match(String(await captureWarnings(() => sign("127.0.0.1", "203.0.113.9"))), /trustedProxies: \["loopback"\]/);
   assert.match(String(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9"))), /trustedProxies: \["private"\]/);
   assert.deepEqual(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9", ["private"])), [], "named: nothing to say");
-  // Behind a private load balancer, a CDN that isn't named is found where the trail stops.
+  // Behind a private load balancer, a public proxy that isn't named is found where the trail stops.
   assert.match(String(await captureWarnings(() => sign("10.0.0.1", "203.0.113.9, 173.245.48.5", ["private"]))), /173\.245\.48\.5.*trustedProxies/);
 });
 
@@ -1091,4 +1091,16 @@ test("sign-in link routes only where links are sent, and the strict site's answe
     messages.map((m) => m.kind),
     ["passkey-only", "sign-up"],
   );
+});
+
+test("with Node's own server, only GET reads: PUT, DELETE, and the like never answer a read route", async () => {
+  const handler = createHandler(fresh().auth, { ...EMAIL, origin: DEV });
+  await withServer(handler, plainApp, async (base) => {
+    for (const method of ["PUT", "DELETE", "PATCH", "OPTIONS"]) {
+      const res = await fetch(`${base}/auth/session`, { method });
+      assert.notEqual(res.status, 200, method);
+      await res.body?.cancel();
+    }
+    assert.equal((await fetch(`${base}/auth/session`)).status, 200);
+  });
 });

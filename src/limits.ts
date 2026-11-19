@@ -192,9 +192,9 @@ const PRIVATE = [...LOOPBACK, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "
 /** Names for the usual cases: "loopback" (a proxy on this machine), "private" (one on a private network). */
 const NAMED: Record<string, string[]> = { loopback: LOOPBACK, private: PRIVATE };
 
-/** Whether an address is a proxy you trust: in one of `trustedProxies`' ranges ("loopback", "private", or a CDN's, say). */
+/** Whether an address is a proxy you trust: in one of `trustedProxies`' ranges ("loopback", "private", or a proxy's own address). */
 export function trusting(trustedProxies: readonly string[] = []): (address: Address) => boolean {
-  if (!Array.isArray(trustedProxies)) throw new Error('trustedProxies must be a list, such as ["loopback"] or ["173.245.48.0/20"].');
+  if (!Array.isArray(trustedProxies)) throw new Error('trustedProxies must be a list, such as ["loopback"] or ["10.0.0.5"].');
   const ranges = trustedProxies.flatMap((entry) =>
     Object.hasOwn(NAMED, entry) ? (NAMED[entry] ?? []).map((range) => readRange(range, true)) : [readRange(entry)],
   );

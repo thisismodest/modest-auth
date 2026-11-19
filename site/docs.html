@@ -143,7 +143,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
                 <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in, sign up, or get back in (with <code>recovery: "app"</code>, only to sign up)</td></tr>
-                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in, making the account if need be</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token, reset }</code></td><td>From a sign-in link: signs in, making the account if need be. With <code>reset: "true"</code>, for someone who has lost a passkey, a fresh start: every other session, link, and passkey of the account ends</td></tr>
               </tbody>
             </table>
           </div>
@@ -296,7 +296,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>trustedProxies</code></h3>
-              <p>Only behind a proxy: <code>["loopback"]</code> for nginx or Caddy on the same machine, <code>["private"]</code> for a hosting platform's load balancer, or a CDN's ranges. Left out, it's safe, and the log says what to set.</p>
+              <p>Only behind a proxy: <code>["loopback"]</code> for nginx or Caddy on the same machine, <code>["private"]</code> for a hosting platform's load balancer, or a proxy's own address. Never a CDN's ranges: put a proxy you run behind it. Left out, it's safe, and the log says what to set.</p>
             </div>
             <div>
               <h3><code>linkPage</code></h3>
@@ -389,7 +389,7 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>requestLink(kind, email, from)</code></td><td>A link to send, or null: <code>{ kind, to, token, account, expires }</code>, with <code>token</code> null when the message should say there's no account</td></tr>
                 <tr><td><code>lookUpLink(token, from)</code></td><td>Which email a link is for, without using it</td></tr>
                 <tr><td><code>usePasswordLink(token, password, from)</code></td><td>The account, made or with its new password; every session ends</td></tr>
-                <tr><td><code>useSignInLink(token, from)</code></td><td>The account a sign-in link is for (made, without passwords, if there wasn't one)</td></tr>
+                <tr><td><code>useSignInLink(token, from, { reset })</code></td><td>The account a sign-in link is for (made, without passwords, if there wasn't one); with <code>reset</code>, or where the site doesn't sign in by link, a fresh start</td></tr>
                 <tr><td><code>signIn(email, password, from)</code></td><td>The account, if the password's right</td></tr>
                 <tr><td><code>startSession(user)</code></td><td>A session token, for a user just returned by the calls above</td></tr>
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>

@@ -50,8 +50,9 @@ function webRequest(req: IncomingMessage, withBody: boolean): Request {
       if (req.rawHeaders[i]?.toLowerCase() === "content-type") headers.append("content-type", req.rawHeaders[i + 1] ?? "");
     }
   }
-  // Methods a Web-standard Request can't carry (TRACE and the like) are treated as GET.
-  const method = req.method === "POST" || req.method === "HEAD" ? req.method : "GET";
+  // Any method but GET, HEAD, and POST is carried as OPTIONS, which no route answers: not as GET, which would let
+  // PUT or DELETE (or TRACE, which a Web-standard Request can't carry) read what only GET should.
+  const method = req.method === "GET" || req.method === "POST" || req.method === "HEAD" ? req.method : "OPTIONS";
   const body = withBody && method === "POST" ? { body: Readable.toWeb(req) as ReadableStream<Uint8Array>, duplex: "half" } : {};
   return new Request(`http://localhost${plainPath(req.url) ?? "/"}`, { method, headers, ...body } as RequestInit);
 }
