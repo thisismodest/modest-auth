@@ -142,7 +142,8 @@ test("a sign-in: checked against the stored key, and refused if anything was cha
       authenticatorData: b64(Buffer.from(Buffer.from(signedIn.authenticatorData, "base64url").map((b, i) => (i === 36 ? b ^ 1 : b)))),
     };
     assert.throws(() => checkAssertion(tampered, party, stored), /not signed/, `${kind}: its counter changed`);
-    const json = Buffer.from(signedIn.clientDataJSON, "base64url").toString().replace("}", " }");
+    // The same JSON, one space longer: re-written, though it means the same.
+    const json = `${Buffer.from(signedIn.clientDataJSON, "base64url").toString()} `;
     assert.throws(
       () => checkAssertion({ ...signedIn, clientDataJSON: b64(Buffer.from(json)) }, party, stored),
       /not signed/,
