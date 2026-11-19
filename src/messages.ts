@@ -114,17 +114,17 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
     case "password-changed":
       return {
         subject: `Your password was changed on ${title}`,
-        text: `The password for your account on ${where} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.\n`,
+        text: `The password for your account on ${where} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it and removes any passkeys.\n`,
       };
     case "passkey-added":
       return {
         subject: `A passkey was added on ${title}`,
-        text: `A passkey, "${message.name}", was just added to your account on ${where}, so it can sign in.\n\nIf it wasn't you, sign in and remove it, then change your password if you have one; or choose a new one at ${origin} ("forgotten your password").\n`,
+        text: `A passkey named ${message.name} was just added to your account on ${where}, so it can sign in.\n\nIf it wasn't you, sign in at ${origin} and remove it, which signs everyone else out. If your account has a password, choosing a new one by "forgotten your password" removes every passkey too.\n`,
       };
     case "passkey-removed":
       return {
         subject: `A passkey was removed on ${title}`,
-        text: `A passkey, "${message.name}", was just removed from your account on ${where}, so it can no longer sign in.\n\nIf it wasn't you, sign in and check your account's passkeys and sessions.\n`,
+        text: `A passkey named ${message.name} was just removed from your account on ${where}, so it can no longer sign in, and every other session ended.\n\nIf it wasn't you, sign in at ${origin} and check your account's passkeys and sessions.\n`,
       };
     case "account-deleted":
       return {

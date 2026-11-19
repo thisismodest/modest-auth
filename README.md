@@ -43,7 +43,8 @@ safely, this is for you.
   is for organisations that only allow certain hardware. Only public keys are kept, so a
   copy of the database signs nothing. A counter that doesn't go up, where a passkey
   counts at all, means a copy of it, and is refused. Adding or removing one is told to the
-  account's email, and an undone move removes every passkey, so one a thief added goes too.
+  account's email; removing one signs every other session out; and a new password chosen
+  at a link, or an undone move, removes every passkey, so one a thief added goes too.
 - **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
   with someone else's email. Where there are passwords, whoever opens the link chooses
   one; where there aren't, opening a sign-in link makes the account.

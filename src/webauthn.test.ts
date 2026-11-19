@@ -167,3 +167,20 @@ test("the relying party is the origin's host, and only a bare origin is taken", 
   assert.deepEqual(relyingParty("http://localhost:3000"), { origin: "http://localhost:3000", id: "localhost" });
   for (const origin of ["https://app.example.org/", "https://app.example.org/x", "ftp://x.example"]) assert.throws(() => relyingParty(origin), Error, origin);
 });
+
+test("RSA keys: odd, 2048 bits or more by their top bit, and an odd exponent from 3 to 2^32", () => {
+  const good = makeKey("RS256").cose as Map<number, unknown>;
+  const n = good.get(-1) as Buffer;
+  for (const [change, why] of [
+    [(m: Map<number, unknown>) => m.set(-2, Buffer.from([1])), "exponent 1"],
+    [(m: Map<number, unknown>) => m.set(-2, Buffer.from([2])), "an even exponent"],
+    [(m: Map<number, unknown>) => m.set(-2, Buffer.alloc(0)), "no exponent"],
+    [(m: Map<number, unknown>) => m.set(-2, Buffer.from([1, 0, 0, 0, 0, 1])), "an exponent over 2^32"],
+    [(m: Map<number, unknown>) => m.set(-1, Buffer.from(n.map((b, i) => (i === n.length - 1 ? b & 0xfe : b)))), "an even modulus"],
+    [(m: Map<number, unknown>) => m.set(-1, Buffer.concat([Buffer.from([0x01]), n.subarray(1)])), "a modulus of 2041 bits"],
+  ] as const) {
+    const copy = new Map(good);
+    change(copy);
+    assert.throws(() => publicKeyOf(copy as never), Error, why);
+  }
+});

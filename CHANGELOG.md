@@ -50,7 +50,8 @@ account's version is one stamp, and messages are data for the app to send. Sever
   `sign-in-with-passkey`, `passkeys`, and `remove-passkey`; functions `passkeyOptions`,
   `addPasskey`, `signInOptions`, `signInWithPasskey`, `passkeysOf`, and `removePasskey`;
   the error code `invalid-passkey`; the events `passkey-added` and `passkey-removed`; and
-  the messages of the same names. An undone move removes every passkey.
+  the messages of the same names. A new password chosen at a link, or an undone move,
+  removes every passkey; removing one signs every other session out.
 - `allow(contact)`: who may have an account, if not everyone. Asked before a link is
   sent or used, an account made, or a session started or used, so someone the app stops
   allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a

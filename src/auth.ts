@@ -157,6 +157,11 @@ export const EMAIL_LINK_MINUTES = 60;
 export const PASSKEY_MINUTES = 5;
 /** The longest name a passkey can be given. */
 const LONGEST_PASSKEY_NAME = 60;
+/**
+ * A passkey's name, chosen by whoever adds it and shown in the owner's alert: one plain line of letters, numbers,
+ * spaces, and ' . , ( ) - only, so it can't pass for the alert's own words, a link, or markup.
+ */
+const isPasskeyName = (name: unknown): name is string => isPlainLine(name, LONGEST_PASSKEY_NAME) && /^[\p{L}\p{N} '’.,()-]+$/u.test(name);
 
 /**
  * A link to send. `token` goes in it, and only `to` should get it. Null where there's nothing to open: a sign-in
@@ -518,8 +523,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const afterNewPassword = (userId: string, email: string) => {
     endAllSessions(userId);
     endLinks(email, userId);
+    endChallenges(userId);
     flush();
   };
+  /** Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may have added their own. */
+  const forgetPasskeys = (userId: string) => {
+    db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
+    endChallenges(userId);
+  };
+  /** Challenges given to the account to add a passkey, not yet used: they end when anything about how it's reached changes. */
+  const endChallenges = (userId: string) => void db.prepare("DELETE FROM auth_challenges WHERE user = ?").run(userId);
 
   type UserRow = { id: string; email: string; password: string | null; stamp: string };
   type LinkOptions = { usable?: boolean; account?: boolean; of?: { id: string; stamp?: string } };
@@ -671,7 +684,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     const stamp = moveTo(userId, email, { password });
     endAllSessions(userId);
     // Every passkey goes too: whoever moved it may have added their own.
-    db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
+    forgetPasskeys(userId);
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
       userId,
@@ -718,6 +731,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       .get(randomUUID(), email, password, newStamp(), Date.now()) as { id: string; stamp: string };
     if (password !== null) afterNewPassword(id, email);
     else endLinks(email);
+    // A new password chosen at a link to the address is the way back in: every passkey goes, as after an undo, so one
+    // a thief added doesn't outlast it.
+    if (password !== null && !made) forgetPasskeys(id);
     if (made) emit("account-made", { userId: id, from });
     else if (password !== null) emit("password-changed", { userId: id, from });
     return { id, email, made, stamp };
@@ -773,6 +789,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   /** The account's new stamp, for a change to how it's reached that a session asked for: only while it's still `stamp`. */
   const restamp = (userId: string, stamp: string) => {
     if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(newStamp(), userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
+    endChallenges(userId);
   };
   type PasskeyRow = { id: string; name: string; created: number; used: number | null };
   /** The account's passkeys, the most recently added first, as its owner sees them. */
@@ -1063,7 +1080,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         throw BAD_PASSKEY();
       }
       takeChallenge(checked.challenge, "add", row.id);
-      const passkey: Passkey = { id: checked.id, name: isPlainLine(name, LONGEST_PASSKEY_NAME) ? name : "Passkey", created: Date.now(), lastUsed: null };
+      const passkey: Passkey = { id: checked.id, name: isPasskeyName(name) ? name : "Passkey", created: Date.now(), lastUsed: null };
       restamp(row.id, row.stamp);
       // A passkey's id is the device's: one already here (this account's or another's) isn't taken again.
       const stored = db
@@ -1100,16 +1117,20 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       try {
         if (!row) throw BAD_PASSKEY();
         checked = checkAssertion(assertion, relyingParty(origin), { publicKey: Buffer.from(row.publicKey), algorithm: row.algorithm });
-        // The account the passkey says it's for must be the one it was added to.
-        if (assertion.userHandle !== undefined && assertion.userHandle !== Buffer.from(row.user).toString("base64url")) throw BAD_PASSKEY();
+        // The account the passkey says it's for must be given, and be the one it was added to; and one allow allows.
+        if (assertion.userHandle !== Buffer.from(row.user).toString("base64url") || !allowed(row.email)) throw BAD_PASSKEY();
         takeChallenge(checked.challenge, "sign-in", null);
-        // A counter that doesn't go up, where it counts at all, means a copy of the passkey: refused.
+        // A counter that doesn't go up, where it counts at all, means a copy of the passkey: refused. Written only
+        // while it's still the counter checked, so two processes can't both take the same one.
         if ((checked.counter > 0 || row.counter > 0) && checked.counter <= row.counter) throw BAD_PASSKEY();
+        const counted = db
+          .prepare("UPDATE auth_passkeys SET counter = ?, used = ? WHERE id = ? AND counter = ?")
+          .run(checked.counter, Date.now(), id, row.counter);
+        if (counted.changes === 0) throw BAD_PASSKEY();
       } catch {
         emit("sign-in-failed", { ...(row ? { userId: row.user } : {}), from });
         throw BAD_PASSKEY();
       }
-      db.prepare("UPDATE auth_passkeys SET counter = ?, used = ? WHERE id = ?").run(checked.counter, Date.now(), id);
       return handOver({ id: row.user, email: row.email }, row.stamp, "passkey", from);
     },
 
@@ -1121,6 +1142,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       if (!passkey) return null;
       restamp(row.id, row.stamp);
       db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
+      // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
+      db.prepare("DELETE FROM auth_sessions WHERE user = ? AND token != ?").run(row.id, row.hashed);
       emit("passkey-removed", { userId: row.id, from });
       return passkey;
     },

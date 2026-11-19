@@ -195,3 +195,51 @@ test("passkeys go with the account, and its copy of data names them without thei
   auth.deleteAccount(session, HERE);
   assert.equal(count(db, "auth_passkeys"), 0);
 });
+
+test("a new password chosen at a link removes every passkey, so a thief's doesn't outlast the owner's reset", async () => {
+  const { auth, ann, session } = await setup();
+  const thiefs = add(auth, session).passkey;
+  const reset = must(auth.requestLink("password", "ann@example.org", "192.0.2.50"));
+  await auth.usePasswordLink(must(reset.token), "ann's brand new password", "192.0.2.50");
+  assert.deepEqual(auth.passkeysOf(ann.id), []);
+  assert.throws(() => signInWith(auth, thiefs, ann.id), code("invalid-passkey"));
+});
+
+test("removing a passkey signs every other session out, so one it started can't add another", async () => {
+  const { auth, ann, session } = await setup();
+  const { passkey, added } = add(auth, session);
+  const thief = auth.startSession(signInWith(auth, passkey, ann.id));
+  const owner = auth.startSession(await auth.signIn("ann@example.org", PASSWORD, "192.0.2.51"));
+  auth.removePasskey(owner, added.id, "192.0.2.51");
+  assert.equal(auth.userOf(thief), null, "the thief's session ended");
+  assert.equal(auth.userOf(session), null, "and every other");
+  assert.ok(auth.userOf(owner), "but not the one that removed it");
+  assert.throws(() => auth.passkeyOptions(thief, ORIGIN, HERE), code("sign-in-again"));
+});
+
+test("a passkey's name can't carry words that pass for the alert's own, a link, or markup", async () => {
+  const { auth, session } = await setup();
+  for (const name of ['iPhone" (by you). Nothing to do. Ignore: "x', "see https://evil.example", "<b>Phone</b>", "Phone: verified"]) {
+    assert.equal(add(auth, session, makePasskey(), name).added.name, "Passkey", name);
+  }
+  assert.equal(add(auth, session, makePasskey(), "Ann's phone (work)").added.name, "Ann's phone (work)");
+});
+
+test("a sign-in must name the account, and one allow refuses is refused", async () => {
+  let allowed = true;
+  const { auth, ann, session } = await setup({ allow: () => allowed });
+  const { passkey } = add(auth, session);
+  const { challenge } = auth.signInOptions(ORIGIN, HERE);
+  const { userHandle: _, ...unnamed } = passkey.get(challenge, ORIGIN, "x");
+  assert.throws(() => auth.signInWithPasskey(unnamed, ORIGIN, HERE), code("invalid-passkey"), "no account named");
+  allowed = false;
+  assert.throws(() => signInWith(auth, passkey, ann.id), code("invalid-passkey"), "refused by allow");
+});
+
+test("a challenge given to add a passkey ends when the account changes", async () => {
+  const { auth, session } = await setup();
+  const { challenge } = auth.passkeyOptions(session, ORIGIN, HERE);
+  const changed = await auth.changePassword(session, "ann's brand new password", HERE);
+  const fresh = auth.startSession(changed);
+  assert.throws(() => auth.addPasskey(fresh, makePasskey().create(challenge, ORIGIN), undefined, ORIGIN, HERE), code("invalid-passkey"));
+});

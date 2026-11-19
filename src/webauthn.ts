@@ -176,7 +176,8 @@ function bytesOf(key: Map<number | string, Cbor>, label: number, length?: number
 
 /**
  * A COSE public key as a Node key, and its algorithm: only the three taken, each with the key type, curve, and
- * fields its algorithm needs, nothing else.
+ * fields its algorithm needs (any others are ignored). P-256 points must be on the curve; an Ed25519 key is taken as
+ * given, since a bad one only harms whoever added it.
  */
 export function publicKeyOf(cose: Map<number | string, Cbor>): { key: KeyObject; algorithm: Algorithm } {
   const kty = cose.get(1);
@@ -193,8 +194,13 @@ export function publicKeyOf(cose: Map<number | string, Cbor>): { key: KeyObject;
   } else {
     if (kty !== 3) throw new Error("RS256 key that isn't RSA");
     const n = bytesOf(cose, -1);
-    if (n.length < 256 || n[0] === 0) throw new Error("RSA key under 2048 bits");
-    jwk = { kty: "RSA", n: b64(n), e: b64(bytesOf(cose, -2)) };
+    const e = bytesOf(cose, -2);
+    // 2048 bits at least, counted from the top bit; odd, as a product of two primes is; and an odd exponent from 3 to 2^32.
+    if (n[0] === 0 || (n.length - 1) * 8 + (n[0] ?? 0).toString(2).length < 2048 || ((n.at(-1) ?? 0) & 1) === 0)
+      throw new Error("RSA key under 2048 bits, or not one");
+    const exponent = e.length > 0 && e.length <= 5 && e[0] !== 0 ? Number(BigInt(`0x${e.toString("hex")}`)) : 0;
+    if (exponent < 3 || exponent > 2 ** 32 || exponent % 2 === 0) throw new Error("RSA exponent not taken");
+    jwk = { kty: "RSA", n: b64(n), e: b64(e) };
   }
   // createPublicKey refuses a point that isn't on the curve, and malformed RSA numbers.
   return { key: createPublicKey({ key: jwk, format: "jwk" }), algorithm };
