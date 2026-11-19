@@ -101,8 +101,12 @@ Found by three rounds of adversarial review of this release.
   this site doesn't.
 - The Node adapter answered `PUT` and `DELETE` to reading routes as `GET`; only `GET`
   (and `HEAD`) read now.
-- A passkey's name could hold a full stop, so a web address in a notice; it can't now,
-  and notices quote it.
+- A passkey's name, chosen by whoever added it, was written into the owner's notice,
+  so a thief could make the warning say to ignore it. Notices no longer name the passkey
+  (the `passkey-added` and `passkey-removed` messages have no `name`), and a name can't
+  hold a full stop, so a web address, wherever an app shows it.
+- A passkey sign-in in another process, between a recovery's (or a passkey removal's)
+  new stamp and its passkeys going, could keep a session. Passkeys now go first.
 - Moving an account back by hand, to an address a thief had moved it from, sent the
   thief's address an undo link that outlasted the owner's. Moving back while that
   move's undo link lasts is now that undo, and sends none (`useEmailLink`'s `undo` can

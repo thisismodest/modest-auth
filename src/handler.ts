@@ -319,7 +319,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   type Body = Record<string, string>;
   type Route = (request: Request, body: Body, from: string) => Promise<Response> | Response;
   /** A notice to an account's email that a passkey was added or removed, naming it. */
-  const passkeyNotice = (kind: "passkey-added" | "passkey-removed", email: string, name: string) => queue({ kind, to: { email }, name });
+  const passkeyNotice = (kind: "passkey-added" | "passkey-removed", email: string) => queue({ kind, to: { email } });
   /** The routes for sign-in links: where they're sent (to sign in, or, without passwords, to make accounts and get back in). */
   const linkRoutes: Record<string, Route> = {
     "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
@@ -351,7 +351,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     "add-passkey": own(({ token, user }, b: Body, from: string) => {
       const made = { clientDataJSON: b.clientDataJSON ?? "", attestationObject: b.attestationObject ?? "" };
       const passkey = auth.addPasskey(token, made, b.name, origin, from);
-      passkeyNotice("passkey-added", user.email, passkey.name);
+      passkeyNotice("passkey-added", user.email);
       return reply(200, { passkey });
     }),
     "sign-in-options": (_r, _b, from) => reply(200, auth.signInOptions(origin, from)),
@@ -363,7 +363,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     "remove-passkey": own(({ token, user }, b: Body, from: string) => {
       const removed = auth.removePasskey(token, b.id ?? "", from);
       if (!removed) return refuse(404, "not-found", "There's no such passkey.");
-      passkeyNotice("passkey-removed", user.email, removed.name);
+      passkeyNotice("passkey-removed", user.email);
       return reply(200, {});
     }),
   };

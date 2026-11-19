@@ -1042,7 +1042,7 @@ test("passkeys through the routes: added after a recent sign-in, told to the acc
   const added = await send("/auth/add-passkey", { ...passkey.create(String(options.json.challenge), ORIGIN), name: "Phone" });
   assert.equal(added.status, 200);
   await afterwards();
-  assert.deepEqual(messages.at(-1), { kind: "passkey-added", to: { email: "ann@example.org" }, name: "Phone" });
+  assert.deepEqual(messages.at(-1), { kind: "passkey-added", to: { email: "ann@example.org" } });
   const listed = (await send("/auth/passkeys")).json.passkeys as { id: string; name: string }[];
   assert.deepEqual(
     listed.map((p) => p.name),
@@ -1054,7 +1054,7 @@ test("passkeys through the routes: added after a recent sign-in, told to the acc
   assert.deepEqual(signedIn.json, { user: { email: "ann@example.org" } });
   assert.equal((await send("/auth/remove-passkey", { id: must(listed[0]).id })).status, 200);
   await afterwards();
-  assert.deepEqual(messages.at(-1), { kind: "passkey-removed", to: { email: "ann@example.org" }, name: "Phone" });
+  assert.deepEqual(messages.at(-1), { kind: "passkey-removed", to: { email: "ann@example.org" } });
 });
 
 test("without passkeys, their routes aren't there", async () => {

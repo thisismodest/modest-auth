@@ -2,6 +2,7 @@
 // themselves (signatures, origins, the binary parts) are tested in webauthn.test.ts.
 
 import assert from "node:assert/strict";
+import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { makePasskey } from "../test/authenticator.ts";
 import { code, count, fresh, HERE, later, must, PASSWORD, withClock } from "../test/helpers.ts";
@@ -22,6 +23,18 @@ const setup = async (options: Parameters<typeof fresh>[0] = {}) => {
 const add = (auth: Auth, session: string, passkey = makePasskey(), name?: string) => {
   const options = auth.passkeyOptions(session, ORIGIN, HERE);
   return { passkey, added: auth.addPasskey(session, passkey.create(options.challenge, ORIGIN), name, ORIGIN, HERE) };
+};
+
+/**
+ * What another process would find at each change of the account's stamp: how many of its passkeys were left. `clear`
+ * forgets what's been seen.
+ */
+const watchStamps = (db: DatabaseSync) => {
+  db.exec(`CREATE TEMP TABLE seen (passkeys INTEGER);
+    CREATE TEMP TRIGGER watching AFTER UPDATE OF stamp ON auth_users
+    BEGIN INSERT INTO seen SELECT count(*) FROM auth_passkeys WHERE user = NEW.id; END`);
+  const seen = () => (db.prepare("SELECT passkeys FROM seen").all() as { passkeys: number }[]).map((row) => row.passkeys);
+  return Object.assign(seen, { clear: () => void db.exec("DELETE FROM seen") });
 };
 
 /** Signing in with a passkey as a person does: options, then their device's answer. */
@@ -316,4 +329,27 @@ test("a fresh start by sign-in link takes the password too, so one a thief set d
   const link = must(auth.requestLink("sign-in", "ann@example.org", HERE));
   auth.useSignInLink(must(link.token), HERE, { reset: true });
   await assert.rejects(auth.signIn(ann.email, "the thief's own long password", HERE), code("wrong-credentials"));
+});
+
+test("passkeys go before the stamp changes, so a passkey sign-in in another process can't read the new stamp and keep its session", async () => {
+  const { db, auth, ann, session } = await setup();
+  add(auth, session);
+  add(auth, session);
+  const seen = watchStamps(db);
+  const [first] = auth.passkeysOf(ann.id);
+  auth.removePasskey(session, must(first).id, HERE);
+  assert.deepEqual(seen(), [1], "removing one: gone when the stamp changes");
+  seen.clear();
+  const link = must(auth.requestLink("sign-in", "ann@example.org", HERE));
+  auth.useSignInLink(must(link.token), HERE, { reset: true });
+  assert.deepEqual(seen(), [0], "a fresh start: every one gone when the stamp changes");
+});
+
+test("an undo takes every passkey before the stamp changes, too", async () => {
+  const { db, auth, ann, session } = await setup();
+  add(auth, session);
+  const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
+  const seen = watchStamps(db);
+  auth.useUndoLink(must(must(moved.undo).token), HERE);
+  assert.deepEqual(seen(), [0]);
 });

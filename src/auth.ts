@@ -168,8 +168,9 @@ export const PASSKEY_MINUTES = 5;
 /** The longest name a passkey can be given. */
 const LONGEST_PASSKEY_NAME = 60;
 /**
- * A passkey's name, chosen by whoever adds it and shown in the owner's alert: one plain line of letters, numbers,
- * spaces, and ' , ( ) - only (no full stop, so no web address), so it can't pass for the alert's own words, a link, or markup.
+ * A passkey's name, chosen by whoever adds it and shown in the owner's list of passkeys (never in an email): one plain
+ * line of letters, numbers, spaces, and ' , ( ) - only (no full stop, so no web address), so it can't pass for a link
+ * or markup wherever an app shows it.
  */
 const isPasskeyName = (name: unknown): name is string => isPlainLine(name, LONGEST_PASSKEY_NAME) && /^[\p{L}\p{N} '’,()-]+$/u.test(name);
 
@@ -578,7 +579,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     endChallenges(userId);
     flush();
   };
-  /** Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may have added their own. */
+  /**
+   * Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may
+   * have added their own. Always before the stamp changes, so a passkey sign-in in another process either finds no
+   * passkey or read the old stamp, and gets no session (or one that's ended next).
+   */
   const forgetPasskeys = (userId: string) => {
     db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
     endChallenges(userId);
@@ -734,10 +739,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * not an earlier move's undo link. The new stamp.
    */
   const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
-    const stamp = moveTo(userId, email, { password });
-    endAllSessions(userId);
     // Every passkey goes too: whoever moved it may have added their own.
     forgetPasskeys(userId);
+    const stamp = moveTo(userId, email, { password });
+    endAllSessions(userId);
     // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
     db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
       userId,
@@ -797,11 +802,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       endLinks(email);
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
+    forgetPasskeys(row.id);
     const stamp = newStamp();
     // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
     db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
     afterNewPassword(row.id, email);
-    forgetPasskeys(row.id);
     emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
     return { id: row.id, email, made: false, stamp };
   };
@@ -1244,8 +1249,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const row = recent(session, from);
       const passkey = passkeysOf(row.id).find((p) => p.id === id);
       if (!passkey) return null;
-      restamp(row.id, row.stamp);
+      // Gone before the stamp changes, as in forgetPasskeys.
       db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
+      restamp(row.id, row.stamp);
       // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
       db.prepare("DELETE FROM auth_sessions WHERE user = ? AND token != ?").run(row.id, row.hashed);
       emit("passkey-removed", { userId: row.id, from });

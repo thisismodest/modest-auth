@@ -382,7 +382,7 @@ each message as data: what it's for, who it's to, and the link in it, if any.
 | `email-in-use` | an address with an account of its own, that another account asked to move to | |
 | `password-changed` | an account | |
 | `email-changed` | the address an account moved from | `email` (where it went), `link` (to undo it), `expires` |
-| `passkey-added`, `passkey-removed` | an account | `name`: the passkey's |
+| `passkey-added`, `passkey-removed` | an account | nothing more: a passkey's name is chosen by whoever added it, so it isn't given |
 
 Each has `to`, a contact: `{ email }`. With TypeScript, a `switch` on `kind` that misses
 one fails to build, so a new kind in a later version can't go unsent.
