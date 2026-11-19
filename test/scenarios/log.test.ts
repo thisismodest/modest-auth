@@ -28,10 +28,9 @@ async function fullRun(h: Harness): Promise<string[]> {
   await other.get("/auth/sessions");
   await other.get("/auth/my-data");
   const next = freshPassword();
-  await unlessBusy(() => account.visitor.post("/auth/password", { current: account.password, next }));
+  await unlessBusy(() => account.visitor.post("/auth/password", { next }));
   secrets.push(account.password);
   account.password = next;
-  await unlessBusy(() => account.visitor.post("/auth/password", { current: freshPassword(), next: freshPassword() }));
   const moved = freshEmail("moved");
   const { undo } = await moveAccount(h, account, moved);
   await h.visitor().post("/auth/undo-email", { token: undo });
@@ -87,8 +86,8 @@ test("every event has its account's id and the address worked out, never the raw
 
 test("an email service's error holding the link is logged without it (76)", async () => {
   const h = await startHarness({
-    sendEmail: (to, _subject, text) => {
-      throw new Error(`could not send to ${to}: ${text}`);
+    deliver: (message) => {
+      throw new Error(`could not send to ${message.to.email}: ${"link" in message ? message.link : ""}`);
     },
   });
   try {

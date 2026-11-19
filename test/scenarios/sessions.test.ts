@@ -96,7 +96,7 @@ test("no sign-in that checked the old password survives a password change it rac
       return Object.assign(visitor, { status: answer.status });
     };
     for (let i = 0; i < 5; i++) signIns.push(race());
-    const change = account.visitor.post("/auth/password", { current: account.password, next });
+    const change = account.visitor.post("/auth/password", { next });
     for (let i = 0; i < 5; i++) signIns.push(race());
     const [changed, visitors] = await Promise.all([change, Promise.all(signIns)]);
     t.diagnostic(`password change ${changed.status}; sign-ins: ${visitors.map((v) => v.status).join(" ")}`);
@@ -137,7 +137,7 @@ test("signing out everywhere ends every session (18)", async () => {
 
 test("changing the password ends every other session and keeps this one (18)", async () => {
   const { account, other } = await twoSessions();
-  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { current: account.password, next: freshPassword() }));
+  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { next: freshPassword() }));
   assert.equal(changed.status, 200);
   assert.equal(await whoIs(other), null);
   assert.equal(await whoIs(account.visitor), account.email);
@@ -195,9 +195,9 @@ test("on localhost the cookie has no Secure and no prefix, and a plain-HTTP orig
   } finally {
     await local.close();
   }
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const auth = createAuth(new DatabaseSync(":memory:"), { signInWith: ["password", "link"] });
   for (const origin of ["http://example.org", "http://192.0.2.1", "http://example.org:8080"]) {
-    assert.throws(() => createHandler(auth, { origin, linkPage: LINK_PAGE, sendEmail: () => {} }), `${origin} refused`);
+    assert.throws(() => createHandler(auth, { origin, linkPage: LINK_PAGE, deliver: () => {} }), `${origin} refused`);
   }
 });
 

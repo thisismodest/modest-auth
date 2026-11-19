@@ -87,16 +87,22 @@
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.ts</span></div>
             <pre><code><span class="k">import</span> { createServer } <span class="k">from</span> <span class="s">"node:http"</span>;
 <span class="k">import</span> { DatabaseSync } <span class="k">from</span> <span class="s">"node:sqlite"</span>;
-<span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
+<span class="k">import</span> { createAuth, createHandler, emailFor, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
+<span class="k">const</span> ORIGIN = <span class="s">"https://example.org"</span>; <span class="c">// your site's address (HTTPS)</span>
 <span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
-<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>));
+<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
+  signInWith: [<span class="s">"link"</span>, <span class="s">"password"</span>], <span class="c">// or ["link"] alone, for no passwords at all</span>
+});
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
-  origin: <span class="s">"https://example.org"</span>, <span class="c">// your site's address (HTTPS)</span>
+  origin: ORIGIN,
   linkPage: <span class="s">"/account/link"</span>, <span class="c">// your page that emailed links open</span>
-  sendEmail: (to, subject, text, { signal }) =&gt; <span class="f">sendWithYourService</span>({ to, subject, text, signal }),
+  deliver: (message, { signal }) =&gt; {
+    <span class="k">const</span> { subject, text } = <span class="f">emailFor</span>(message, { origin: ORIGIN, name: <span class="s">"Example"</span> });
+    <span class="k">return</span> <span class="f">sendWithYourService</span>({ to: message.to.email, subject, text, signal });
+  },
   <span class="c">// in development, with no email service yet, print the emails (and their links) instead:</span>
-  <span class="c">// sendEmail: (to, subject, text) =&gt; console.log(to, subject, text),</span>
+  <span class="c">// deliver: (message) =&gt; console.log(message.to.email, emailFor(message, { origin: ORIGIN }).text),</span>
 });
 
 <span class="k">const</span> server = <span class="f">createServer</span>(<span class="k">async</span> (req, res) =&gt; {
@@ -118,25 +124,39 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
                 <tr><td><code>GET /auth/session</code></td><td></td><td><code>{ user: { email } }</code>, or <code>{ user: null }</code></td></tr>
-                <tr><td><code>POST /auth/send-password-link</code></td><td><code>{ email }</code></td><td>Emails a link to choose a password: to sign up, or for a forgotten one</td></tr>
-                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in</td></tr>
+                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in (without passwords, to an email with no account, one that signs up)</td></tr>
                 <tr><td><code>POST /auth/link</code></td><td><code>{ token }</code></td><td><code>{ kind, email }</code>: which email a link is for</td></tr>
-                <tr><td><code>POST /auth/set-password</code></td><td><code>{ token, password }</code></td><td>From a password link: makes the account or replaces its password, signs in, and ends every other session</td></tr>
-                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in</td></tr>
-                <tr><td><code>POST /auth/sign-in</code></td><td><code>{ email, password }</code></td><td>Signs in, with a fresh session (any old one ends)</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in (without passwords, making the account if need be)</td></tr>
                 <tr><td><code>POST /auth/sign-out</code></td><td>none</td><td>Ends this session</td></tr>
                 <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
                 <tr><td><code>GET /auth/sessions</code></td><td></td><td>The account's sessions: <code>{ sessions: [{ id, started, lastUsed, current }] }</code></td></tr>
                 <tr><td><code>POST /auth/end-session</code></td><td><code>{ id }</code></td><td>Ends one of them</td></tr>
                 <tr><td><code>GET /auth/my-data</code></td><td></td><td>Everything kept about the account, as a file to save</td></tr>
-                <tr><td><code>POST /auth/password</code></td><td><code>{ current, next }</code></td><td>Changes the password, and ends every other session</td></tr>
-                <tr><td><code>POST /auth/change-email</code></td><td><code>{ password, email }</code></td><td>Signed in: emails a link to the new address</td></tr>
+                <tr><td><code>POST /auth/change-email</code></td><td><code>{ email }</code></td><td>Signed in recently: emails a link to the new address</td></tr>
                 <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From that link, signed in to the account: moves it, and ends every session</td></tr>
-                <tr><td><code>POST /auth/undo-email</code></td><td><code>{ token }</code></td><td>From the notice to the old address (for 7 days): moves it back, ends every session, and emails a link to choose a new password</td></tr>
-                <tr><td><code>POST /auth/delete-account</code></td><td><code>{ password }</code></td><td>Deletes the account and its sessions</td></tr>
+                <tr><td><code>POST /auth/undo-email</code></td><td><code>{ token }</code></td><td>From the notice to the old address (for 7 days): moves it back, ends every session, and emails a link to get back in</td></tr>
+                <tr><td><code>POST /auth/delete-account</code></td><td>none</td><td>Signed in recently: deletes the account and its sessions</td></tr>
               </tbody>
             </table>
           </div>
+          <p>And only where there are passwords (otherwise they're not there at all):</p>
+          <div class="table-card">
+            <table>
+              <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
+              <tbody>
+                <tr><td><code>POST /auth/send-password-link</code></td><td><code>{ email }</code></td><td>Emails a link to choose a password: to sign up, or for a forgotten one</td></tr>
+                <tr><td><code>POST /auth/set-password</code></td><td><code>{ token, password }</code></td><td>From a password link: makes the account or replaces its password, signs in, and ends every other session</td></tr>
+                <tr><td><code>POST /auth/sign-in</code></td><td><code>{ email, password }</code></td><td>Signs in, with a fresh session (any old one ends)</td></tr>
+                <tr><td><code>POST /auth/password</code></td><td><code>{ next }</code></td><td>Signed in recently: changes the password, and ends every other session</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            "Signed in recently" means a session started in the last 10 minutes. An older one gets
+            <code>403</code> and <code>sign-in-again</code>: ask the person to sign in again, by any way
+            the site has, then try once more. Nothing asks for the password, so a stolen session can't
+            be used to guess it.
+          </p>
           <p>
             The two that send a link answer <code>202</code> and <code>{}</code> whatever happens, so
             nobody can tell whether an email has an account; an email goes either way. Links last 60
@@ -226,6 +246,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
                 <tr><td><code>invalid-password</code></td><td>422</td><td>Broken text (not valid Unicode)</td></tr>
                 <tr><td><code>invalid-link</code></td><td>400</td><td>The link has expired or been used</td></tr>
                 <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
+                <tr><td><code>sign-in-again</code></td><td>403</td><td>That needs a sign-in in the last 10 minutes</td></tr>
                 <tr><td><code>signed-out</code></td><td>401</td><td>That needs a signed-in browser</td></tr>
                 <tr><td><code>too-many-tries</code></td><td>429</td><td>Paused: wait, then try again</td></tr>
                 <tr><td><code>busy</code></td><td>503</td><td>Too many sign-ins at once</td></tr>
@@ -259,8 +280,16 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
               <p>Your page that emailed links open, such as <code>"/account/link"</code>.</p>
             </div>
             <div>
-              <h3><code>sendEmail</code></h3>
-              <p>How your app sends email: <code>(to, subject, text, { signal })</code>. Pass the signal to <code>fetch</code> (it aborts after 30 seconds), and don't log the text in production: it holds the link. In development, <code>(to, subject, text) =&gt; console.log(to, subject, text)</code> prints each email instead; each link works once, and only 3 of each kind go to one address in 15 minutes (past that, nothing is printed).</p>
+              <h3><code>deliver</code></h3>
+              <p>How your app sends each message: <code>(message, { signal })</code>. A message is data: its <code>kind</code> (such as <code>"sign-in"</code> or <code>"password-changed"</code>), <code>to</code> (<code>{ email }</code>), and its <code>link</code> and <code>expires</code> if it has one. Write it with <code>emailFor(message, { origin, name })</code>, modest-auth's own words, or your own, in any language. Pass the signal to <code>fetch</code> (it aborts after 30 seconds), turn off your email service's click tracking (it would see the link), and never log a message: it holds the link.</p>
+            </div>
+            <div>
+              <h3><code>signInWith</code> <small>(createAuth)</small></h3>
+              <p>How people sign in: <code>["link"]</code> for emailed links alone, no passwords at all, or <code>["link", "password"]</code>. Required. A link is how an account is made, and the way back in when a password is forgotten.</p>
+            </div>
+            <div>
+              <h3><code>allow</code> <small>(createAuth)</small></h3>
+              <p>Optional: who may have an account, such as <code>({ email }) =&gt; members.has(email)</code>. Asked before a link is sent, an account made, or a session started or used, so someone you stop allowing is signed out at their next request. It can only refuse. Keep it quick: it's asked on every signed-in request.</p>
             </div>
             <div>
               <h3><code>onEvent</code> <small>(createAuth)</small></h3>
@@ -271,7 +300,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
               <p>Optional: given a 5-character prefix of a password's SHA-1, gives Have I Been Pwned's range for it; breached passwords are refused.</p>
             </div>
             <div>
-              <h3><code>name</code></h3>
+              <h3><code>name</code> <small>(emailFor)</small></h3>
               <p>Optional: your site's name for its emails, such as <code>"Example Club"</code>. Subjects use it ("Sign in to Example Club"), and the text gives it with your address ("Example Club (example.org)"), which a copycat can't borrow. Left out, emails use the address alone.</p>
             </div>
             <div>
@@ -294,6 +323,8 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             <li><strong>Keeps the database on a local disk,</strong> backs it up, and keeps the backups private.</li>
             <li><strong>Watches for refusals:</strong> a run of 429 or 503 is someone guessing.</li>
             <li><strong>Leaves <code>/auth</code> to the handler:</strong> every path under it is the handler's.</li>
+            <li><strong>Turns off click tracking</strong> in its email service, so links go straight to the person.</li>
+            <li><strong>Offers to sign in again</strong> when a change is refused with <code>sign-in-again</code>.</li>
             <li><strong>Tells people who think their session was stolen</strong> to sign out everywhere first: it needs no password.</li>
           </ul>
         </section>
@@ -319,28 +350,30 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
           <p>
             <code>createAuth</code> gives the accounts, sessions, and limits without the routes. Your app
             then does what the handler would: checks <code>Origin</code>, starts a fresh session at each
-            sign-in, passes where each request came from, and for links, sends the email
-            <code>requestLink</code> gives after answering, whatever it says, and answers the same either way.
+            sign-in, passes where each request came from, and for links, turns the link
+            <code>requestLink</code> gives into its message with <code>messageFor(link, url)</code>, sends it
+            after answering, whatever it says (nothing, when it gives null), only ever to its address, and
+            answers the same either way.
           </p>
           <div class="table-card">
             <table>
               <thead><tr><th scope="col"><code>auth.</code></th><th scope="col">Does</th></tr></thead>
               <tbody>
-                <tr><td><code>requestLink(kind, email, from)</code></td><td>An email to send, or null: <code>{ kind, to, token, account, expires }</code>, with <code>token</code> null when it should say there's no account</td></tr>
+                <tr><td><code>requestLink(kind, email, from)</code></td><td>A link to send, or null: <code>{ kind, to, token, account, expires }</code>, with <code>token</code> null when the message should say there's no account</td></tr>
                 <tr><td><code>lookUpLink(token, from)</code></td><td>Which email a link is for, without using it</td></tr>
                 <tr><td><code>usePasswordLink(token, password, from)</code></td><td>The account, made or with its new password; every session ends</td></tr>
-                <tr><td><code>useSignInLink(token, from)</code></td><td>The account a sign-in link is for</td></tr>
+                <tr><td><code>useSignInLink(token, from)</code></td><td>The account a sign-in link is for (made, without passwords, if there wasn't one)</td></tr>
                 <tr><td><code>signIn(email, password, from)</code></td><td>The account, if the password's right</td></tr>
                 <tr><td><code>startSession(user)</code></td><td>A session token, for a user just returned by the calls above</td></tr>
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
                 <tr><td><code>endSession(token)</code>, <code>endAllSessions(userId)</code></td><td>Sign out, here or everywhere</td></tr>
                 <tr><td><code>sessionsOf(userId, token)</code>, <code>endSessionOf(userId, id)</code></td><td>The account's sessions, and ending one</td></tr>
                 <tr><td><code>dataOf(userId)</code></td><td>Everything kept about the account</td></tr>
-                <tr><td><code>changePassword(userId, current, next, from)</code></td><td>A new password; every session ends</td></tr>
-                <tr><td><code>requestEmailChange(userId, password, email, from)</code></td><td>An email to send to the new address, or null</td></tr>
-                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> token for it</td></tr>
-                <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, and makes its password useless</td></tr>
-                <tr><td><code>deleteAccount(userId, password, from)</code></td><td>The account and its sessions, gone</td></tr>
+                <tr><td><code>changePassword(session, next, from)</code></td><td>A new password, for a session started in the last 10 minutes; every session ends</td></tr>
+                <tr><td><code>requestEmailChange(session, email, from)</code></td><td>A link to send to the new address, or null (a recent session)</td></tr>
+                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it</td></tr>
+                <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, makes its password useless, and gives a <code>reset</code> link to get back in</td></tr>
+                <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
               </tbody>
             </table>
           </div>
@@ -366,9 +399,8 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td>Links asked for from one address</td><td>5 in 15 minutes</td></tr>
                 <tr><td>The same, from one IPv6 /48</td><td>20 in 15 minutes</td></tr>
                 <tr><td>Links of each kind emailed to one address (the rest quietly not sent)</td><td>3 in 15 minutes</td></tr>
-                <tr><td>Emails being sent at once</td><td>10, with 1,000 waiting</td></tr>
-                <tr><td>Password checks by an account's own sessions</td><td>10 an hour</td></tr>
-                <tr><td>Passwords being checked at once</td><td>2, with 50 waiting</td></tr>
+                <tr><td>Messages being sent at once</td><td>10, with 1,000 waiting</td></tr>
+                <tr><td>Passwords being checked at once</td><td>Sized to the machine (2 on most small servers), with 25 waiting for each</td></tr>
                 <tr><td>Sessions per account</td><td>50</td></tr>
               </tbody>
             </table>

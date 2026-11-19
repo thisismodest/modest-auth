@@ -97,9 +97,9 @@ test("a port after an address is dropped (68)", async () => {
 });
 
 test("trusting ranges that are much of the internet is refused when the handler is made (69)", async (t) => {
-  const auth = createAuth(new DatabaseSync(":memory:"));
+  const auth = createAuth(new DatabaseSync(":memory:"), { signInWith: ["password", "link"] });
   const make = (trustedProxies: string[]) => () =>
-    createHandler(auth, { origin: "https://example.org", linkPage: LINK_PAGE, sendEmail: () => {}, trustedProxies });
+    createHandler(auth, { origin: "https://example.org", linkPage: LINK_PAGE, deliver: () => {}, trustedProxies });
   for (const range of ["0.0.0.0/0", "::/0", "::/1", "0.0.0.0/1", "128.0.0.0/1"]) assert.throws(make([range]), range);
   const borderline = [];
   for (const range of ["0.0.0.0/8", "10.0.0.0/8", "2000::/3"]) {

@@ -6,27 +6,35 @@
 // the same way every time.
 //
 //   GET  /auth/session               who's signed in: { user: { email } | null }
-//   POST /auth/send-password-link    { email }: to sign up, or to choose a new password
-//   POST /auth/send-sign-in-link     { email }
+//   POST /auth/send-sign-in-link     { email }: to sign in (or, on a site without passwords, to sign up)
 //   POST /auth/link                  { token }: which email a link is for, and its kind
-//   POST /auth/set-password          { token, password }: from a password link
 //   POST /auth/sign-in-with-link     { token }: from a sign-in link
-//   POST /auth/sign-in               { email, password }
 //   POST /auth/sign-out               (no fields: an empty body, or {})
 //   POST /auth/sign-out-everywhere    (no fields)
 //   GET  /auth/sessions              the account's sessions: { sessions: [{ id, started, lastUsed, current }] }
 //   POST /auth/end-session           { id }: ends one of them
 //   GET  /auth/my-data               everything kept about the account, as a file to save
-//   POST /auth/password              { current, next }: every other session ends
-//   POST /auth/change-email          { password, email }: a link to the new address
+//   POST /auth/change-email          { email }: a link to the new address (signed in recently)
 //   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
 //   POST /auth/undo-email            { token }: from the notice to the old address
-//   POST /auth/delete-account        { password }
+//   POST /auth/delete-account         (no fields; signed in recently)
+//
+// And only on a site with passwords:
+//
+//   POST /auth/send-password-link    { email }: to sign up, or to choose a new password
+//   POST /auth/set-password          { token, password }: from a password link
+//   POST /auth/sign-in               { email, password }
+//   POST /auth/password              { next }: a new password (signed in recently); every other session ends
+//
+// Changing the email or password, or deleting the account, needs a session started in the last
+// RECENT_MINUTES: an older one is told "sign-in-again", and signing in again (by any way the site has)
+// starts a fresh one.
 
-import { type Auth, EMAIL_LINK_MINUTES, type Link, PASSWORD_LINK_MINUTES, SIGN_IN_LINK_MINUTES, UNDO_DAYS, type User } from "./auth.ts";
+import type { Auth, Link, User } from "./auth.ts";
 import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
 import { atMost, blockOf, traceClient, trusting } from "./limits.ts";
+import { type Message, messageFor } from "./messages.ts";
 import { readAtMost } from "./streams.ts";
 import { DAY } from "./time.ts";
 
@@ -44,13 +52,7 @@ export type HandlerOptions = {
   /** Where the routes live. */
   base?: string;
   /**
-   * The site's name for its emails, such as "Example Club". Their subjects use it, and their
-   * text gives it with the site's address ("Example Club (example.org)"), which a copycat can't
-   * borrow. Without it, the address alone. Up to 60 characters, on one line, with nothing invisible.
-   */
-  name?: string;
-  /**
-   * The app's page that emailed links open, such as "/account/link". The token
+   * The app's page that links open, such as "/account/link". The token
    * follows "#" ("#password=…" or "#sign-in=…"), which browsers never send to a
    * server. The page reads it (before any other script can), asks /auth/link which
    * email it's for and shows that, then asks for a password or shows a sign-in
@@ -60,15 +62,15 @@ export type HandlerOptions = {
    */
   linkPage: string;
   /**
-   * Sends an email: the app's own way (any email service). Called after the answer
-   * has gone, and for every request whether or not there's an account, so neither
-   * the answer nor the work after it shows which. At most 10 at once (each until it
-   * finishes) and 1,000 waiting; beyond that, or once its link has run out, an email
-   * is dropped. `signal` aborts after 30 seconds: pass it on (fetch(url, { signal })),
-   * so a stuck email service can't hold a place. Failures are logged, without the
-   * email's text.
+   * Sends a message to `message.to`: the app's own way (any email service; emailFor writes
+   * modest-auth's own words for one). Called after the answer has gone, and for every request
+   * whether or not there's an account, so neither the answer nor the work after it shows which.
+   * At most 10 at once (each until it finishes) and 1,000 waiting; beyond that, or once its link
+   * has run out, a message is dropped. `signal` aborts after 30 seconds: pass it on
+   * (fetch(url, { signal })), so a stuck service can't hold a place. Failures are logged, without
+   * the message.
    */
-  sendEmail(to: string, subject: string, text: string, options: { signal: AbortSignal }): Promise<void> | void;
+  deliver(message: Message, options: { signal: AbortSignal }): Promise<void> | void;
 };
 
 export type Handler = {
@@ -103,7 +105,7 @@ const pageOf = (origin: string | null) => {
     return null;
   }
 };
-const TOO_SLOW = "sendEmail didn't finish in 30 seconds: pass its signal on to your email service";
+const TOO_SLOW = "deliver didn't finish in 30 seconds: pass its signal on to the service it uses";
 
 /** The largest body a route reads. */
 const BODY_LIMIT = 4096;
@@ -148,74 +150,21 @@ async function readBody(request: Request): Promise<Record<string, string> | Resp
   }
 }
 
-/**
- * The site's name for its emails, if it has one: one short, plain line. A line break could add a line
- * of its own to an email (a header, in a mail program that writes them), and an invisible character
- * (one that reverses text, say) could disguise the name.
- */
-function siteName(name: unknown): string | null {
-  if (name === undefined) return null;
-  if (typeof name !== "string" || name.length === 0 || name.length > 60 || name.trim() !== name || /[\p{C}\p{Zl}\p{Zp}]/u.test(name)) {
-    throw new Error('name must be the site\'s name for its emails, such as "Example Club": up to 60 characters, on one line, with nothing invisible.');
-  }
-  return name;
-}
-
-/** The email for a link, in plain text: `title` heads it, `site` is named in it. */
-function linkEmail(link: Link, title: string, site: string, url: string, origin: string): { subject: string; text: string } {
-  /** The link, and how long it lasts. */
-  const within = (minutes: number, where = "") => `within ${minutes} minutes${where}:\n\n${url}\n\n`;
-  const notYou = "If it wasn't you, you can ignore this email.\n";
-  if (link.kind === "email" && link.token === null) {
-    return {
-      subject: `Your email address on ${title}`,
-      text: `Someone asked to use this email address for an account on ${site}, but it has an account of its own already, so nothing has changed.\n\n${notYou}`,
-    };
-  }
-  if (link.kind === "email") {
-    return {
-      subject: `Confirm your new email address on ${title}`,
-      text: `To use this email address for your account on ${site}, open this link ${within(EMAIL_LINK_MINUTES, ", in a browser where you're signed in to that account")}Using it signs you out everywhere. If you didn't ask, you can ignore this email: nothing changes without it.\n`,
-    };
-  }
-  if (link.token === null) {
-    return {
-      subject: `Sign in to ${title}`,
-      text: `Someone asked to sign in to ${site} with this email address, but there's no account for it. To make one, sign up at ${origin}\n\n${notYou}`,
-    };
-  }
-  if (link.kind === "sign-in") {
-    return {
-      subject: `Sign in to ${title}`,
-      text: `To sign in to ${site}, open this link ${within(SIGN_IN_LINK_MINUTES)}If you didn't ask to sign in, you can ignore this email.\n`,
-    };
-  }
-  if (link.account) {
-    return {
-      subject: `Choose a new password for ${title}`,
-      text: `To choose a new password for your account on ${site}, open this link ${within(PASSWORD_LINK_MINUTES)}Choosing one signs you out everywhere else. If you didn't ask, you can ignore this email: your password stays as it is.\n`,
-    };
-  }
-  return {
-    subject: `Finish signing up to ${title}`,
-    text: `To finish signing up to ${site}, choose a password at this link ${within(PASSWORD_LINK_MINUTES)}If you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
-  };
-}
-
 export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const { origin, secure } = siteOrigin(options.origin);
-  const { linkPage, sendEmail } = options;
+  const { linkPage, deliver } = options;
   if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage))
     throw new Error('linkPage must be a path on the site, such as "/account/link".');
-  if (typeof sendEmail !== "function") throw new Error("sendEmail must be a function that sends an email: (to, subject, text).");
-  const name = siteName(options.name);
-  const host = new URL(origin).host;
-  // Subjects carry the name; the text the name and the address, which a copycat can't borrow.
-  const title = name ?? host;
-  const site = name ? `${name} (${host})` : host;
-  // A slow or stuck email service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
+  if ("sendEmail" in options || "name" in options) {
+    throw new Error(
+      "sendEmail and name have gone: give deliver(message) instead, and use emailFor(message, { origin, name }) in it for modest-auth's own emails.",
+    );
+  }
+  if (typeof deliver !== "function") throw new Error("deliver must be a function that sends a message: (message, { signal }).");
+  const passwords = auth.signInWith.includes("password");
+  // A slow or stuck service can't pile up sends without end: 10 at once (each until it finishes), 1,000 waiting.
   const sending = atMost(10, 1000);
-  // Why, but never the email's text (it holds the link) nor the service's own message (which may repeat it).
+  // Why, but never the message (it holds the link) nor the service's own error message (which may repeat it).
   const why = (error: unknown) =>
     error instanceof AuthError
       ? "too many waiting"
@@ -224,49 +173,44 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
         : error.message === TOO_SLOW
           ? TOO_SLOW
           : error.name === "TimeoutError" || error.name === "AbortError"
-            ? "the email service didn't answer in 30 seconds"
+            ? "it didn't finish in 30 seconds"
             : error.name;
-  // Emails not sent, said at most 5 times a minute, with a count of the rest: a flood can't fill the log, and an
-  // email service that's down still shows.
+  // Messages not sent, said at most 5 times a minute, with a count of the rest: a flood can't fill the log, and a
+  // service that's down still shows.
   let notesSaid = 0;
   let notesUnsaid = 0;
   let notesMinute = 0;
   const notSent = (reason: string) => {
     const now = Math.floor(Date.now() / 60_000);
     if (now !== notesMinute) {
-      if (notesUnsaid) console.error(`modest-auth: ${notesUnsaid} more emails weren't sent in the minute before (not each said)`);
+      if (notesUnsaid) console.error(`modest-auth: ${notesUnsaid} more messages weren't sent in the minute before (not each said)`);
       [notesMinute, notesSaid, notesUnsaid] = [now, 0, 0];
     }
     if (notesSaid++ < 5) console.error(`modest-auth: ${reason}`);
     else notesUnsaid++;
   };
-  /** Sent after the answer, so a slow email service doesn't hold it up; not at all if it's no use by then. */
-  const queue = (to: string, subject: string, text: string, until: number) =>
+  /** Sent after the answer, so a slow service doesn't hold it up; not at all if it's no use by then (a day, for a notice). */
+  const queue = (message: Message) =>
     setImmediate(() => {
+      const until = "expires" in message ? message.expires : Date.now() + DAY;
       sending(async () => {
-        if (Date.now() >= until) return notSent("an email wasn't sent: its link ran out while it waited");
+        if (Date.now() >= until) return notSent("a message wasn't sent: its link ran out while it waited");
         // Waited for until it ends, or a second after its signal aborts at 30 seconds (time for a send that passed the
         // signal on to stop): one that ignores the signal can't hold a place.
         const signal = AbortSignal.timeout(30_000);
         const late = new Promise<never>((_, fail) =>
           signal.addEventListener("abort", () => setTimeout(() => fail(new Error(TOO_SLOW)), 1000).unref(), { once: true }),
         );
-        await Promise.race([Promise.resolve().then(() => sendEmail(to, subject, text, { signal })), late]);
-      }).catch((error: unknown) => notSent(`an email couldn't be sent: ${why(error)}`));
+        await Promise.race([Promise.resolve().then(() => deliver(message, { signal })), late]);
+      }).catch((error: unknown) => notSent(`a message couldn't be sent: ${why(error)}`));
     });
+  /** The page a link of `kind` opens, with its token after "#". */
+  const linkTo = (kind: string, token: string) => `${origin}${linkPage}#${kind}=${token}`;
   const send = (link: Link | null) => {
-    if (!link) return;
-    const { subject, text } = linkEmail(link, title, site, `${origin}${linkPage}#${link.kind}=${link.token}`, origin);
-    queue(link.to, subject, text, link.expires);
+    if (link) queue(messageFor(link, linkTo(link.kind, link.token ?? "")));
   };
-  /** A notice of a change to an account, to its email: so its owner hears of a change they didn't make. */
-  const notify = (to: string, subject: string, text: string) => queue(to, `${subject} on ${title}`, `${text}\n`, Date.now() + DAY);
-  const passwordChanged = (to: string) =>
-    notify(
-      to,
-      "Your password was changed",
-      `The password for your account on ${site} was just changed, and every other session ended.\n\nIf it wasn't you, choose a new one now at ${origin} ("forgotten your password"), which also signs out whoever changed it.`,
-    );
+  /** A notice to an account's email that its password changed: so its owner hears of a change they didn't make. */
+  const passwordChanged = (email: string) => queue({ kind: "password-changed", to: { email } });
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
   if ("proxies" in options) {
@@ -330,7 +274,7 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   };
   /** Signed out: the session cookie cleared. */
   const signedOut = (body: object = {}) => reply(200, body, clearedCookie(origin));
-  /** Sends the email (after the answer), and answers the same whatever happened. */
+  /** Sends the message (after the answer), and answers the same whatever happened. */
   const sent = (link: Link | null) => {
     send(link);
     return reply(202, {});
@@ -352,18 +296,29 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     };
 
   type Body = Record<string, string>;
-  const routes: Record<string, (request: Request, body: Body, from: string) => Promise<Response> | Response> = {
+  type Route = (request: Request, body: Body, from: string) => Promise<Response> | Response;
+  /** The routes for passwords: only on a site that uses them. */
+  const passwordRoutes: Record<string, Route> = {
     "send-password-link": (_r, b, from) => sent(auth.requestLink("password", b.email ?? "", from)),
-    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
-    link: (_r, b, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
     "set-password": async (r, b, from) => {
       const user = await auth.usePasswordLink(b.token ?? "", b.password ?? "", from);
       const answer = signedIn(user, tokenOf(r), from);
       if (!user.made) passwordChanged(user.email);
       return answer;
     },
-    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
     "sign-in": async (r, b, from) => signedIn(await auth.signIn(b.email ?? "", b.password ?? "", from), tokenOf(r), from),
+    password: own(async ({ token }, b: Body, from: string) => {
+      const changed = await auth.changePassword(token, b.next ?? "", from);
+      // The session that asked ended with every other: a fresh one for it.
+      const answer = signedIn(changed, null, from);
+      passwordChanged(changed.email);
+      return answer;
+    }),
+  };
+  const routes: Record<string, Route> = {
+    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
+    link: (_r, b, from) => reply(200, auth.lookUpLink(b.token ?? "", from)),
+    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from), tokenOf(r), from),
     "sign-out": (r, _b, from) => {
       const token = tokenOf(r);
       if (token) auth.endSession(token, from);
@@ -379,34 +334,26 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       if (!auth.endSessionOf(user.id, b.id ?? "", from)) return refuse(404, "not-found", "There's no such session.");
       return reply(200, {}, current ? clearedCookie(origin) : undefined);
     }),
-    password: own(async ({ user }, b: Body, from: string) => {
-      const changed = await auth.changePassword(user.id, b.current ?? "", b.next ?? "", from);
-      const answer = signedIn(changed, null, from);
-      passwordChanged(changed.email);
-      return answer;
-    }),
-    "change-email": own(async ({ user }, b: Body, from: string) => sent(await auth.requestEmailChange(user.id, b.password ?? "", b.email ?? "", from))),
+    "change-email": own(({ token }, b: Body, from: string) => sent(auth.requestEmailChange(token, b.email ?? "", from))),
     // Only by the account it moves, signed in here: someone could send a person their own link.
     "confirm-email": own(({ user }, b: Body, from: string) => {
       const moved = auth.useEmailLink(b.token ?? "", user.id, from);
-      notify(
-        moved.previous,
-        "Your email address was changed",
-        `The email address for your account on ${site} was just changed from this one to ${moved.email}, and every session ended.\n\nIf it wasn't you, undo it within ${UNDO_DAYS} days at this link, which moves the account back to this address, signs everyone out, and sends you a link to choose a new password:\n\n${origin}${linkPage}#undo=${moved.undo}`,
-      );
+      const { undo } = moved;
+      queue({ kind: "email-changed", to: { email: undo.to }, email: moved.email, link: linkTo("undo", undo.token ?? ""), expires: undo.expires });
       // Every session ended, this one too.
       return signedOut({ email: moved.email });
     }, "Please sign in, then open the link again."),
     "undo-email": (_r, b, from) => {
       const back = auth.useUndoLink(b.token ?? "", from);
-      // Its password no longer works: a link to choose a new one, to the address it's back at.
+      // Its password no longer works: a link to get back in, to the address it's back at.
       send(back.reset);
       return reply(200, { email: back.email });
     },
-    "delete-account": own(async ({ user }, b: Body, from: string) => {
-      await auth.deleteAccount(user.id, b.password ?? "", from);
+    "delete-account": own(({ token }, _b: Body, from: string) => {
+      auth.deleteAccount(token, from);
       return signedOut();
     }),
+    ...(passwords ? passwordRoutes : {}),
   };
 
   /** The routes that only read: GET, and nothing in a body. */

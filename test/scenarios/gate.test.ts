@@ -52,31 +52,27 @@ test("a flood of sign-ins is refused as busy, counting only those checked, the s
   assert.equal(failed, checkedKnown, "only those checked are counted");
 });
 
-test("set-password, password, and delete-account wait at the same gate, and busy refusals there don't count towards the 10 an hour (74)", async (t) => {
+test("set-password and password wait at the same gate as sign-in, and a busy refusal changes nothing (74)", async (t) => {
   const account = await signUp(h);
   const token = await askForLink(h, "password", freshEmail());
-  // Fill the gate with sign-ins, then try each of the others while it's full.
-  const flood = Array.from({ length: 70 }, () => h.visitor().post("/auth/sign-in", { email: freshEmail("nobody"), password: freshPassword() }));
-  await wait(200);
+  // Fill the gate with sign-ins (more than may hash or wait, on this machine), then try each of the others while it's full.
+  const flood = Array.from({ length: HASHING.atOnce + HASHING.waiting + 40 }, () =>
+    h.visitor().post("/auth/sign-in", { email: freshEmail("nobody"), password: freshPassword() }),
+  );
+  await wait(30);
+  const next = freshPassword();
   const during = await Promise.all([
-    account.visitor.post("/auth/password", { current: freshPassword(), next: freshPassword() }),
-    account.visitor.post("/auth/delete-account", { password: freshPassword() }),
-    account.visitor.post("/auth/password", { current: freshPassword(), next: freshPassword() }),
+    account.visitor.post("/auth/password", { next }),
     h.visitor().post("/auth/set-password", { token, password: freshPassword() }),
   ]);
   await Promise.all(flood);
-  t.diagnostic(
-    `while full: password ${during[0]?.status}, delete-account ${during[1]?.status}, password ${during[2]?.status}, set-password ${during[3]?.status}`,
-  );
-  for (const answer of during) assert.ok([401, 503].includes(answer.status) || answer.json?.error?.code === "invalid-link", `answered ${answer.status}`);
+  t.diagnostic(`while full: password ${during[0]?.status}, set-password ${during[1]?.status}`);
+  for (const answer of during) assert.ok([200, 503].includes(answer.status), `answered ${answer.status}`);
   assert.ok(during.some((a) => a.status === 503));
-  const accountChecks = during.slice(0, 3).filter((a) => a.status === 401).length;
-  let checked = accountChecks;
-  for (; checked < 12; checked++) {
-    const answer = await unlessBusy(() => account.visitor.post("/auth/password", { current: freshPassword(), next: freshPassword() }));
-    if (answer.status === 429) break;
-  }
-  assert.equal(checked, 10, "the busy refusals cost the account none of its 10");
+  // Refused as busy: nothing changed, so the same requests go through once the gate is free.
+  if (during[0]?.status === 503) assert.equal((await unlessBusy(() => account.visitor.post("/auth/password", { next }))).status, 200);
+  if (during[1]?.status === 503)
+    assert.equal((await unlessBusy(() => h.visitor().post("/auth/set-password", { token, password: freshPassword() }))).status, 200);
 });
 
 /** Sign-ins sent all at once, by `count` visitors, each to an email with no account. */

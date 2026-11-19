@@ -28,7 +28,7 @@ it brings. Nothing here is a promise of a date.
 ## Next: less for the app to get right
 
 - [x] **Password reset and email confirmation.** Single-use, short-lived, hashed
-      tokens, sent by a `sendEmail(to, subject, text)` function the app supplies (any
+      tokens, sent by a function the app supplies (now `deliver(message)`: any
       email service, called over HTTPS: no SDK). Email confirmation also lets sign-up
       stop saying which emails have accounts.
 - [x] **Changing an email address,** confirmed by email, ending every other session.
@@ -42,6 +42,41 @@ it brings. Nothing here is a promise of a date.
 - [x] **Telling people when their password changes,** by email (ASVS Level 2).
 - [x] **Checking new passwords against a full breached-password set** (ASVS Level 2),
       through a function the app supplies, so modest-auth itself still makes no network calls.
+
+## Sign-in methods (0.6.0)
+
+- [x] **How people sign in is the site's choice,** and must be made (`signInWith`): a
+      link alone, or a password and a link. A password never comes without a link,
+      which is how someone who forgets it gets back in. A method not chosen is off
+      entirely: no routes, and its functions refuse.
+- [x] **One stamp per account,** replaced whenever how it's reached changes, so every
+      "only if nothing changed meanwhile" check is one rule.
+- [x] **Changes need a recent sign-in,** by any method, instead of the password: the
+      same rule whatever the site's methods.
+- [x] **`allow`:** who may have an account, if not everyone. It can only refuse.
+- [x] **Messages as data,** for the app to deliver however it likes (any email service,
+      its own words, any language), with `emailFor` for modest-auth's own.
+
+## Next: passkeys
+
+Sign-in that can't be phished (WebAuthn), as a third method beside links and
+passwords, before the audit so the audit covers it. No dependency: everything a server
+checks is in `node:crypto`, given no attestation (which says what device made a key,
+and is for organisations that only allow certain hardware; synced passkeys mostly can't
+give one).
+
+- [ ] **The checks,** in their own file, step by step as the WebAuthn spec numbers them,
+      with a strict CBOR reader for just the shapes passkeys use, and keys of three
+      algorithms (EdDSA, ES256, RS256 of 2048 bits or more).
+- [ ] **Passkeys stored:** public keys only, ids unique across every account.
+- [ ] **Challenges** single-use, short-lived, kept apart by kind, and stored hashed.
+- [ ] **Adding (after a recent sign-in), signing in without an email, listing, and
+      removing,** each told to the account's address. An undone move removes every
+      passkey.
+- [ ] **Tests** with real keys of each algorithm, recorded answers from real
+      authenticators, and the reader fuzzed.
+- [ ] **Each account's own methods,** and then **passkeys only,** for an account that
+      chooses it.
 
 ## Before 1.0
 
@@ -60,9 +95,16 @@ without becoming a plugin system.
 - **One sign-in for several sites** on different domains: the smallest useful part of
   OpenID Connect (authorisation code with PKCE, one registered client per site), so
   each site can use any standard library.
-- **Passkeys** (WebAuthn), if they can be verified without a dependency.
 - **Two-step sign-in** with an authenticator app (TOTP): the step to ASVS Level 2 and
-  NIST AAL2.
+  NIST AAL2, for sites that keep passwords. Passkeys are the stronger way there.
+- **Other contacts:** a phone number, or push notifications once there's a standard,
+  beside email: another kind of `Contact`, and messages delivered by text or push. Each
+  needs its own rows in the threat model first: a SIM swap gives away a number, so a
+  number is only as safe as its carrier; a code typed from a text can be phished and
+  guessed, so it needs few tries and short lives, and to work only where it was asked
+  for; texts cost money, so attackers send them to premium numbers they own, which needs
+  limits by number range and country; and prompts to approve a sign-in get approved by
+  people worn down by them.
 - **More sign-ins at once,** for a site with a few thousand people signing in around
   the same time. Checking a session is already cheap; a password sign-in is costly by
   design (about 170 ms and 130MB each; from 0.5.0, as many at once as the machine's

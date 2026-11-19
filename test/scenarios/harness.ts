@@ -9,7 +9,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { type AuthEvent, type AuthOptions, createAuth, createHandler, type Handler, type HandlerOptions, handleNode } from "../../src/index.ts";
+import { type AuthEvent, type AuthOptions, createAuth, createHandler, emailFor, type Handler, type HandlerOptions, handleNode } from "../../src/index.ts";
 import { hashPassword } from "../../src/passwords.ts";
 import { wait } from "../helpers.ts";
 
@@ -56,7 +56,11 @@ export type HarnessOptions = {
   origin?: string;
   /** Null to name no proxies; ["loopback"] by default, so each visitor can give its own address. */
   trustedProxies?: readonly string[] | null;
-  sendEmail?: HandlerOptions["sendEmail"];
+  /** How people sign in: ["password", "link"] by default. */
+  signInWith?: AuthOptions["signInWith"];
+  allow?: AuthOptions["allow"];
+  /** Also given each message, after the harness has kept it as an email. */
+  deliver?: HandlerOptions["deliver"];
   onEvent?: (event: AuthEvent) => void;
   breachedRange?: AuthOptions["breachedRange"];
   name?: string;
@@ -118,26 +122,29 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
 
   const restoreLogs = captureLogs(logs, stdout);
 
-  const sendEmail: HandlerOptions["sendEmail"] = (to, subject, text, extra) => {
+  // Each message kept as the email emailFor writes for it, as README's quick start sends it.
+  const deliver: HandlerOptions["deliver"] = (message, extra) => {
+    const { subject, text } = emailFor(message, { origin, ...(options.name ? { name: options.name } : {}) });
     const found = LINK.exec(text);
-    emails.push({ to, subject, text, link: found ? { kind: found[1] as string, token: found[2] as string } : null, at: Date.now() });
-    return options.sendEmail?.(to, subject, text, extra);
+    emails.push({ to: message.to.email, subject, text, link: found ? { kind: found[1] as string, token: found[2] as string } : null, at: Date.now() });
+    return options.deliver?.(message, extra);
   };
 
   const build = () => {
     const db = new DatabaseSync(dbPath);
     const authOptions: AuthOptions = {
+      signInWith: options.signInWith ?? ["password", "link"],
       onEvent: (event) => {
         events.push(event);
         options.onEvent?.(event);
       },
     };
     if (options.breachedRange) authOptions.breachedRange = options.breachedRange;
+    if (options.allow) authOptions.allow = options.allow;
     const auth = createAuth(db, authOptions);
-    const handlerOptions: HandlerOptions = { origin, linkPage: LINK_PAGE, sendEmail };
+    const handlerOptions: HandlerOptions = { origin, linkPage: LINK_PAGE, deliver };
     const proxies = options.trustedProxies === undefined ? ["loopback"] : options.trustedProxies;
     if (proxies) handlerOptions.trustedProxies = proxies;
-    if (options.name) handlerOptions.name = options.name;
     const handler = createHandler(auth, handlerOptions);
     const server = createServer(async (req, res) => {
       if (await handleNode(handler, req, res)) return;
@@ -396,7 +403,7 @@ export async function whoIs(visitor: Visitor): Promise<string | null> {
 
 /** Moves an account to `to`, as its owner does: asks with the password, then opens the link signed in. */
 export async function moveAccount(harness: Harness, account: Account, to: string): Promise<{ undo: string }> {
-  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { password: account.password, email: to }));
+  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: to }));
   if (asked.status >= 300) throw new Error(`change-email answered ${asked.status} ${asked.text}`);
   const link = await harness.takeEmail((m) => m.to === to && m.link?.kind === "email");
   const confirmed = await account.visitor.post("/auth/confirm-email", { token: link.link?.token });

@@ -15,10 +15,10 @@ export const PASSWORD = "a long enough password";
 /** An AuthError with this code, for assert.throws and assert.rejects. */
 export const code = (expected: AuthErrorCode) => (error: unknown) => error instanceof AuthError && error.code === expected;
 
-/** A new database in memory, and auth on it. */
-export const fresh = (options: AuthOptions = {}) => {
+/** A new database in memory, and auth on it: with passwords and links, unless `options` says otherwise. */
+export const fresh = (options: Partial<AuthOptions> = {}) => {
   const db = new DatabaseSync(":memory:");
-  return { db, auth: createAuth(db, options) };
+  return { db, auth: createAuth(db, { signInWith: ["password", "link"], ...options }) };
 };
 
 /** Signing in with a password and starting a session: its token. */
@@ -104,7 +104,7 @@ export const must = <T>(value: T, what = "a value"): NonNullable<T> => {
   return value as NonNullable<T>;
 };
 
-/** Until emails asked for have been handed to sendEmail (or dropped, and that logged): two turns of the event loop. */
+/** Until messages asked for have been handed to deliver (or dropped, and that logged): two turns of the event loop. */
 export const sendsSettle = async () => {
   await afterwards();
   await afterwards();

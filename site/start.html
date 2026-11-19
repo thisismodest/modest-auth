@@ -109,13 +109,16 @@
             <pre><code><span class="k">import</span> { readFileSync } <span class="k">from</span> <span class="s">"node:fs"</span>;
 <span class="k">import</span> { createServer } <span class="k">from</span> <span class="s">"node:http"</span>;
 <span class="k">import</span> { DatabaseSync } <span class="k">from</span> <span class="s">"node:sqlite"</span>;
-<span class="k">import</span> { createAuth, createHandler, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
+<span class="k">import</span> { createAuth, createHandler, emailFor, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
 <span class="c">// The address people open the site at.</span>
 <span class="k">const</span> ORIGIN = process.env.ORIGIN ?? <span class="s">"http://localhost:3000"</span>;
 
 <span class="c">// Accounts, sessions, and limits, kept in one SQLite file.</span>
-<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>));
+<span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
+  <span class="c">// People sign in with a password, or a link emailed to them.</span>
+  signInWith: [<span class="s">"password"</span>, <span class="s">"link"</span>],
+});
 
 <span class="c">// The routes under /auth, which your pages call.</span>
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
@@ -123,7 +126,10 @@
   <span class="c">// Your page that emailed links open.</span>
   linkPage: <span class="s">"/link"</span>,
   <span class="c">// For now, print each email (with its link) here, rather than send it.</span>
-  sendEmail: (to, subject, text) =&gt; console.<span class="f">log</span>(<span class="s">`\nTo: ${to}\nSubject: ${subject}\n\n${text}\n`</span>),
+  deliver: (message) =&gt; {
+    <span class="k">const</span> { subject, text } = <span class="f">emailFor</span>(message, { origin: ORIGIN });
+    console.<span class="f">log</span>(<span class="s">`\nTo: ${message.to.email}\nSubject: ${subject}\n\n${text}\n`</span>);
+  },
 });
 
 <span class="c">// The site's own files: only these, each read once.</span>
@@ -168,9 +174,9 @@ server.headersTimeout = 10_000;
 server.<span class="f">listen</span>(3000, () =&gt; console.<span class="f">log</span>(<span class="s">`Open ${ORIGIN}`</span>));</code></pre>
           </div>
           <ul>
-            <li><strong><code>createAuth</code></strong> keeps accounts, sessions, and limits in <code>app.db</code>, a SQLite file it sets up the first time.</li>
+            <li><strong><code>createAuth</code></strong> keeps accounts, sessions, and limits in <code>app.db</code>, a SQLite file it sets up the first time. <code>signInWith</code> says how people sign in: here by password or emailed link; <code>["link"]</code> alone would mean no passwords at all.</li>
             <li><strong><code>createHandler</code></strong> answers every request under <code>/auth</code>: signing up, signing in, signing out, and the rest. <code>handleNode</code> gives it each request first; anything else is left to you.</li>
-            <li><strong><code>sendEmail</code></strong> is how emails go out. Here it prints them; <a href="#live">going live</a> swaps in an email service.</li>
+            <li><strong><code>deliver</code></strong> is how emails go out. Each message comes as data (what it's for, who it's to, and its link); <code>emailFor</code> writes modest-auth's own email for it. Here it prints them; <a href="#live">going live</a> swaps in an email service.</li>
             <li><strong>Only the files listed are served,</strong> so nothing else in the folder (such as <code>app.db</code>) can be fetched.</li>
             <li><strong>The <code>content-security-policy</code> header</strong> lets only the site's own scripts run on its pages.</li>
           </ul>
@@ -216,8 +222,8 @@ server.<span class="f">listen</span>(3000, () =&gt; console.<span class="f">log<
       &lt;form method="post" data-route="sign-out"&gt;&lt;button&gt;Sign out&lt;/button&gt;&lt;/form&gt;
 
       &lt;h2&gt;Change your password&lt;/h2&gt;
+      &lt;p&gt;If you signed in more than 10 minutes ago, sign out and in again first.&lt;/p&gt;
       &lt;form method="post" data-route="password"&gt;
-        &lt;label&gt;Current password &lt;input name="current" type="password" autocomplete="current-password" required /&gt;&lt;/label&gt;
         &lt;label&gt;New password &lt;input name="next" type="password" autocomplete="new-password" required minlength="15" /&gt;&lt;/label&gt;
         &lt;button&gt;Change it&lt;/button&gt;
       &lt;/form&gt;
@@ -259,7 +265,7 @@ document.<span class="f">getElementById</span>(user ? <span class="s">"signed-in
           </div>
           <ul>
             <li><strong>Every route takes JSON,</strong> sent with <code>fetch</code>. Another site's page can't send that without the browser asking first, which is part of how the routes know a request came from your own pages.</li>
-            <li><strong>Each form's fields are named as its route expects:</strong> <code>email</code> and <code>password</code> to sign in, <code>current</code> and <code>next</code> to change the password. The <a href="docs.html#routes">routes</a> list them all.</li>
+            <li><strong>Each form's fields are named as its route expects:</strong> <code>email</code> and <code>password</code> to sign in, <code>next</code> to change the password. The <a href="docs.html#routes">routes</a> list them all.</li>
             <li><strong>The forms are <code>method="post"</code></strong> so that, should the script fail to load, a password never ends up in an address.</li>
             <li><strong>A refusal's message is fit to show</strong> as it is, such as "That email and password don't match."</li>
             <li><strong>Asking for a link always answers the same,</strong> whether or not the email has an account, so nobody can use the form to find out who has one.</li>
@@ -415,17 +421,20 @@ history.<span class="f">replaceState</span>(null, <span class="s">""</span>, loc
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>server.js</span></div>
             <pre><code><span class="c">// Accounts, sessions, and limits, kept in one SQLite file.</span>
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
+  signInWith: [<span class="s">"password"</span>, <span class="s">"link"</span>],
   <span class="c">// Refuse passwords known from data breaches. Only the first 5 characters of a hash leave.</span>
   breachedRange: (prefix, { signal }) =&gt;
     <span class="f">fetch</span>(<span class="s">`https://api.pwnedpasswords.com/range/${prefix}`</span>, { headers: { <span class="s">"add-padding"</span>: <span class="s">"true"</span> }, signal }),
 });
 
-<span class="c">// Sends an email with Resend (any email service with an HTTPS API works much the same).</span>
-<span class="k">async</span> <span class="k">function</span> <span class="f">sendWithResend</span>(to, subject, text, { signal }) {
+<span class="c">// Sends a message with Resend (any email service with an HTTPS API works much the same).</span>
+<span class="c">// In Resend's settings, turn click tracking off: it would send each link through Resend first.</span>
+<span class="k">async</span> <span class="k">function</span> <span class="f">sendWithResend</span>(message, { signal }) {
+  <span class="k">const</span> { subject, text } = <span class="f">emailFor</span>(message, { origin: ORIGIN, name: <span class="s">"My site"</span> });
   <span class="k">const</span> res = <span class="k">await</span> <span class="f">fetch</span>(<span class="s">"https://api.resend.com/emails"</span>, {
     method: <span class="s">"POST"</span>,
     headers: { authorization: <span class="s">`Bearer ${process.env.RESEND_API_KEY}`</span>, <span class="s">"content-type"</span>: <span class="s">"application/json"</span> },
-    body: JSON.<span class="f">stringify</span>({ <span class="k">from</span>: <span class="s">"My site &lt;signin@example.org&gt;"</span>, to, subject, text }),
+    body: JSON.<span class="f">stringify</span>({ <span class="k">from</span>: <span class="s">"My site &lt;signin@example.org&gt;"</span>, to: message.to.email, subject, text }),
     signal,
   });
   <span class="k">if</span> (!res.ok) <span class="k">throw</span> <span class="k">new</span> <span class="f">Error</span>(<span class="s">`Resend answered ${res.status}`</span>);
@@ -437,16 +446,16 @@ history.<span class="f">replaceState</span>(null, <span class="s">""</span>, loc
   <span class="c">// Your page that emailed links open.</span>
   linkPage: <span class="s">"/link"</span>,
   <span class="c">// Sent for real when there's a key; printed here when there isn't.</span>
-  sendEmail: process.env.RESEND_API_KEY
+  deliver: process.env.RESEND_API_KEY
     ? sendWithResend
-    : (to, subject, text) =&gt; console.<span class="f">log</span>(<span class="s">`\nTo: ${to}\nSubject: ${subject}\n\n${text}\n`</span>),
+    : (message) =&gt; console.<span class="f">log</span>(<span class="s">`\nTo: ${message.to.email}\n\n${</span><span class="f">emailFor</span>(message, { origin: ORIGIN }).text<span class="s">}\n`</span>),
   <span class="c">// The proxy in front: here, nginx or Caddy on the same machine. Leave it out if nothing's in front.</span>
   trustedProxies: [<span class="s">"loopback"</span>],
 });</code></pre>
           </div>
           <ul class="checks">
             <li><strong>Serve the site over HTTPS,</strong> and set <code>ORIGIN</code> to its address, such as <code>https://example.org</code>. The handler won't start with a plain <code>http://</code> address other than <code>localhost</code>.</li>
-            <li><strong>Send email with a service,</strong> such as Resend, Postmark, or Amazon SES. Verify your sending domain with it (SPF, DKIM, and DMARC records), or the emails land in spam. Keep the key in an environment variable, and don't print emails once live: they hold the links.</li>
+            <li><strong>Send email with a service,</strong> such as Resend, Postmark, or Amazon SES. Verify your sending domain with it (SPF, DKIM, and DMARC records), or the emails land in spam. Turn its click tracking off, so links go straight to people rather than through the service. Keep the key in an environment variable, and don't print emails once live: they hold the links.</li>
             <li><strong>Refuse breached passwords</strong> with <code>breachedRange</code>, as above. Have I Been Pwned's range service is free and needs no key, and only the first 5 characters of the password's hash are sent. If it doesn't answer, the password is allowed, and the log says so.</li>
             <li><strong>Name the proxy in front, if any,</strong> in <code>trustedProxies</code>: <code>["loopback"]</code> for nginx or Caddy on the same machine, <code>["private"]</code> for a hosting platform's load balancer, and nothing at all if nothing's in front. nginx also needs <code>proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;</code>. For a CDN, see <a href="https://github.com/thisismodest/modest-auth#behind-a-proxy">Behind a proxy</a>.</li>
             <li><strong>Keep the database on a persistent disk,</strong> outside the code, so a deploy doesn't wipe it, and set <code>DATABASE_PATH</code> to it.</li>

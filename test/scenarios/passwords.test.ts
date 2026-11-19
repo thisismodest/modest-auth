@@ -54,13 +54,13 @@ test("new passwords are 15 to 200 characters, counted as characters (40)", async
 test("the longest passwords allowed fit the body limit, as a browser's JSON sends them (41)", async (t) => {
   const account = await signUp(h, freshEmail(), randomFrom(emoji, 200));
   const next = randomFrom(emoji, 200);
-  const body = JSON.stringify({ current: account.password, next });
+  const body = JSON.stringify({ next });
   t.diagnostic(`as JSON.stringify sends it: ${Buffer.byteLength(body)} bytes`);
-  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { current: account.password, next }));
+  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { next }));
   assert.equal(changed.status, 200, changed.text);
 
   // The same, with every character escaped (😀): valid JSON, but no browser sends it so.
-  const escaped = JSON.stringify({ current: next, next: randomFrom(emoji, 200) }).replace(/[\u{10000}-\u{10ffff}]/gu, (c) =>
+  const escaped = JSON.stringify({ next: randomFrom(emoji, 200) }).replace(/[\u{10000}-\u{10ffff}]/gu, (c) =>
     [...c.split("")].map((unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`).join(""),
   );
   const answer = await unlessBusy(() => account.visitor.post("/auth/password", undefined, { raw: escaped }));
