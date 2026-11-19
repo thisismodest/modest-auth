@@ -398,7 +398,7 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>dataOf(userId)</code></td><td>Everything kept about the account</td></tr>
                 <tr><td><code>changePassword(session, next, from)</code></td><td>A new password, for a session started in the last 10 minutes; every session ends</td></tr>
                 <tr><td><code>requestEmailChange(session, email, from)</code></td><td>A link to send to the new address, or null (a recent session)</td></tr>
-                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it</td></tr>
+                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it (null when it moves back to an address it was moved from, while that undo lasts)</td></tr>
                 <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, makes its password useless, and gives a <code>reset</code> link to get back in</td></tr>
                 <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
                 <tr><td><code>recoveryLink(email)</code></td><td>A link into the account, for your own code to send to someone you've vouched for; never from a route</td></tr>

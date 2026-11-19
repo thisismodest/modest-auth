@@ -42,8 +42,11 @@ export function settingUp(step: () => void): void {
 /** A rate limit: counts a try for `key`, and throws "too-many-tries" past the limit. */
 export type Limit = (key: string) => void;
 
-/** Rate limits kept in `db`: `limit(name, max, windowMs)` makes one. */
-export function databaseLimits(db: DatabaseSync): (name: string, max: number, windowMs: number) => Limit {
+/**
+ * Rate limits kept in `db`: `limit(name, max, windowMs)` makes one. With `wholeWait`, a refusal says to wait the whole
+ * window, not when it ends: for a limit others' tries count towards too, whose end would say when the first came.
+ */
+export function databaseLimits(db: DatabaseSync): (name: string, max: number, windowMs: number, options?: { wholeWait?: boolean }) => Limit {
   settingUp(() => db.exec(LIMITS_SCHEMA));
   // One statement: counted and read at once, so tries sent together are each counted.
   const count = db.prepare(
@@ -56,16 +59,18 @@ export function databaseLimits(db: DatabaseSync): (name: string, max: number, wi
   // Clearing passed windows a batch at a time, so a large clear-out can't hold the server up.
   const sweep = db.prepare("DELETE FROM auth_limits WHERE rowid IN (SELECT rowid FROM auth_limits WHERE resets <= ? LIMIT 2000)");
   let swept = 0;
-  return (name, max, windowMs) => (key) => {
-    const now = Date.now();
-    if (now - swept > 10_000) {
-      swept = now;
-      sweep.run(now);
-    }
-    const hashed = createHash("sha256").update(`${name}\0${key}`).digest("base64url");
-    const row = count.get(hashed, now + windowMs, now, now) as { count: number; resets: number };
-    if (row.count > max) throw new AuthError("too-many-tries", "Too many tries. Please wait a while, then try again.", Math.ceil((row.resets - now) / 1000));
-  };
+  return (name, max, windowMs, { wholeWait = false } = {}) =>
+    (key) => {
+      const now = Date.now();
+      if (now - swept > 10_000) {
+        swept = now;
+        sweep.run(now);
+      }
+      const hashed = createHash("sha256").update(`${name}\0${key}`).digest("base64url");
+      const row = count.get(hashed, now + windowMs, now, now) as { count: number; resets: number };
+      const wait = wholeWait ? windowMs : row.resets - now;
+      if (row.count > max) throw new AuthError("too-many-tries", "Too many tries. Please wait a while, then try again.", Math.ceil(wait / 1000));
+    };
 }
 
 /**

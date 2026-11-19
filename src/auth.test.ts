@@ -697,8 +697,8 @@ test("moving an account to a new email: needs a recent sign-in, a link to the ne
   assert.throws(() => auth.useSignInLink(must(link.token), HERE), code("invalid-link"), "an email link isn't a sign-in link");
   const moved = auth.useEmailLink(must(link.token), ann.id, HERE);
   assert.deepEqual([moved.id, moved.email, moved.previous], [ann.id, "ann@new.example", "ann@example.org"]);
-  assert.deepEqual([moved.undo.kind, moved.undo.to], ["undo", "ann@example.org"], "a link to undo it, for the old address");
-  assert.match(must(moved.undo.token), /^[\w-]{43}$/);
+  assert.deepEqual([must(moved.undo).kind, must(moved.undo).to], ["undo", "ann@example.org"], "a link to undo it, for the old address");
+  assert.match(must(must(moved.undo).token), /^[\w-]{43}$/);
   assert.equal(auth.userOf(session), null, "every session ended");
   await assert.rejects(auth.signIn("ann@example.org", PASSWORD, HERE), code("wrong-credentials"), "the old email no longer signs in");
   assert.equal((await auth.signIn("ann@new.example", PASSWORD, HERE)).id, ann.id);
@@ -772,9 +772,9 @@ test("the address a move took the account from can undo it: back, every session 
   const second = await move(auth, first, "the thief's own long password", "thief2@evil.example", "192.0.2.131");
   const thiefSession = await openSession(auth, "thief2@evil.example", HERE, "the thief's own long password");
   // The thief's own undo (to the address they moved it to first) can't cancel Ann's, which is earlier.
-  auth.useUndoLink(must(second.undo.token), "192.0.2.135");
-  assert.deepEqual(auth.lookUpLink(must(first.undo.token), HERE), { kind: "undo", email: "ann@example.org" });
-  const back = auth.useUndoLink(must(first.undo.token), "192.0.2.132");
+  auth.useUndoLink(must(must(second.undo).token), "192.0.2.135");
+  assert.deepEqual(auth.lookUpLink(must(must(first.undo).token), HERE), { kind: "undo", email: "ann@example.org" });
+  const back = auth.useUndoLink(must(must(first.undo).token), "192.0.2.132");
   assert.deepEqual([back.id, back.email], [ann.id, "ann@example.org"]);
   assert.equal(auth.userOf(thiefSession), null, "everyone signed out");
   await assert.rejects(
@@ -782,7 +782,7 @@ test("the address a move took the account from can undo it: back, every session 
     code("wrong-credentials"),
     "the thief's password no longer works",
   );
-  assert.throws(() => auth.useUndoLink(must(first.undo.token), HERE), code("invalid-link"), "once only");
+  assert.throws(() => auth.useUndoLink(must(must(first.undo).token), HERE), code("invalid-link"), "once only");
   assert.equal((await auth.usePasswordLink(must(back.reset.token), "ann's new long password", "192.0.2.134")).id, ann.id, "and Ann chooses a new one");
 });
 
@@ -802,7 +802,7 @@ test("the password link that follows an undo is sent whatever the limits", async
   const moved = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
   for (let i = 0; i < 3; i++) auth.requestLink("password", "ann@example.org", `198.51.100.${180 + i}`);
   assert.equal(auth.requestLink("password", "ann@example.org", "198.51.100.190"), null, "the address's allowance used up");
-  const back = auth.useUndoLink(must(moved.undo.token), "198.51.100.191");
+  const back = auth.useUndoLink(must(must(moved.undo).token), "198.51.100.191");
   assert.equal((await auth.usePasswordLink(must(back.reset.token), "ann's new long password", HERE)).id, ann.id);
 });
 
@@ -811,7 +811,7 @@ test("once the old address has taken its account back by a password link, the un
   const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
   const moved = await move(auth, ann, PASSWORD, "ann@new.example", HERE);
   await signUp(auth, "ann@example.org", PASSWORD, "192.0.2.140");
-  assert.throws(() => auth.useUndoLink(must(moved.undo.token), HERE), code("invalid-link"));
+  assert.throws(() => auth.useUndoLink(must(must(moved.undo).token), HERE), code("invalid-link"));
 });
 
 test("a move asked for while a reset is under way isn't stored", async () => {
@@ -914,7 +914,7 @@ test("events: each one told after the answer, with no password, token, or email 
   auth.endSession(laptop);
   await auth.changePassword(await openSession(auth, "ann@example.org", "192.0.2.181"), "a brand new long password", HERE);
   const moved = await move(auth, ann, "a brand new long password", "ann@new.example", HERE);
-  auth.useUndoLink(must(moved.undo.token), HERE);
+  auth.useUndoLink(must(must(moved.undo).token), HERE);
   auth.endAllSessions(ann.id);
   await later();
   assert.deepEqual(
@@ -1072,7 +1072,7 @@ test("an undo still works when the account is already back at that address: ever
   const there = await move(auth, ann, PASSWORD, "ann@new.example", HERE);
   await move(auth, there, PASSWORD, "ann@example.org", "192.0.2.200");
   const session = await openSession(auth, "ann@example.org", "192.0.2.201");
-  assert.equal(auth.useUndoLink(must(there.undo.token), HERE).email, "ann@example.org");
+  assert.equal(auth.useUndoLink(must(must(there.undo).token), HERE).email, "ann@example.org");
   assert.equal(auth.userOf(session), null);
   await assert.rejects(auth.signIn("ann@example.org", PASSWORD, "192.0.2.202"), code("wrong-credentials"));
 });
@@ -1205,7 +1205,7 @@ test("without passwords, an undone move leaves the account with no password and 
   const user = must(auth.userOf(session));
   const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), user.id, HERE);
   const thief = signIn("thief@evil.example", "192.0.2.211");
-  const back = auth.useUndoLink(must(moved.undo.token), "192.0.2.212");
+  const back = auth.useUndoLink(must(must(moved.undo).token), "192.0.2.212");
   assert.equal(auth.userOf(thief), null, "everyone signed out");
   assert.deepEqual([back.reset.kind, back.reset.to, back.reset.account], ["sign-in", "ann@example.org", true]);
   assert.equal(auth.useSignInLink(must(back.reset.token), "192.0.2.213").id, user.id, "and Ann signs back in to it");
@@ -1353,4 +1353,40 @@ test("a link of a kind the site doesn't use can't even be looked up", () => {
   const after = createAuth(db, { signInWith: ["password"] });
   assert.throws(() => after.lookUpLink(must(link.token), HERE), code("invalid-link"));
   assert.deepEqual(before.lookUpLink(must(link.token), HERE), { kind: "sign-in", email: "ann@example.org" });
+});
+
+test("moving back to an address it was moved from, while that undo lasts, is that undo: no undo link to where it leaves", async () => {
+  const { auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  // Someone with Ann's password moves her account twice; she signs in and moves it home herself.
+  const first = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
+  const second = await move(auth, first, PASSWORD, "thief2@evil.example", "192.0.2.140");
+  const home = await move(auth, second, PASSWORD, "ann@example.org", "192.0.2.141");
+  assert.equal(home.undo, null, "nothing sent to the thief's address to take it back");
+  assert.throws(() => auth.lookUpLink(must(must(second.undo).token), HERE), code("invalid-link"), "the later move's undo has ended");
+});
+
+test("a move's undo link isn't stored if the account changes as it's made, so an undo in another process isn't outlasted", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = await openSession(auth, ann.email, HERE);
+  const link = must(auth.requestEmailChange(session, "thief@evil.example", HERE));
+  // Another process's undo, landing just after the move and before its undo link is stored.
+  db.exec(
+    "CREATE TEMP TRIGGER elsewhere AFTER UPDATE OF email ON auth_users WHEN NEW.stamp != 'elsewhere' BEGIN UPDATE auth_users SET stamp = 'elsewhere' WHERE id = NEW.id; END",
+  );
+  assert.throws(() => auth.useEmailLink(must(link.token), ann.id, HERE), code("sign-in-again"));
+  assert.equal(count(db, "auth_links WHERE kind = 'undo'"), 0);
+});
+
+test("the per-account pause says to wait the whole hour, so it doesn't tell when someone last tried the email", async () => {
+  const { auth } = fresh();
+  await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  await withClock(async (ahead) => {
+    await guessFromEverywhere(auth, "ann@example.org");
+    ahead(30 * MINUTE);
+    const paused = await auth.signIn("ann@example.org", "x".repeat(300), "10.1.0.1").catch((error: unknown) => error);
+    assert.ok(paused instanceof AuthError && paused.code === "too-many-tries");
+    assert.equal(paused.retryAfter, 3600);
+  });
 });

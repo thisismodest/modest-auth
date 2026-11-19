@@ -29,6 +29,8 @@ export function cleanEmail(given: string): string | null {
   if (local.startsWith(".") || local.endsWith(".") || local.includes("..")) return null;
   // Nor one a mail program would read as a command-line option or a pipe ("-X/file@x.org", "|cmd@x.org"), should an app pass it to one.
   if (local.startsWith("-") || local.startsWith("|")) return null;
+  // Nor a path or query, so an address shown in a notice can't pass for a web link ("www.x.example/undo?@y.example").
+  if (/[/?#]/.test(local)) return null;
   // Nothing a URL would read as more than a host (a path, query, fragment, or %-escape), before the URL parser sees it.
   if (/[/?#%]/.test(domain)) return null;
   let ascii: string;

@@ -50,7 +50,8 @@ round modest-auth.
 | Malformed passkey data (CBOR, keys) | Read by a strict CBOR reader taking only what passkeys use: no indefinite lengths, tags, floats, or null; no key twice; integers JavaScript holds exactly; nesting and item counts capped; nothing left over. Keys only of three algorithms (EdDSA on Ed25519, ES256 on P-256, RS256 of 2048 bits or more counted from the top bit, odd, with an odd exponent from 3 to 2^32), each with exactly its own type, curve, and fields; P-256 points off the curve refused (an Ed25519 key is taken as given: a bad one only harms whoever added it). Fuzzed with random and mutated input | `webauthn.ts` |
 | Taking over someone's passkey, or adding one to someone else's account | A passkey's id is unique across every account, so one already added isn't added again; a sign-in's passkey must name, by id, the account it was added to (a sign-in naming none is refused); an address `allow` refuses can't sign in by passkey; adding one needs a session started in the last 10 minutes, and a challenge given to that account | `auth.ts` |
 | A copied passkey (cloned from a device) | Where a passkey keeps a counter, it must go up each time, or the sign-in is refused; the new count is written only while it's still the one checked, so two processes can't both take it | `auth.ts` |
-| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; getting back in is a fresh start: a new password chosen at a link, a sign-in link where the site doesn't sign in by link (or one opened with `reset`), and an undone move each change the stamp and end every session, link, and passkey of the account | `auth.ts`, `handler.ts` |
+| A thief keeping a way back after the owner moves the account home | Moving back to an address the account was moved away from, while that move's undo link lasts, is that undo: later moves' undo links end, and none goes to the address it leaves | `auth.ts`, `handler.ts` |
+| A thief's passkey left behind | Adding or removing one is told to the account's email, and changes the stamp, ending the account's unused challenges; removing one signs every other session out, so a session it started can't carry on and add another; getting back in is a fresh start: a new password chosen at a link, a sign-in link where the site doesn't sign in by link (or one opened with `reset`), and an undone move each change the stamp and end every session, link, and passkey of the account (a reset sign-in link takes the password too); a passkey, or a move's undo link, is stored only while the stamp is the one just set, so a fresh start in another process can't be outlasted | `auth.ts`, `handler.ts` |
 | A link opening an account it wasn't sent for | A link to an existing account names it, and opens only that one; a sign-up link opens nothing that has an account by then, so an account made, or moved to the address, after it was sent can't be taken with it | `auth.ts` |
 | An undo link as a way into a passkey account | Under `recovery: "app"`, undoing a move sends no link in: the old address can move the account back, which signs everyone out, but can't sign in | `auth.ts` |
 | A copy of the database signing in by passkey | Only public keys are kept | `auth.ts` |
@@ -60,6 +61,7 @@ round modest-auth.
 | A stuck or slow email service | `deliver` is given a signal that aborts after 30 seconds; 10 sends at once, 1,000 waiting, the rest dropped and logged (at most 5 lines a minute, and a count of the rest, so a flood can't fill the log); a message whose link has run out while it waited isn't sent; failures logged without the message | `handler.ts` |
 | A link reaching anyone but its address | A message, with its link, goes only to the app's `deliver`, after the answer, never in the answer to whoever asked; README's checklist for whatever sends it: click tracking off (a service that rewrites links would see the token), the link once and unchanged, and no logging of messages | `handler.ts`, `README.md` |
 | An address a mail program would read as an option or a pipe (`-X/file@…`, `\|cmd@…`) | Refused | `emails.ts` |
+| An address that passes for a web link in a notice (`www.x.example/undo?@y.example`) | A path, query, or fragment (`/`, `?`, `#`) refused before the `@` as after it | `emails.ts` |
 | Moving someone's account to your address | Needs a session started in the last 10 minutes, and a link to the new address, opened where the account is signed in (so a link sent to anyone else does nothing); a move asked for while the password changed isn't stored | `auth.ts`, `handler.ts` |
 | A stolen session changing the account (its password, its email, or deleting it) | Each needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older one is told to sign in again, by any way the site has. Nothing asks for the password, so a stolen session can't be used to guess it | `auth.ts` |
 | Attaching your account to someone else's address (sending them your own move link) | Only the account being moved, signed in, can use its link | `auth.ts`, `handler.ts` |
@@ -128,10 +130,15 @@ round modest-auth.
   first can use them up; the 5 notes still say what to check.
 - **Someone with an account's password, or its inbox, can sign in and move it,** and has
   the account until its old address undoes the move (and, if they also read the old
-  inbox, for good). That's why the undo link also makes the password useless.
+  inbox, for good). That's why the undo link also makes the password useless. Once
+  the undo link has run out (7 days), the account's new address is its own: an owner
+  who then moves it back by hand sends that address an undo link, as for any move.
 - **A session stolen in its first 10 minutes** can change the account: its password, its
   email, its passkeys, or deleting it. After that it must sign in again. A notice goes to the account's
   email for a password or email change, with a way back.
+- **The per-account limit counts everyone's tries,** its owner's sign-ins too: someone
+  who spends 100 guesses on an email can tell, by when they're refused, whether anyone
+  else tried it in that hour (not when; the pause always says to wait the whole hour).
 - **A determined attacker can pause signing in with the password to one account for up
   to an hour** by spending 100 guesses at it from several addresses. Its owner can still
   sign in by an emailed link (unless someone on the same address, or the same IPv6 /48,
@@ -152,7 +159,8 @@ round modest-auth.
   for another. A link that waited in the queue arrives with less of its time left.
 - **A shared address (an office, a mobile network) shares its 5 links** in 15 minutes,
   and everyone in one IPv6 /48 (an organisation, or a carrier's pool) shares 20: one
-  person there can use them up for the rest.
+  person there can use them up for the rest. So with its 20 tries in 15 minutes: one
+  person can pause signing in there, links and passkeys included, for everyone else.
 - **Someone can still be fooled by a look-alike email** on the link page (`ann@` written
   with a Cyrillic `а`), or by an app whose link page acts by itself or doesn't show the
   email: then they could be signed in to someone else's account.
