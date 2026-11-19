@@ -420,6 +420,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const makes: LinkKind = passwords ? "password" : "sign-in";
   /** Whether sign-in links are sent: to sign in, where that's a method; else where they're the link that makes accounts and gets people back in. */
   const signInLinks = signInWith.includes("link") || makes === "sign-in";
+  /** The kinds of link this site sends. */
+  const linkKinds: LinkKind[] = ["email", "undo", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
   /** For sign-in links, where they aren't sent: a mistake in the app's code (people get back in by a password link here). */
   const needsSignInLinks = () => {
     if (!signInLinks) throw new Error('This site doesn\'t send sign-in links: add "link" to signInWith first.');
@@ -944,8 +946,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
     lookUpLink(token, from) {
       fromWhere(from);
-      const kinds: LinkKind[] = ["email", "undo", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
-      const { kind, email } = findLink(token, kinds, false);
+      const { kind, email } = findLink(token, linkKinds, false);
       return { kind, email };
     },
 
