@@ -57,8 +57,11 @@ account's version is one stamp, and messages are data for the app to send. Sever
   `sign-in-with-passkey`, `passkeys`, and `remove-passkey`; functions `passkeyOptions`,
   `addPasskey`, `signInOptions`, `signInWithPasskey`, `passkeysOf`, and `removePasskey`;
   the error code `invalid-passkey`; the events `passkey-added` and `passkey-removed`; and
-  the messages of the same names. A new password chosen at a link, or an undone move,
-  removes every passkey; removing one signs every other session out.
+  the messages of the same names. Getting back in by a link is a fresh start (every
+  session, link, and passkey of the account ends); removing a passkey signs every other
+  session out. `useSignInLink`'s `reset` option (`reset: "true"` at
+  `sign-in-with-link`) makes a sign-in link a fresh start on a site that signs in by
+  link, for someone who has lost a passkey.
 - `allow(contact)`: who may have an account, if not everyone. Asked before a link is
   sent or used, an account made, or a session started or used, so someone the app stops
   allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
@@ -66,6 +69,7 @@ account's version is one stamp, and messages are data for the app to send. Sever
 - `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`, `recoveryLink`, `Refusal` (why a link asked for has nothing to open, on the link itself), `auth.signInLinks`
   (a link's message, for apps using the parts), and `auth.signInWith`.
 
+- The events `account-reset` (a fresh start by link) and `recovery-link-made`.
 - A notice to the account's address when it's deleted (`account-deleted`), and the
   `Cross-Origin-Resource-Policy: same-origin` header on every answer.
 
@@ -85,6 +89,23 @@ Found by an adversarial review of this release.
 - Reading the session cookie trimmed spaces and tabs with a pattern whose time grew with
   the square of a long run of them, so one crafted 16KB `Cookie` header, sent by anyone,
   held the server up for about 90 ms (also in 0.5.0). It's trimmed in one pass now.
+- On a site that signs in by passkey, getting back in by a link left a thief's passkey
+  and sessions in place. It's now a fresh start.
+- A link opened any account at its address when used: one made, or moved there, after a
+  sign-up link was sent could be taken with it. A link to an account now opens only that
+  account, and a sign-up link opens nothing that has an account by then.
+- Under `recovery: "app"`, undoing a move sent the old address a link in. It now sends
+  none: the old address can move the account back, but not sign in.
+- A full inbox wasn't stored a link, so the database work told it apart; it's stored
+  one either way now. `lookUpLink` refused only kinds no site uses: it now refuses those
+  this site doesn't.
+- The Node adapter answered `PUT` and `DELETE` to reading routes as `GET`; only `GET`
+  (and `HEAD`) read now.
+- A passkey's name could hold a full stop, so a web address in a notice; it can't now,
+  and notices quote it.
+- The advice to name a CDN's address ranges in `trustedProxies` is gone: its other
+  customers send from them too, with any `X-Forwarded-For`. Put a proxy you run behind
+  it, and name that.
 
 ### Removed
 

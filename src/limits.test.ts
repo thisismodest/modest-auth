@@ -129,15 +129,19 @@ test("whatever a client writes in X-Forwarded-For, the address the first trusted
   assert.equal(addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "[2001:db8::1]:443" }, ["private"]), "2001:db8:0:0::/64");
 });
 
-test("a CDN in front, connecting from public addresses, is trusted once its ranges are listed", () => {
+test("a proxy on public addresses is trusted once its ranges are listed", () => {
   const cdn = ["173.245.48.0/20", "2400:cb00::/32"];
-  assert.equal(addressKey({ remoteAddress: "173.245.48.5", forwardedFor: "203.0.113.9" }), "173.245.48.5", "unlisted: the CDN's own address (safe, if shared)");
+  assert.equal(
+    addressKey({ remoteAddress: "173.245.48.5", forwardedFor: "203.0.113.9" }),
+    "173.245.48.5",
+    "unlisted: the proxy's own address (safe, if shared)",
+  );
   assert.equal(addressKey({ remoteAddress: "173.245.48.5", forwardedFor: "203.0.113.9" }, cdn), "203.0.113.9");
   assert.equal(addressKey({ remoteAddress: "2400:cb00:2049::1", forwardedFor: "2001:db8:1:2::9" }, cdn), "2001:db8:1:2::/64");
   assert.equal(
     addressKey({ remoteAddress: "10.0.0.1", forwardedFor: "203.0.113.9, 173.245.63.200" }, ["private", ...cdn]),
     "203.0.113.9",
-    "CDN, then a load balancer",
+    "a public proxy, then a load balancer",
   );
   assert.equal(addressKey({ remoteAddress: "173.245.64.1", forwardedFor: "203.0.113.9" }, cdn), "173.245.64.1", "just outside the range: not trusted");
 });

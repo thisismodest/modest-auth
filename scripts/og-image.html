@@ -2,7 +2,7 @@
      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars --window-size=1200,800 --screenshot=tall.png scripts/og-image.html
      then crop the top 630 pixels: sips -c 630 1200 --cropOffset 0 0 tall.png --out site/assets/og.png -->
 <!doctype html>
-<html><head><meta charset="utf-8"><style>
+<html lang="en"><head><meta charset="utf-8"><style>
   html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
   body {
     background-color: #fff;

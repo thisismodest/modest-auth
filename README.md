@@ -46,8 +46,9 @@ safely, this is for you.
   is for organisations that only allow certain hardware. Only public keys are kept, so a
   copy of the database signs nothing. A counter that doesn't go up, where a passkey
   counts at all, means a copy of it, and is refused. Adding or removing one is told to the
-  account's email; removing one signs every other session out; and a new password chosen
-  at a link, or an undone move, removes every passkey, so one a thief added goes too.
+  account's email; removing one signs every other session out; and getting back in by a
+  link is a fresh start, ending every session, link, and passkey of the account, so one a
+  thief added goes too.
 - **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
   with someone else's email. Where there are passwords, whoever opens the link chooses
   one; where there aren't, opening a sign-in link makes the account.
@@ -229,7 +230,7 @@ these links make accounts and get people back in). Otherwise they're not there a
 | Route | Body | Does |
 | --- | --- | --- |
 | `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in, sign up, or get back in (with `recovery: "app"`, only to sign up) |
-| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in, making the account if need be |
+| `POST /auth/sign-in-with-link` | `{ token, reset }` | From a sign-in link: signs in, making the account if need be. With `reset: "true"` (for someone who has lost a passkey), a fresh start: every other session, link, and passkey of the account ends. Where the site doesn't sign in by link, always |
 
 And only where there are passwords:
 
@@ -347,8 +348,7 @@ have it pass the visitor's address on in `X-Forwarded-For`:
 | nginx in another container (Docker Compose) | `["private"]` |
 | A hosting platform's load balancer (Render, Fly, Railway, and the like) | `["private"]` |
 | Cloudflare Tunnel (`cloudflared` on the same machine) | `["loopback"]` |
-| A CDN such as Cloudflare, connecting to you directly | its address ranges (Cloudflare's are at cloudflare.com/ips, and change now and then) |
-| A CDN, then a hosting platform's load balancer | both: `["private", "173.245.48.0/20", …]` |
+| A CDN such as Cloudflare | a proxy you run behind it (see below), never the CDN's own ranges |
 
 A named proxy must **add** the visitor's address, not pass on whatever the visitor sent,
 or visitors can choose their own: nginx passes the visitor's header on unless told
@@ -356,6 +356,11 @@ or visitors can choose their own: nginx passes the visitor's header on unless to
 platforms add it). And `["private"]` trusts everyone on your private network: where
 outside connections can arrive from private addresses (some container port-forwarding
 and cluster address translation), name the proxy's own address instead.
+
+Don't name a CDN's address ranges: its other customers can send requests from them too,
+with any `X-Forwarded-For` they like. Put a proxy you run between the CDN and Node (nginx
+or Caddy), have it set `X-Forwarded-For` from the CDN's own visitor header (Cloudflare's
+is `CF-Connecting-IP`), accept connections only from the CDN, and name that proxy.
 
 Any number of named proxies, on any path, is read past. Naming nothing is always safe:
 at worst, visitors share the proxy's address for limits. The log says what to set: a
@@ -409,6 +414,10 @@ Whatever sends them:
 - **Say how long it lasts,** and that it can be ignored if it wasn't asked for
   (`emailFor`'s text shows how).
 - **Never log a message or its link.**
+- **Hand the message over and return,** doing the same work for every kind: `deliver`
+  runs on the same thread as the requests, and nothing is delivered to an address
+  `allow` refuses, so slow synchronous work for some messages could show which
+  addresses got one. Sending it with `fetch`, as above, is fine.
 
 Verify your sending domain with the service (SPF, DKIM, and DMARC records), or the emails
 land in spam. Keep the API key in an environment variable.

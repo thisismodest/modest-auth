@@ -1313,3 +1313,44 @@ test("a password change still hashing when its session is signed out changes not
   assert.ok(code("sign-in-again")(await changing));
   assert.equal((await auth.signIn("ann@example.org", PASSWORD, "192.0.2.231")).id, ann.id, "the password is the owner's still");
 });
+
+test("a sign-up link only makes a new account: it opens none that turns up at the address meanwhile", async () => {
+  for (const signInWith of [["link"], ["password", "link"]] as const) {
+    const { db, auth } = fresh({ signInWith });
+    const kind = signInWith.length === 1 ? "sign-in" : "password";
+    const signUpLink = must(auth.requestLink(kind, "ann@example.org", HERE));
+    // Another process gives the address to an account before the link is used.
+    db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES ('other', 'ann@example.org', NULL, 'x', 0)").run();
+    const use = () => (kind === "sign-in" ? auth.useSignInLink(must(signUpLink.token), HERE) : auth.usePasswordLink(must(signUpLink.token), PASSWORD, HERE));
+    await assert.rejects(async () => use(), code("invalid-link"), String(signInWith));
+  }
+});
+
+test("a link made for an account opens only that one, not another that took its address meanwhile", () => {
+  const { db, auth } = fresh({ signInWith: ["link"] });
+  const ann = auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE);
+  const link = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.71"));
+  assert.equal((db.prepare("SELECT user FROM auth_links WHERE kind = 'sign-in'").get() as { user: string }).user, ann.id, "named when made");
+  // Another process moves Ann's account away and gives the address to a new one, before the link is used.
+  db.prepare("UPDATE auth_users SET email = 'ann@new.example' WHERE id = ?").run(ann.id);
+  db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES ('other', 'ann@example.org', NULL, 'x', 0)").run();
+  assert.throws(() => auth.useSignInLink(must(link.token), HERE), code("invalid-link"));
+});
+
+test("asking for a link past an inbox's limit does the same work: a link is still stored", () => {
+  const { db, auth } = fresh();
+  for (let i = 0; i < 3; i++) auth.requestLink("sign-in", "nobody@example.org", `198.51.100.${10 + i}`);
+  const before = count(db, "auth_links");
+  assert.equal(auth.requestLink("sign-in", "nobody@example.org", "198.51.100.20"), null);
+  assert.equal(count(db, "auth_links") - before, 1);
+});
+
+test("a link of a kind the site doesn't use can't even be looked up", () => {
+  const db = new DatabaseSync(":memory:");
+  const before = createAuth(db, { signInWith: ["link"] });
+  const link = must(before.requestLink("sign-in", "ann@example.org", HERE));
+  // The same database, after the site stops sending sign-in links.
+  const after = createAuth(db, { signInWith: ["password"] });
+  assert.throws(() => after.lookUpLink(must(link.token), HERE), code("invalid-link"));
+  assert.deepEqual(before.lookUpLink(must(link.token), HERE), { kind: "sign-in", email: "ann@example.org" });
+});
