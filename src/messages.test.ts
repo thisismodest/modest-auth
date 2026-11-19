@@ -23,7 +23,7 @@ const EVERY: Message[] = [
 test("emailFor writes every kind: the link exactly once where there is one, and none where there isn't", () => {
   for (const message of EVERY) {
     const { subject, text } = emailFor(message, { origin: ORIGIN });
-    assert.ok(subject.includes("app.example.org"), `${message.kind}: the subject names the site`);
+    assert.match(subject, / app\.example\.org$/, `${message.kind}: the subject names the site`);
     assert.equal(text.split(link).length - 1, "link" in message ? 1 : 0, message.kind);
     assert.doesNotMatch(subject, /[\r\n]/, `${message.kind}: one line`);
   }

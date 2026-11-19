@@ -81,6 +81,7 @@ round modest-auth.
 | Learning who has an account at sign-in | Same answer and the same work (a hash is checked either way) for a wrong email, an unknown one, or a wrong password | `auth.ts` |
 | Swamping the server | Hashing only a few at a time, sized to the machine (its cores, half its memory, and Node's thread pool less two, so file reads keep a thread), with a short queue; passwords over 200 characters, emails over 254, and bodies over 4KB refused before any hashing; old limit rows and sessions cleared in small batches | `passwords.ts`, `emails.ts`, `handler.ts`, `limits.ts` |
 | A crafted email that makes checking it slow | Length checked first; plain string checks, no backtracking pattern | `emails.ts` |
+| A crafted Cookie header that makes reading it slow | Each part trimmed in one pass, never by a pattern that backtracks | `cookies.ts` |
 | One account passing for another (compatibility forms, or invisible characters) | Emails normalised (NFKC), so `ａｎｎ` and `ann` are one address, and domains kept in their ASCII form, so `bücher.de` and `xn--bcher-kva.de` are one; control, format, and invisible characters (anything drawn as nothing) refused | `emails.ts` |
 | Markup or headers carried in an email | Quotes, brackets, and line breaks refused | `emails.ts` |
 | The site's name in emails adding a line to one, hiding text, or standing in for the address | In `emailFor`: up to 60 characters on one line, with no control, invisible, or line-separating characters, or it's refused; the text always gives the site's address with it | `messages.ts` |
