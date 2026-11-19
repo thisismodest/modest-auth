@@ -43,7 +43,7 @@ test("100 tries at one account pause signing in to it from anywhere, but not its
 
   // The signed-in owner can still change the password, and delete the account.
   const next = freshPassword();
-  assert.equal((await unlessBusy(() => account.visitor.post("/auth/password", { current: account.password, next }))).status, 200);
+  assert.equal((await unlessBusy(() => account.visitor.post("/auth/password", { next }))).status, 200);
   assert.equal((await unlessBusy(() => account.visitor.post("/auth/delete-account", { password: next }))).status, 200);
 });
 

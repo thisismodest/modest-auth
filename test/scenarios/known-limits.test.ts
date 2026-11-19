@@ -22,11 +22,11 @@ test("a flood of dropped emails is said in the log a few times, not once each, s
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const h = await startHarness({ sendEmail: () => held });
+  const h = await startHarness({ deliver: () => held });
   try {
     await flood(h, 1110);
     await wait(200);
-    const said = h.logs.filter((line) => /email/i.test(line));
+    const said = h.logs.filter((line) => /message/i.test(line));
     assert.ok(said.length >= 1, "the dropping is said");
     assert.ok(said.length <= 6, `${said.length} lines for about 100 dropped emails`);
   } finally {
@@ -40,7 +40,7 @@ test("past 10 sending and 1,000 waiting, further emails are dropped and logged, 
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const h = await startHarness({ sendEmail: () => held });
+  const h = await startHarness({ deliver: () => held });
   try {
     const account = await signUp(h).catch(() => null);
     await flood(h, 1030);
@@ -66,10 +66,10 @@ test("past 10 sending and 1,000 waiting, further emails are dropped and logged, 
   t.diagnostic("a link run out while it waited isn't sent: not tested, as it needs 15 minutes to pass");
 });
 
-test("a sendEmail that never settles is aborted after 30 seconds, and the sends waiting behind it then go (80)", { timeout: 60_000 }, async () => {
+test("a deliver that never settles is aborted after 30 seconds, and the sends waiting behind it then go (80)", { timeout: 60_000 }, async () => {
   const signals: AbortSignal[] = [];
   const h = await startHarness({
-    sendEmail: (_to, _subject, _text, { signal }) => {
+    deliver: (_message, { signal }) => {
       signals.push(signal);
       if (signals.length <= 10) return new Promise<void>(() => {});
     },

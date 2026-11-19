@@ -28,7 +28,18 @@ export function siteOrigin(given: string): { origin: string; secure: boolean; co
 }
 
 const TOKEN = new RegExp(`^[A-Za-z0-9_-]{1,${LONGEST_TOKEN}}$`);
-const trimmed = (text: string) => text.replace(/^[ \t]+|[ \t]+$/g, "");
+/**
+ * Spaces and tabs off both ends, in one pass each way: a pattern for it (/[ \t]+$/) takes time growing with the
+ * square of a long run of them, which a crafted Cookie header could use to hold the server up.
+ */
+const trimmed = (text: string) => {
+  const blank = (c: string | undefined) => c === " " || c === "\t";
+  let start = 0;
+  let end = text.length;
+  while (start < end && blank(text[start])) start++;
+  while (end > start && blank(text[end - 1])) end--;
+  return text.slice(start, end);
+};
 
 /** The Set-Cookie header for the site at `origin`: `value` for `seconds`. */
 function cookie(origin: string, value: string, seconds: number): string {

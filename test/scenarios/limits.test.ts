@@ -3,6 +3,8 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { RECENT_MINUTES } from "../../src/index.ts";
+import { withClock } from "../helpers.ts";
 import { type Answer, freshEmail, freshIp, freshPassword, type Harness, signUp, startHarness, unlessBusy, type Visitor, wait } from "./harness.ts";
 
 let h: Harness;
@@ -157,15 +159,18 @@ test("counts and pauses outlive a restart (31)", async () => {
   assert.equal(await emailedTo(h, (await linkFrom(h, freshIp())).to), true, "and it answers others");
 });
 
-test("ten wrong current passwords from a session pause its password checks, but not signing out everywhere (32)", async () => {
+test("a session older than RECENT_MINUTES can't change the password or email, and asks for no password to guess; signing out everywhere still works (32)", async () => {
   const account = await signUp(h);
-  for (let i = 0; i < 10; i++) {
-    const answer = await unlessBusy(() => account.visitor.post("/auth/password", { current: wrong(), next: freshPassword() }));
-    assert.ok(answer.status >= 400 && answer.status < 500 && answer.status !== 429, `try ${i + 1} answered ${answer.status}`);
-  }
-  const right = await account.visitor.post("/auth/password", { current: account.password, next: freshPassword() });
-  assert.equal(right.status, 429);
-  assert.ok(right.headers.get("retry-after"));
-  assert.equal((await account.visitor.post("/auth/sign-out-everywhere")).status, 200);
-  assert.deepEqual((await account.visitor.get("/auth/session")).json, { user: null });
+  await withClock(async (ahead) => {
+    ahead(RECENT_MINUTES * 60_000 + 1000);
+    for (const [route, body] of [
+      ["/auth/password", { next: freshPassword() }],
+      ["/auth/change-email", { email: freshEmail() }],
+    ] as const) {
+      const answer = await account.visitor.post(route, body);
+      assert.deepEqual([answer.status, answer.json?.error?.code], [403, "sign-in-again"], route);
+    }
+    assert.equal((await account.visitor.post("/auth/sign-out-everywhere")).status, 200);
+    assert.deepEqual((await account.visitor.get("/auth/session")).json, { user: null });
+  });
 });

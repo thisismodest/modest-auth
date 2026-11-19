@@ -50,7 +50,7 @@ const post = (path: string, headers: string[], body: string | Buffer) => {
 test("every POST is refused without the site's own Origin, or when the browser says it's cross-site (58)", async (t) => {
   const account = await signUp(h);
   const token = await askForLink(h, "password", freshEmail());
-  const body = { email: freshEmail(), password: account.password, token, current: account.password, next: freshPassword(), id: "x" };
+  const body = { email: freshEmail(), password: account.password, token, next: freshPassword(), id: "x" };
   const emails = h.emails.length;
   const events = h.events.length;
   const bad: { origin?: string | null; site?: string }[] = [

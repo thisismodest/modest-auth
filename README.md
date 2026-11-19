@@ -1,6 +1,6 @@
 # modest-auth
 
-Zero-dependency authentication for Node.js: sign-in by password or emailed link, with sessions.
+Zero-dependency authentication for Node.js: sign-in by emailed link, and a password if you choose, with sessions.
 
 > **Status: early (0.x).** The core
 > works and is tested; see [ROADMAP.md](ROADMAP.md) for what comes next, and don't
@@ -23,27 +23,42 @@ modest-auth does the least that sign-in needs, the same way every time:
   the only way.
 - **Hard to use wrongly.** The routes come ready-made, with the checks an app could
   forget built in.
-- **Small.** About 1,950 lines of source: only what sign-in needs.
+- **Small.** About 2,300 lines of source: only what sign-in needs.
 - **Every security property has a test** that fails if it stops being true.
 
 If you need social sign-in, single sign-on, organisations, passkeys, or sign-in by phone
-number today, use a larger library. If you need people to sign in with an email and a password, safely,
-this is for you.
+number today, use a larger library. If you need people to sign in with an email, by a link or a
+password, safely, this is for you.
 
 ## What it does
 
-- **Accounts:** an email and a password, made by a link emailed to that address:
-  whoever opens it chooses the password, so nobody can sign up with someone else's
-  email. Change the password (which ends every other session), or delete the account.
-- **Forgotten passwords:** the same link, sent to an email that has an account, chooses
-  a new password, and signs out everywhere else.
-- **Changing the email,** with the password and a link to the new address, opened where
-  the account is signed in. Every session ends, and the old address is told, with a
-  link that undoes the move for 7 days (and makes the password useless, in case it was
-  stolen); "forgotten password" at the old address does the same. So for 7 days the old
-  address can take the account back, even one handed on to someone else.
-- **Notices:** an email to the account when its password changes, and to the old
-  address when its email does.
+- **How people sign in is the site's choice,** and has to be made: by an emailed link
+  alone (`signInWith: ["link"]`, no passwords at all), or by a password as well
+  (`["link", "password"]`). A link is always there: it's how an account is made, and
+  how someone who forgets a password gets back in. Any other choice is refused at
+  start-up.
+- **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
+  with someone else's email. Where there are passwords, whoever opens the link chooses
+  one; where there aren't, opening a sign-in link makes the account.
+- **Who may have an account,** if not everyone: your `allow(contact)` is asked before a
+  link is sent, an account made, or a session started or used, so someone you stop
+  allowing is signed out at their next request, for good (their sessions end). It can
+  only refuse, never let anyone in,
+  and the answer to whoever's asking is the same either way.
+- **Changes need a recent sign-in:** changing the password or email, or deleting the
+  account, needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older
+  one is asked to sign in again, by any way the site has. Nothing asks for the password,
+  so a stolen session can't be used to guess it.
+- **Forgotten passwords:** a password link, sent to an email that has an account,
+  chooses a new password, and signs out everywhere else.
+- **Changing the email,** with a link to the new address, opened where the account is
+  signed in. Every session ends, and the old address is told, with a link that undoes
+  the move for 7 days (and makes the password useless, in case it was stolen); a
+  password link (or, without passwords, a sign-in link) at the old address does the
+  same. So for 7 days the old address can take the account back, even one handed on to
+  someone else.
+- **Notices:** a message to the account when its password changes or it's deleted, and
+  to the old address when its email does.
 - **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
   was made, its sessions, and links waiting to be used; nothing that signs anyone in.
 - **A record of events,** if you want one: sessions started, wrong passwords, pauses,
@@ -54,8 +69,12 @@ this is for you.
   breached-password set such as Have I Been Pwned's, through your `breachedRange`,
   which is given only the first 5 characters of the password's SHA-1 (of its normal
   form, and of the form typed if that differs).
-- **Signing in** with the password, or with a link emailed on request, always offered:
-  so someone whose sign-in is paused by another's guessing can still get in.
+- **Signing in** with a link emailed on request, always offered, or with the password
+  where there is one: so someone whose sign-in is paused by another's guessing can still
+  get in.
+- **Messages are yours to send:** modest-auth gives your `deliver` each one as data
+  (what it's for, who it's to, and its link), after answering. Send it with any email
+  service, in modest-auth's own words (`emailFor`) or your own, in any language.
 - **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
   choose a password, 15 to sign in). The token follows `#` in the link, which browsers
   never send to a server, so it stays out of logs and `Referer` headers. At most 3 of
@@ -88,14 +107,12 @@ this is for you.
   flood it out):
   - 10 tries at one account from one address in 15 minutes pauses that address for
     that account (but not its owner, signing in from elsewhere);
-  - 100 tries at one account an hour from anywhere pauses signing in to it (its
-    signed-in owner can still change the password or delete the account);
+  - 100 tries at one account an hour from anywhere pauses signing in to it by password
+    (its owner can still sign in by link);
   - 20 sign-ins, links, or password checks from one address in 15 minutes pauses
     that address, and 200 from one IPv6 /48;
   - 5 links asked for from one address in 15 minutes, and 20 from one IPv6 /48, so
-    nobody can use sign-up to email strangers in bulk;
-  - 10 password checks an hour by an account's own signed-in sessions (changing the
-    password, deleting the account), so a stolen session can't be used to guess it.
+    nobody can use sign-up to email strangers in bulk.
 
   IPv6 addresses count by their /64; a port added by a proxy is ignored; and
   `X-Forwarded-For` is only believed from the proxies you name, read past however
@@ -137,30 +154,35 @@ volume.
 ```ts
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { createAuth, createHandler, handleNode, toRequest } from "modest-auth";
+import { createAuth, createHandler, emailFor, handleNode, toRequest } from "modest-auth";
+
+const ORIGIN = "https://example.org"; // your site's address (HTTPS)
 
 // Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
 // On a persistent disk or volume, outside the code (so a deploy or rebuild doesn't wipe it).
 const auth = createAuth(new DatabaseSync(process.env.DATABASE_PATH ?? "app.db"), {
+  // How people sign in: by an emailed link, and a password. ["link"] alone for no passwords at all.
+  signInWith: ["password", "link"],
+  // Optional: only some people may have an account (true to allow; it can only refuse).
+  // allow: ({ email }) => members.has(email),
   // Optional: a record of who did what (no passwords, tokens, or emails in it).
   onEvent: (event) => console.log(JSON.stringify(event)),
   // Optional: refuse passwords from known breaches. Only 5-character prefixes of hashes leave.
   breachedRange: (prefix, { signal }) => fetch(`https://api.pwnedpasswords.com/range/${prefix}`, { headers: { "add-padding": "true" }, signal }),
 });
 const handler = createHandler(auth, {
-  // Your site's address (HTTPS).
-  origin: "https://example.org",
+  origin: ORIGIN,
   // Your page that emailed links open (see "The link page" below).
   linkPage: "/account/link",
-  // Your way of sending email (see "Sending email" below). Pass the signal on, and return or
-  // await the send, so a failure is caught and logged.
-  sendEmail: (to, subject, text, { signal }) => sendWithYourService({ to, subject, text, signal }),
-  // In development, with no email service yet, print the emails (and their links) instead:
-  // sendEmail: (to, subject, text) => console.log(to, subject, text),
+  // Your way of sending each message (see "Delivering messages" below): here, modest-auth's own
+  // words, by your email service. Pass the signal on, and return or await the send, so a failure
+  // is caught and logged.
+  deliver: (message, { signal }) => {
+    const { subject, text } = emailFor(message, { origin: ORIGIN, name: "Example" });
+    return sendWithYourService({ to: message.to.email, subject, text, signal });
+  },
   // Only behind a proxy (see "Behind a proxy" below), such as:
   // trustedProxies: ["loopback"],
-  // Optional: your site's name for its emails ("Sign in to Example"); their text still gives the address.
-  // name: "Example",
 });
 
 const server = createServer(async (req, res) => {
@@ -179,22 +201,31 @@ The routes take and give JSON:
 | Route | Body | Does |
 | --- | --- | --- |
 | `GET /auth/session` | | `{ user: { email } }`, or `{ user: null }` |
-| `POST /auth/send-password-link` | `{ email }` | Emails a link to choose a password: to sign up, or for a forgotten one |
-| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in |
+| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in (without passwords, to an email with no account, one that signs up) |
 | `POST /auth/link` | `{ token }` | Which email a link is for, and its kind: `{ kind, email }` |
-| `POST /auth/set-password` | `{ token, password }` | From a password link: makes the account or replaces its password, signs in, and ends every other session |
-| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in |
-| `POST /auth/sign-in` | `{ email, password }` | Signs in (a fresh session; any old one ends) |
+| `POST /auth/sign-in-with-link` | `{ token }` | From a sign-in link: signs in (without passwords, making the account if need be) |
 | `POST /auth/sign-out` | none, or `{}` | Ends this session |
 | `POST /auth/sign-out-everywhere` | none, or `{}` | Ends every session of the account |
 | `GET /auth/sessions` | | The account's sessions: `{ sessions: [{ id, started, lastUsed, current }] }` |
 | `POST /auth/end-session` | `{ id }` | Ends one of them |
 | `GET /auth/my-data` | | Everything kept about the account, as a file to save |
-| `POST /auth/password` | `{ current, next }` | Changes the password, and ends every other session |
-| `POST /auth/change-email` | `{ password, email }` | Emails a link to the new address (signed in) |
+| `POST /auth/change-email` | `{ email }` | Emails a link to the new address (signed in recently) |
 | `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session |
-| `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to choose a new password |
-| `POST /auth/delete-account` | `{ password }` | Deletes the account and its sessions |
+| `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to get back in |
+| `POST /auth/delete-account` | none, or `{}` | Deletes the account and its sessions (signed in recently) |
+
+And only where there are passwords (otherwise they're not there at all):
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /auth/send-password-link` | `{ email }` | Emails a link to choose a password: to sign up, or for a forgotten one |
+| `POST /auth/set-password` | `{ token, password }` | From a password link: makes the account or replaces its password, signs in, and ends every other session |
+| `POST /auth/sign-in` | `{ email, password }` | Signs in (a fresh session; any old one ends) |
+| `POST /auth/password` | `{ next }` | Changes the password (signed in recently), and ends every other session |
+
+"Signed in recently" is a session started in the last 10 minutes; an older one is
+refused with `403` and the code `sign-in-again`, and signing in again (by any way the
+site has) starts a fresh one.
 
 The two that send a link answer `202` and `{}` whether or not the email has an account,
 so nobody can tell which. (An address that has asked for too many links is answered `429`,
@@ -278,23 +309,52 @@ Any number of named proxies, on any path, is read past. Naming nothing is always
 at worst, visitors share the proxy's address for limits. The log says what to set: a
 proxy passing addresses that isn't named, or (on an HTTPS site) one in front passing none.
 
-### Sending email
+### Delivering messages
 
-modest-auth sends no email itself: it calls your `sendEmail(to, subject, text, { signal })`
-after answering. Any email service with an HTTPS API works with Node's own `fetch`, with
-nothing to install. With Resend, say:
+modest-auth sends nothing itself. After answering, it gives your `deliver(message, { signal })`
+each message as data: what it's for, who it's to, and the link in it, if any.
+
+| `kind` | To | Has |
+| --- | --- | --- |
+| `sign-up` | an address with no account | `link`, `expires`: to choose a password, or (without passwords) to sign in |
+| `sign-in` | an account | `link`, `expires` |
+| `new-password` | an account | `link`, `expires`: a forgotten password, or after an undone move |
+| `no-account` | an address with no account, that asked to sign in where there are passwords | |
+| `confirm-email` | an account's new address | `link`, `expires` |
+| `email-in-use` | an address with an account of its own, that another account asked to move to | |
+| `password-changed` | an account | |
+| `email-changed` | the address an account moved from | `email` (where it went), `link` (to undo it), `expires` |
+
+Each has `to`, a contact: `{ email }`. With TypeScript, a `switch` on `kind` that misses
+one fails to build, so a new kind in a later version can't go unsent.
+
+`emailFor(message, { origin, name })` writes modest-auth's own plain-text email for any
+of them: its subject names the site (`name`, or its host), and its text names it with its
+host ("Example (example.org)"), which a copycat can't borrow. Or write your own, in your
+words and language, from `kind` and the rest. Either way, send it with any email service
+with an HTTPS API, using Node's own `fetch`, with nothing to install. With Resend, say:
 
 ```ts
-sendEmail: async (to, subject, text, { signal }) => {
+deliver: async (message, { signal }) => {
+  const { subject, text } = emailFor(message, { origin: ORIGIN, name: "Example" });
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, "content-type": "application/json" },
-    body: JSON.stringify({ from: "Example <signin@example.org>", to, subject, text }),
+    body: JSON.stringify({ from: "Example <signin@example.org>", to: message.to.email, subject, text }),
     signal, // aborts after 30 seconds, so a stuck service can't hold up others
   });
-  if (!res.ok) throw new Error(`Resend answered ${res.status}`); // logged, without the email's text
+  if (!res.ok) throw new Error(`Resend answered ${res.status}`); // logged, without the message
 },
 ```
+
+Whatever sends them:
+
+- **Turn off click tracking** in the email service. Many rewrite links to go through
+  their own servers first, which would hand the sign-in token to them, and their logs.
+- **Put the link in once, as it is:** no shortening, nothing added to it.
+- **Say how long it lasts,** and that it can be ignored if it wasn't asked for
+  (`emailFor`'s text shows how).
+- **Never log a message or its link.**
 
 Verify your sending domain with the service (SPF, DKIM, and DMARC records), or the emails
 land in spam. Keep the API key in an environment variable.
@@ -302,20 +362,21 @@ land in spam. Keep the API key in an environment variable.
 In development, with no email service yet, print the emails instead:
 
 ```ts
-sendEmail: (to, subject, text) => console.log(to, subject, text),
+deliver: (message) => console.log(message.to.email, emailFor(message, { origin: ORIGIN }).text),
 ```
 
 Each email, with its link, appears where the app's output does: open the whole link,
 including the part after `#`. Each link works once, and only 3 of each kind go to one
 address in 15 minutes: past that nothing is printed (the page still says it was sent,
 as it does for an address with no account), so use another address or wait. Don't
-print emails in production: the text holds the link, and logs are kept.
+print messages in production: they hold the link, and logs are kept.
 
 ## What your app does
 
 - **Has a link page** that does the four things above.
-- **Sends email,** passing the `signal` on, returning (or awaiting) the send so a failure
-  is caught, and without logging the text (it holds the link).
+- **Delivers messages,** passing the `signal` on, returning (or awaiting) the send so a
+  failure is caught, with click tracking off, and without logging them (they hold the
+  link).
 - **Checks its own changing routes come from its own pages,** with `handler.fromSite(request)`,
   as the handler does for its own.
 - **Sets short timeouts** for slow clients, such as `server.requestTimeout = 10_000` and
@@ -366,9 +427,11 @@ Worth knowing:
 
 Without the handler, the app takes on what it does: check every changing request's
 `Origin` is the site's own; start a fresh session at each sign-in, ending the old one;
-work out the caller's address with `addressKey`; and for links, send the email
-`requestLink` gives after answering, whatever it says (when its `token` is null, an
-email saying there's no account), and answer the same either way.
+work out the caller's address with `addressKey`; and for links, turn the link
+`requestLink` gives into its message with `messageFor(link, url)` (the URL being your
+link page, with `#`, the kind, `=`, and the token), send it after answering, whatever it
+says, and answer the same either way; when it gives null, send nothing. Never send a
+link back to whoever asked: it goes only to its address.
 
 ```ts
 // Who's asking (behind a proxy, name it as a second argument, such as ["loopback"]).
@@ -388,15 +451,14 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
   **Authenticator Assurance Level 1** only.
 - **OWASP ASVS 5.0:** written with its authentication and session requirements in
   mind, but not yet checked against them requirement by requirement (that mapping is
-  on the roadmap), so it makes no claim to a level. Level 2 would also need
-  multi-factor sign-in.
+  on the roadmap), so it makes no claim to a level.
 
 ## Deliberately not here
 
 | Not here | Why |
 | --- | --- |
 | JWTs | A session in the database can be ended at once; a JWT is valid until it expires. For a site with a server, sessions are simpler and safer. |
-| Plugins, adapters, hooks | Every extension point is a way to break the guarantees above. |
+| Plugins, adapters, hooks | Every extension point is a way to break the guarantees above. The functions you give it only deliver (`deliver`), observe (`onEvent`), or refuse (`allow`, `breachedRange`): none can let anyone in. |
 | Other databases | `node:sqlite` is built into Node; one database is one thing to get right. |
 | Social sign-in, SSO | Possibly later, one at a time, and only if they can be made as small and certain as the rest. See the roadmap. |
 | A user interface | Your forms, your words. |

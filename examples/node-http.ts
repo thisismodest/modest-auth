@@ -3,22 +3,28 @@
 //   node examples/node-http.ts      then open http://localhost:3000
 //
 // The handler answers /auth/*; everything else is the app's, which asks the
-// handler who's signed in. Emails are printed here rather than sent: a real app
-// sends them with its email service. On a real site, ORIGIN is its https://
-// address, and behind a proxy, trustedProxies names it (see the README).
+// handler who's signed in. Messages are printed here rather than sent: a real
+// app sends them with its email service (or texts them, or writes its own). On a
+// real site, ORIGIN is its https:// address, and behind a proxy, trustedProxies
+// names it (see the README).
 
 import { createServer, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { createAuth, createHandler, handleNode, toRequest } from "../src/index.ts";
+import { createAuth, createHandler, emailFor, handleNode, toRequest } from "../src/index.ts";
 
 const ORIGIN = "http://localhost:3000";
 
-const auth = createAuth(new DatabaseSync("example.db"));
+// People sign in with an emailed link, or a password (["link"] alone: no passwords at all).
+const auth = createAuth(new DatabaseSync("example.db"), { signInWith: ["link", "password"] });
 const handler = createHandler(auth, {
   origin: ORIGIN,
   // The page emailed links open (below).
   linkPage: "/link",
-  sendEmail: (to, subject, text) => console.log(`\nEmail to ${to}: ${subject}\n${text}`),
+  // modest-auth's own words for each message; an app can write its own instead, from the message's kind and link.
+  deliver: (message) => {
+    const { subject, text } = emailFor(message, { origin: ORIGIN, name: "Example" });
+    console.log(`\nEmail to ${message.to.email}: ${subject}\n${text}`);
+  },
 });
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -33,7 +39,8 @@ const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><ti
 <form method="post" data-route="send-sign-in-link"><input name="email" type="email" required> <button>Email me a sign-in link</button></form>
 <form method="post" data-route="sign-out"><button>Sign out</button></form>
 <h2>Change your email</h2>
-<form method="post" data-route="change-email"><input name="email" type="email" required> <input name="password" type="password" required placeholder="Your password"> <button>Email the new address a link</button></form>
+<form method="post" data-route="change-email"><input name="email" type="email" required> <button>Email the new address a link</button></form>
+<p>Changing your email needs a recent sign-in: if it's been a while, sign in again first.</p>
 <p id="status" role="status"></p>
 <script src="/app.js"></script>`;
 
@@ -80,7 +87,7 @@ post("link", { token }).then(({ res, json }) => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const { res, json } = await post(form.dataset.route, { ...Object.fromEntries(new FormData(form)), token });
-    if (res.ok && route === "undo-email") status("It's back, and everyone is signed out. Check your email for a link to choose a new password.");
+    if (res.ok && route === "undo-email") status("It's back, and everyone is signed out. Check your email for a link to get back in.");
     else if (res.ok) location.href = "/";
     else status(json.error.message);
   });

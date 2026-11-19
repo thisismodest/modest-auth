@@ -47,14 +47,14 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 29. 6 links of mixed kinds from one address: what the 6th gets; no 6th email; the same at 21 from a /48.
 30. 4 sign-in-link requests for one inbox: exactly 3 emails, all working within 15 minutes; a password link to it is still sent.
 31. The server restarted: every count and pause survives.
-32. 10 wrong `current` passwords at `/auth/password` from a session: the 11th, even right, 429; `sign-out-everywhere` still works.
+32. A session older than `RECENT_MINUTES` at `/auth/password` and `/auth/change-email`: 403 `sign-in-again`, and no password asked for, so nothing to guess; `sign-out-everywhere` still works. (Was: 10 wrong `current` passwords pause the owner's checks, before changes needed a recent sign-in rather than the password.)
 
 ## Not telling who has an account
 
 33. **[LIKELY]** An unknown email, and a known one with a wrong password: identical status, body, and headers; times the same within noise over 200 tries each.
 34. **[LIKELY]** 11 tries from one address at an unknown and a real email: both pause at the same count; 101 from many addresses: both the same.
 35. `send-password-link` and `send-sign-in-link`: 202 `{}` byte for byte, same timing, an email each time; the no-account sign-in email has no link.
-36. **[LIKELY]** A slow `sendEmail` (2 seconds): the next request's time doesn't differ between an existing and a missing address.
+36. **[LIKELY]** A slow `deliver` (2 seconds): the next request's time doesn't differ between an existing and a missing address.
 37. `change-email` to an address with an account and one without: the same answer and timing, and an email to each.
 38. One inbox's 3 password links used up, with and without an account: the 4th request looks the same.
 39. A malformed email and a well-formed unknown one: each its own fixed error, whatever accounts exist.
@@ -82,7 +82,7 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 
 ## Deleting an account, and the copy of data
 
-55. `delete-account` with a wrong password counts towards the 10 an hour; with the right one, sessions and links end (undo links too), and sign-in then looks like an unknown email.
+55. `delete-account` from a session older than `RECENT_MINUTES`: 403 `sign-in-again`, nothing deleted; from a recent one, sessions and links end (undo links too), and sign-in then looks like an unknown email.
 56. `my-data`: email, creation time, sessions, pending links; no hashes, tokens, salt, cost, or limit keys; `no-store`, no CORS even with an `Origin`; 401 signed out.
 57. An app table referencing `auth_users` with `ON DELETE CASCADE`: its rows go.
 
@@ -110,7 +110,7 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 
 72. 60 sign-ins at once: some 503 with `Retry-After`; the account's count rises only by those checked; `GET /auth/session` stays fast.
 73. Busy, unknown and known emails get 503 at the same rate.
-74. Whether `set-password`, `password`, and `delete-account` go through the same gate, and whether busy there counts towards the 10 an hour.
+74. Whether `set-password` and `password` go through the same gate as sign-in, and whether a busy refusal there changes anything.
 
 ### Sized to the machine (added with 0.5.0, before the code)
 
@@ -123,14 +123,14 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 ## Events and the log
 
 75. **[LIKELY]** A full run's stdout, stderr, and every onEvent: no password, token, cookie value, email, or token's SHA-256.
-76. **[LIKELY]** `sendEmail` throws an `Error` whose message holds the link: the log doesn't contain the link.
+76. **[LIKELY]** `deliver` throws an `Error` whose message holds the link: the log doesn't contain the link.
 77. `onEvent` throws: the answer is unchanged, and the failure logged.
 78. Every event has an account id and the address key, never the raw `X-Forwarded-For`; an unknown-email sign-in carries no email.
 
 ## What the known limits imply
 
 79. The email queue past 1,000: the extra dropped and logged; a link run out while waiting isn't sent; requests stay responsive.
-80. A `sendEmail` that never settles: aborted after 30 seconds; later sends still go.
+80. A `deliver` that never settles: aborted after 30 seconds; later sends still go.
 81. Accounts differing by a Cyrillic `а` are separate, and `/auth/link` returns the stored form, so the page can show the difference.
 82. After 100 tries in an hour, the owner signs in by link from another /48: it works.
 83. A raised scrypt cost: an old hash replaced at the next correct sign-in; a stored cost above the current one refused quickly.

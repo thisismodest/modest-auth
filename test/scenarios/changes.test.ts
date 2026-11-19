@@ -31,7 +31,7 @@ const linkStillGood = async (token: string) => (await h.visitor().post("/auth/li
 
 /** Asks to move `account` to `to`: the token of the link emailed there. */
 async function askToMove(account: Account, to: string): Promise<string> {
-  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { password: account.password, email: to }));
+  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: to }));
   assert.equal(asked.status, 202, asked.text);
   return (await h.takeEmail((m) => m.to === to && m.link?.kind === "email")).link?.token ?? "";
 }
@@ -40,7 +40,7 @@ test("a password change keeps this session, ends the others, and sends a notice 
   const account = await signUp(h);
   const other = await signIn(h, account);
   const next = freshPassword();
-  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { current: account.password, next }));
+  const changed = await unlessBusy(() => account.visitor.post("/auth/password", { next }));
   assert.equal(changed.status, 200);
   assert.equal(await whoIs(account.visitor), account.email);
   assert.equal(await whoIs(other), null);
@@ -119,7 +119,7 @@ test("the owner's undo outlasts a thief's two moves and new password, and gives 
   await moveAccount(h, thief, freshEmail("t2"));
   await signIn(h, thief, thief.visitor);
   const thiefPassword = freshPassword();
-  assert.equal((await unlessBusy(() => thief.visitor.post("/auth/password", { current: thief.password, next: thiefPassword }))).status, 200);
+  assert.equal((await unlessBusy(() => thief.visitor.post("/auth/password", { next: thiefPassword }))).status, 200);
   // The home address's password links are used up meanwhile.
   for (let i = 0; i < 3; i++) await h.visitor().post("/auth/send-password-link", { email: home });
   await wait(200);
@@ -169,7 +169,7 @@ test("a move to the same address, in any spelling, is refused or does nothing, w
     `${[...local].map((c) => String.fromCodePoint((c.codePointAt(0) ?? 0) + 0xfee0)).join("")}@bücher.de`,
   ]) {
     const before = h.emails.length;
-    const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { password: account.password, email: to }));
+    const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: to }));
     await wait(200);
     const sent = h.emails.slice(before);
     t.diagnostic(`${to}: ${asked.status} ${asked.text}; emails: ${sent.map((m) => `${m.to} ${m.link?.kind ?? "notice"}`).join(", ") || "none"}`);

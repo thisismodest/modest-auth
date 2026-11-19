@@ -36,33 +36,36 @@ round modest-auth.
 
 | Threat | Mitigation | Where |
 | --- | --- | --- |
-| Signing up with someone else's email | An account is made only by a link emailed to the address: whoever opens it chooses the password | `auth.ts` |
+| A way in the site didn't choose | How people sign in must be given (`signInWith`): a link always, and a password beside it if the site wants; anything else refused at start-up. A way that isn't chosen is off entirely: its routes aren't there, and its functions refuse to run | `auth.ts`, `handler.ts` |
+| Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request, for good: their sessions end, so none comes back if it allows them again. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
+| Signing up with someone else's email | An account is made only by a link emailed to the address: where there are passwords, whoever opens it chooses one; where there aren't, opening a sign-in link makes it | `auth.ts` |
 | Guessing, reusing, or stretching a link | 256-bit tokens, kept only as SHA-256 hashes; single-use, taken in one statement; 60 minutes to choose a password, 15 to sign in; a password link can't sign in, nor a sign-in link choose a password; a password refused at a link doesn't use it up; using a link, a new password, or deleting the account ends the email's other links | `auth.ts` |
 | A link leaking from its URL | The token follows `#`, which browsers never send to a server or in `Referer`; the link page takes it out of the address bar; a mail service that opens links to check them can't use one | `handler.ts`, `examples/node-http.ts` |
 | Sending someone your own link, to sign them in to your account (login CSRF) | The link page asks `/auth/link` which email it's for, shows it, and acts only when the person does | `handler.ts`, `examples/node-http.ts` |
-| Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and an email either way (for a sign-in link to an email with no account, one saying so, with no link), sent after the answer | `auth.ts`, `handler.ts` |
+| Learning who has an account by asking for a link | The same answer (`202`, `{}`), the same database work, and a message either way (for a sign-in link to an email with no account, where there are passwords, one saying so, with no link; where there aren't, one that signs up), sent after the answer | `auth.ts`, `handler.ts` |
 | Flooding an inbox, or keeping its owner from getting a link | At most 3 links of each kind to one address in 15 minutes, the rest quietly not sent; asking for more never ends a link sent (using one ends the address's others); each kind counted apart, so sign-in requests can't block a password link (nor the reverse); each exact address counted alone, so another spelling can't use up its owner's | `auth.ts` |
 | Emailing strangers in bulk through sign-up | At most 5 links asked for from one address, and 20 from one IPv6 /48, in 15 minutes | `auth.ts` |
-| A stuck or slow email service | `sendEmail` is given a signal that aborts after 30 seconds; 10 sends at once, 1,000 waiting, the rest dropped and logged (at most 5 lines a minute, and a count of the rest, so a flood can't fill the log); an email whose link has run out while it waited isn't sent; failures logged without the email's text | `handler.ts` |
+| A stuck or slow email service | `deliver` is given a signal that aborts after 30 seconds; 10 sends at once, 1,000 waiting, the rest dropped and logged (at most 5 lines a minute, and a count of the rest, so a flood can't fill the log); a message whose link has run out while it waited isn't sent; failures logged without the message | `handler.ts` |
+| A link reaching anyone but its address | A message, with its link, goes only to the app's `deliver`, after the answer, never in the answer to whoever asked; README's checklist for whatever sends it: click tracking off (a service that rewrites links would see the token), the link once and unchanged, and no logging of messages | `handler.ts`, `README.md` |
 | An address a mail program would read as an option or a pipe (`-X/file@…`, `\|cmd@…`) | Refused | `emails.ts` |
-| Moving someone's account to your address | Needs the account's password and a session, and a link to the new address, opened where the account is signed in (so a link sent to anyone else does nothing); a move asked for while the password changed isn't stored | `auth.ts`, `handler.ts` |
+| Moving someone's account to your address | Needs a session started in the last 10 minutes, and a link to the new address, opened where the account is signed in (so a link sent to anyone else does nothing); a move asked for while the password changed isn't stored | `auth.ts`, `handler.ts` |
+| A stolen session changing the account (its password, its email, or deleting it) | Each needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older one is told to sign in again, by any way the site has. Nothing asks for the password, so a stolen session can't be used to guess it | `auth.ts` |
 | Attaching your account to someone else's address (sending them your own move link) | Only the account being moved, signed in, can use its link | `auth.ts`, `handler.ts` |
-| A stolen password used to move an account away for good | The old address is told, with a link (for 7 days) that moves it back, signs everyone out, makes the password useless, and sends a link to choose a new one (made by the undo itself, so no limit can stop it); a password link to that address does the same. Every move gets one; nothing done to the account (a new password, another move) ends it, and using one ends only the same account's later moves' undo links, so a thief's own can't cancel the owner's; a password link restores the account only when just one account was moved away from that address | `auth.ts`, `handler.ts` |
-| Learning who has an account by asking to move yours to their address | The same answer and work either way, and an email either way (to an address with an account, one saying so) | `auth.ts`, `handler.ts` |
-| A change its owner didn't make, unnoticed | A notice to the account's email when its password changes, and to the old address when its email does | `handler.ts` |
-| A session started by a sign-in still checking when the account moves | A session starts only while the account has the email and password that were checked | `auth.ts` |
+| A stolen password used to move an account away for good | The old address is told, with a link (for 7 days) that moves it back, signs everyone out, makes the password useless, and sends a link to get back in (to choose a new password, or, without passwords, to sign in; made by the undo itself, so no limit can stop it); the link that makes accounts (a password link, or without passwords a sign-in link) to that address does the same. Every move gets one; nothing done to the account (a new password, another move) ends it, and using one ends only the same account's later moves' undo links, so a thief's own can't cancel the owner's; such a link restores the account only when just one account was moved away from that address | `auth.ts`, `handler.ts` |
+| Learning who has an account by asking to move yours to their address | The same answer and work either way, and an email either way (to an address with an account, one saying so); the copy of the account's data shows the request the same way whatever the address | `auth.ts`, `handler.ts` |
+| A change its owner didn't make, unnoticed | A notice to the account's email when its password changes or it's deleted, and to the old address when its email does | `handler.ts` |
+| Anything checked going ahead after the account changed (a session starting, a move being stored, a password changing, an account going) | Every account has a stamp, a random value replaced whenever how it's reached changes (a new password, a new email, an undone move); each of these goes ahead only while the stamp is still the one that was checked. One rule for every race | `auth.ts` |
 | Guessing a password | scrypt at OWASP's cost (about 50ms a guess); limits per account and address, per account, and per address, counted before hashing so tries sent at once count too | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Easily guessed passwords, sprayed across many accounts | At least 15 characters; 5,500 common passwords that long refused, compared as letters and digits only and without trailing numbers (so adding spaces, punctuation, capitals, or a year doesn't get one through); ones made from the email, or a few characters repeated, refused too | `passwords.ts`, `common-passwords.txt` |
 | A password that differs from another only in broken Unicode | Passwords that aren't well-formed text are refused, not quietly changed | `passwords.ts` |
 | Guessing from many addresses | 100 tries an hour per account from anywhere; IPv6 counted by /64, and 200 tries per /48 | `auth.ts`, `limits.ts` |
-| Guessing the password with a stolen session (through a password change) | The owner's own checks are capped at 10 an hour, per account | `auth.ts` |
 | Pausing accounts by flooding sign-in until it's "busy" | A try refused as busy isn't counted against the account | `auth.ts`, `passwords.ts` |
 | Flooding the limits to push a count out, or restarting to reset them | Limits kept in the database: nothing is evicted, and they outlive the process | `limits.ts` |
 | Forging X-Forwarded-For to dodge limits | Only believed from the proxies named in `trustedProxies` (none by default: a proxy that passes a visitor's own header on can't be told from one that adds to it, so nothing is assumed); read from the right, past each named proxy, to the first address that isn't one, so whatever a client writes is further left and never reached; ranges wide enough to be much of the internet refused; ports dropped; IPv6 read as numbers, so one address can't be written many ways | `limits.ts`, `handler.ts` |
 | Every visitor sharing one allowance (through NAT64, or a proxy in front) | An IPv4 address carried in IPv6 counts as that IPv4 address; a proxy passing addresses on but not named, or one in front passing none, is said in the log, with what to set | `limits.ts`, `handler.ts` |
 | Getting the proxy setup wrong | Leaving it out is always safe (visitors share the proxy's address); the usual cases are named (`loopback`, `private`), with no count to get right; mistakes are said in the log, a few times each at most, so nobody can flood it; an `origin` mistake is only said for this site's own host, so nobody else's can crowd it out | `limits.ts`, `handler.ts` |
-| Locking someone out by guessing at their account | The per-account-and-address limit only pauses that address; the per-account limit is high, and doesn't stop the signed-in owner changing the password or deleting the account; and a sign-in link, always offered, isn't paused by it | `auth.ts` |
-| A sign-in racing a password change (or an account's deletion) | A session starts only for a user whose password was just checked, and only if it's still the account's; upgrading an old hash only replaces the hash that was checked | `auth.ts` |
+| Locking someone out by guessing at their account | The per-account-and-address limit only pauses that address; the per-account limit is high, and only pauses signing in by password; and a sign-in link, always offered, isn't paused by it | `auth.ts` |
+| A sign-in racing a password change (or an account's deletion) | A session starts only while the account's stamp is the one checked with its password; upgrading an old hash only replaces the hash that was checked, and isn't a change to the stamp | `auth.ts` |
 | A session someone else started, left running | The owner sees every session (when each started and was last used) and can end any one, by a name that can't sign anyone in | `auth.ts`, `handler.ts` |
 | Passwords known from breaches elsewhere | If the app gives a `breachedRange`, new passwords found in that set (Have I Been Pwned's, say) are refused; only the first 5 characters of the password's SHA-1 leave (for its normal form, and the form typed if that differs), so the service never learns it | `auth.ts` |
 | An event's record giving secrets or who has an account away | Events carry the account's id and where it came from, never a password, token, or email; they're told after the answer, and a failing `onEvent` is logged, not passed on | `auth.ts` |
@@ -78,11 +81,12 @@ round modest-auth.
 | Learning who has an account at sign-in | Same answer and the same work (a hash is checked either way) for a wrong email, an unknown one, or a wrong password | `auth.ts` |
 | Swamping the server | Hashing only a few at a time, sized to the machine (its cores, half its memory, and Node's thread pool less two, so file reads keep a thread), with a short queue; passwords over 200 characters, emails over 254, and bodies over 4KB refused before any hashing; old limit rows and sessions cleared in small batches | `passwords.ts`, `emails.ts`, `handler.ts`, `limits.ts` |
 | A crafted email that makes checking it slow | Length checked first; plain string checks, no backtracking pattern | `emails.ts` |
+| A crafted Cookie header that makes reading it slow | Each part trimmed in one pass, never by a pattern that backtracks | `cookies.ts` |
 | One account passing for another (compatibility forms, or invisible characters) | Emails normalised (NFKC), so `ａｎｎ` and `ann` are one address, and domains kept in their ASCII form, so `bücher.de` and `xn--bcher-kva.de` are one; control, format, and invisible characters (anything drawn as nothing) refused | `emails.ts` |
 | Markup or headers carried in an email | Quotes, brackets, and line breaks refused | `emails.ts` |
-| The site's name in emails adding a line to one, hiding text, or standing in for the address | Up to 60 characters on one line, with no control, invisible, or line-separating characters, or it's refused when the handler is made; the text always gives the site's address with it | `handler.ts` |
+| The site's name in emails adding a line to one, hiding text, or standing in for the address | In `emailFor`: up to 60 characters on one line, with no control, invisible, or line-separating characters, or it's refused; the text always gives the site's address with it | `messages.ts` |
 | Writing into the cookie header | Tokens checked against a strict pattern when written and read | `cookies.ts` |
-| Reading a signed-in person's details from another site | Responses are JSON with no CORS headers, and `no-store` | `handler.ts` |
+| Reading a signed-in person's details from another site | Responses are JSON with no CORS headers, `no-store`, and `Cross-Origin-Resource-Policy: same-origin` (so not even a sibling subdomain can load them) | `handler.ts` |
 | Crashing the app with a malformed request (an odd method, a broken URL, a body cut off) | The Node adapter never throws; every such request gets an answer | `node.ts`, `handler.ts` |
 | Stepping round a proxy's rule with an odd path (`/auth\x`, `//x`, `/x/../auth`, `%2e%2e`, a full URL) | With the Node adapter, only plain paths reach the routes. Other servers give the handler a URL they've already worked out; a proxy's rules should match that worked-out path | `node.ts` |
 | Disturbing the app's own requests | The Node adapter doesn't touch a request that isn't for its routes | `node.ts` |
@@ -106,9 +110,12 @@ round modest-auth.
   limits (safe, but a busy address can pause); the log says so, naming the setting.
   Each kind of note is said for 5 sources at most, so someone sending from 5 networks
   first can use them up; the 5 notes still say what to check.
-- **Someone with an account's password and a session can move it,** and has the
-  account until its old address undoes the move (and, if they also read the old
+- **Someone with an account's password, or its inbox, can sign in and move it,** and has
+  the account until its old address undoes the move (and, if they also read the old
   inbox, for good). That's why the undo link also makes the password useless.
+- **A session stolen in its first 10 minutes** can change the account: its password, its
+  email, or deleting it. After that it must sign in again. A notice goes to the account's
+  email for a password or email change, with a way back.
 - **A determined attacker can pause signing in with the password to one account for up
   to an hour** by spending 100 guesses at it from several addresses. Its owner can still
   sign in by an emailed link (unless someone on the same address, or the same IPv6 /48,
@@ -142,9 +149,14 @@ round modest-auth.
   query or transaction on the connection, the email can stay in the WAL or the file
   until a later request finishes it; it's tried again at each clearing, at most every
   ten seconds.
-- **The emails' words differ** by whether the address has an account ("choose a new
-  password" or "finish signing up"; "there's no account"): only the inbox's owner sees
-  them.
+- **The messages differ** by whether the address has an account (`new-password` or
+  `sign-up`; `no-account`), and an address `allow` refuses is sent nothing: only the
+  inbox's owner sees the difference. An app writing its own words, or delivering
+  messages itself, takes on README's checklist (click tracking off, the link unchanged,
+  nothing logged); modest-auth can't test what it doesn't write.
+- **`allow` is asked on every signed-in request,** on the same thread: if it takes longer
+  for some addresses than others, how long requests take could show which. Keep it
+  quick, and the same work for everyone, such as looking an email up in a set.
 - **A flood of sign-ins is refused as "busy"** for everyone until it passes: that keeps
   the server up, at the cost of sign-in for the moment.
 - **The per-account limit counts a window, not consecutive failures:** about 2,400
@@ -183,11 +195,13 @@ round modest-auth.
 - **A stolen session can end its owner's sessions one at a time** (and keep its own),
   as fast as they start. A password link needs no session, and ends every other one,
   the thief's too: that's the way out.
-- **A stolen session can use up its owner's 10 password checks an hour,** so for that
-  hour the owner can't change the password. They can still sign out everywhere (no
-  password needed), which ends the stolen session: that should be the first step.
 - **A sustained flood from hundreds of addresses can keep sign-in "busy"** for
   everyone while it lasts. Each try still costs the sender a try at their address.
 - **Nothing limits how many accounts can be made overall,** beyond the per-address
   limits and the need to read each address's inbox: someone with many addresses and
   inboxes can make many.
+- **A session that's ended doesn't stop a change already checked against it,** except a
+  password change, which lands only while its session is there. The others don't wait
+  on anything, so there's no gap to use.
+- **Turning passwords off keeps the stored hashes,** unused; turned back on, they work
+  again. Clear them first if that's not wanted.

@@ -18,6 +18,8 @@ export type AuthErrorCode =
   | "invalid-link"
   /** Signing in with a wrong email or password (the same either way). */
   | "wrong-credentials"
+  /** A change that needs a recent sign-in (RECENT_MINUTES), asked from an older session: sign in again first. */
+  | "sign-in-again"
   /** Too many tries: wait, then try again. */
   | "too-many-tries"
   /** Too much at once (password hashing is limited): try again in a minute. */
@@ -32,6 +34,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   "invalid-password": 422,
   "invalid-link": 400,
   "wrong-credentials": 401,
+  "sign-in-again": 403,
   "too-many-tries": 429,
   busy: 503,
 };

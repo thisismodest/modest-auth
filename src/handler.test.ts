@@ -18,13 +18,18 @@ import {
   withClock,
 } from "../test/helpers.ts";
 import { createHandler, type Handler } from "./handler.ts";
+import { emailFor, type Message } from "./messages.ts";
 import { handleNode, toRequest } from "./node.ts";
 import { MINUTE } from "./time.ts";
 
 const ORIGIN = "https://app.example.org";
 const DEV = "http://localhost:3000";
-/** What every handler needs besides its origin: where links go, and how to send an email (here, nowhere). */
-const EMAIL = { linkPage: "/account/link", sendEmail: () => {} };
+/** What every handler needs besides its origin: where links go, and how to send a message (here, nowhere). */
+const EMAIL = { linkPage: "/account/link", deliver: () => {} };
+/** A message as modest-auth's own email for it, with who it's to. */
+/** A message with no link, for checking emailFor's own rules. */
+const NOTICE: Message = { kind: "password-changed", to: { email: "ann@example.org" } };
+const asEmail = (message: Message, site: { name?: string } = {}) => ({ to: message.to.email, ...emailFor(message, { origin: ORIGIN, ...site }) });
 
 /** A JSON POST to one of the routes from the site's origin; `address` is the client's. */
 const post = (handler: Handler, route: string, body: unknown, address: string | undefined) =>
@@ -65,10 +70,18 @@ type Json = {
   [key: string]: unknown;
 };
 
-const setup = (more: { name?: string } = {}) => {
-  const { auth } = fresh();
+const setup = (more: { name?: string; signInWith?: ("password" | "link")[] } = {}) => {
+  const { auth } = fresh(more.signInWith ? { signInWith: more.signInWith } : {});
   const emails: { to: string; subject: string; text: string }[] = [];
-  const handler = createHandler(auth, { ...EMAIL, ...more, origin: ORIGIN, sendEmail: (to, subject, text) => void emails.push({ to, subject, text }) });
+  const messages: Message[] = [];
+  const handler = createHandler(auth, {
+    ...EMAIL,
+    origin: ORIGIN,
+    deliver: (message) => {
+      messages.push(message);
+      emails.push(asEmail(message, more.name ? { name: more.name } : {}));
+    },
+  });
   let cookie = "";
   /** A request from the site's own page, as a browser sends it (carrying the cookie it was given). */
   const send = async (path: string, body?: unknown, headers: Record<string, string> = {}) => {
@@ -96,7 +109,7 @@ const setup = (more: { name?: string } = {}) => {
     await send("/auth/send-password-link", { email });
     return send("/auth/set-password", { token: await linkTo(email, "password"), password });
   };
-  return { auth, handler, send, emails, linkTo, signUp, token: () => must(cookie.split("=")[1]), forget: () => (cookie = "") };
+  return { auth, handler, send, emails, messages, linkTo, signUp, token: () => must(cookie.split("=")[1]), forget: () => (cookie = "") };
 };
 
 test("sign up, see who's signed in, sign out", async () => {
@@ -155,12 +168,16 @@ test("each sign-in starts a fresh session and ends the one the browser had", asy
   assert.ok(auth.userOf(second));
 });
 
-test("changing the password signs out everywhere else, and keeps this browser signed in", async () => {
+test("changing the password needs a recent sign-in, signs out everywhere else, and keeps this browser signed in", async () => {
   const { auth, send, signUp } = setup();
   await signUp("ann@example.org");
   const elsewhere = await openSession(auth, "ann@example.org", "192.0.2.50");
-  assert.equal((await send("/auth/password", { current: "wrong password!", next: "a brand new password" })).status, 401);
-  assert.equal((await send("/auth/password", { current: PASSWORD, next: "a brand new password" })).status, 200);
+  await withClock(async (ahead) => {
+    ahead(11 * MINUTE);
+    const old = await send("/auth/password", { next: "a brand new password" });
+    assert.deepEqual([old.status, old.json.error.code], [403, "sign-in-again"], "an older session signs in again first");
+  });
+  assert.equal((await send("/auth/password", { next: "a brand new password" })).status, 200);
   assert.equal(auth.userOf(elsewhere), null);
   assert.deepEqual((await send("/auth/session")).json, { user: { email: "ann@example.org" } });
 });
@@ -168,11 +185,11 @@ test("changing the password signs out everywhere else, and keeps this browser si
 test("signing out everywhere, and deleting the account, need a signed-in browser", async () => {
   const { send, forget, signUp } = setup();
   await signUp("ann@example.org");
-  assert.equal((await send("/auth/delete-account", { password: "wrong password!" })).status, 401);
-  assert.equal((await send("/auth/delete-account", { password: PASSWORD })).status, 200);
+  assert.equal((await send("/auth/delete-account", {})).status, 200);
   assert.equal((await send("/auth/sign-in", { email: "ann@example.org", password: PASSWORD })).status, 401, "the account is gone");
   forget();
-  assert.equal((await send("/auth/password", { current: PASSWORD, next: "a brand new password" })).status, 401);
+  assert.equal((await send("/auth/password", { next: "a brand new password" })).status, 401);
+  assert.equal((await send("/auth/delete-account", {})).status, 401);
 });
 
 test("wrong methods and unknown routes are refused; other paths are left to the app", async () => {
@@ -202,8 +219,8 @@ test("with Node's own http server: the same routes, and the app's own requests l
   const handler = createHandler(fresh().auth, {
     origin: DEV,
     linkPage: "/link",
-    sendEmail: (_to, _subject, text) => {
-      mail = text;
+    deliver: (message) => {
+      mail = emailFor(message, { origin: DEV }).text;
     },
   });
   const app = (req: IncomingMessage, res: ServerResponse) => {
@@ -426,7 +443,7 @@ test("a handler given no address says how to give it", async () => {
   assert.match(String(said), /given no address.*Bun.*Deno.*Hono/);
 });
 
-test("a sendEmail that ignores its signal is let go when it's up, and said why, so email doesn't stop", async () => {
+test("a deliver that ignores its signal is let go when it's up, and said why, so email doesn't stop", async () => {
   const realTimeout = AbortSignal.timeout;
   // The 30 seconds, up at once.
   AbortSignal.timeout = () => {
@@ -439,7 +456,7 @@ test("a sendEmail that ignores its signal is let go when it's up, and said why, 
     const handler = createHandler(fresh().auth, {
       ...EMAIL,
       origin: ORIGIN,
-      sendEmail: () => {
+      deliver: () => {
         started++;
         return new Promise<void>(() => {});
       },
@@ -515,8 +532,7 @@ test("a site's name heads its emails, and its address stays in their text, which
   for (const { text } of emails) assert.match(text, /Example Club \(app\.example\.org\)/);
 });
 
-test("a name that could add a line to an email, or hide text, is refused when the handler is made", () => {
-  const { auth } = fresh();
+test("a name that could add a line to an email, or hide text, is refused", () => {
   for (const name of [
     "",
     " Club",
@@ -530,9 +546,9 @@ test("a name that could add a line to an email, or hide text, is refused when th
     "C".repeat(61),
     42,
   ]) {
-    assert.throws(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: name as string }), /name must be/, JSON.stringify(name));
+    assert.throws(() => emailFor(NOTICE, { origin: ORIGIN, name: name as string }), /name must be/, JSON.stringify(name));
   }
-  assert.doesNotThrow(() => createHandler(auth, { ...EMAIL, origin: ORIGIN, name: "Example Club & Friends: 2026" }));
+  assert.doesNotThrow(() => emailFor(NOTICE, { origin: ORIGIN, name: "Example Club & Friends: 2026" }));
 });
 
 test("a sign-in link signs this browser in with a fresh session, ending the one it had", async () => {
@@ -564,7 +580,7 @@ test("an email that can't be sent is logged without its text, and changes nothin
   const handler = createHandler(fresh().auth, {
     origin: ORIGIN,
     linkPage: "/account/link",
-    sendEmail: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")),
+    deliver: () => Promise.reject(new Error("refused: https://app.example.org/account/link#password=secret")),
   });
   const logged = await captureErrors(async () => {
     assert.equal(must(await post(handler, "send-password-link", { email: "ann@example.org" }, HERE)).status, 202);
@@ -574,13 +590,16 @@ test("an email that can't be sent is logged without its text, and changes nothin
   assert.doesNotMatch(JSON.stringify(logged), /secret|#password|ann@example/);
 });
 
-test("it needs a page for links and a way to send email", () => {
+test("it needs a page for links and a way to send messages, and says plainly that sendEmail and name have gone", () => {
   const { auth } = fresh();
   for (const linkPage of ["", "account", "https://evil.example/x", "//evil.example", "/a b", "/a#b", "/a?b"]) {
-    assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage, sendEmail: () => {} }), Error, linkPage);
+    assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage, deliver: () => {} }), Error, linkPage);
   }
   assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage: "/link" } as never));
-  assert.doesNotThrow(() => createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", sendEmail: () => {} }));
+  assert.doesNotThrow(() => createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", deliver: () => {} }));
+  for (const old of [{ sendEmail: () => {} }, { name: "Club" }]) {
+    assert.throws(() => createHandler(auth, { origin: ORIGIN, ...EMAIL, ...old } as never), /deliver\(message\)/);
+  }
 });
 
 test("the link page can ask which email a link is for, so nobody is signed in to someone else's account unawares", async () => {
@@ -598,7 +617,7 @@ test("a stuck email service can't pile up sends without end", async () => {
   const stuck = createHandler(fresh().auth, {
     origin: ORIGIN,
     linkPage: "/l",
-    sendEmail: () => {
+    deliver: () => {
       started++;
       return new Promise<void>(() => {});
     },
@@ -622,9 +641,9 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
   const handler = createHandler(fresh().auth, {
     origin: ORIGIN,
     linkPage: "/l",
-    sendEmail: async (to) => {
+    deliver: async (message) => {
       if (calls++ < 10) await blocked;
-      sent.push(to);
+      sent.push(message.to.email);
     },
   });
   for (let i = 0; i < 11; i++) await post(handler, "send-password-link", { email: `p${i}@example.org` }, `10.9.${i}.1`);
@@ -643,10 +662,9 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
 });
 
 test("changing the email: a link to the new address, the same answer either way, and a notice to the old one", async () => {
-  const { send, emails, linkTo, signUp, forget } = setup();
+  const { send, emails, messages, linkTo, signUp, forget } = setup();
   await signUp("ann@example.org");
-  assert.equal((await send("/auth/change-email", { password: "a wrong password here", email: "ann@new.example" })).status, 401);
-  const free = await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
+  const free = await send("/auth/change-email", { email: "ann@new.example" });
   const token = await linkTo("ann@new.example", "email");
   const answer = await send("/auth/confirm-email", { token });
   assert.deepEqual([answer.status, answer.json], [200, { email: "ann@new.example" }]);
@@ -658,12 +676,13 @@ test("changing the email: a link to the new address, the same answer either way,
   assert.match(notice.text, /ann@new\.example/);
   forget();
   await signUp("bob@example.org");
-  const taken = await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
+  const taken = await send("/auth/change-email", { email: "ann@new.example" });
   assert.deepEqual([taken.status, taken.json], [free.status, free.json], "the same answer when the address has an account");
   await afterwards();
+  assert.deepEqual(messages.at(-1), { kind: "email-in-use", to: { email: "ann@new.example" } });
   assert.match(must(emails.findLast((e) => e.to === "ann@new.example")).text, /has an account of its own already/);
   forget();
-  assert.equal((await send("/auth/change-email", { password: PASSWORD, email: "x@example.org" })).status, 401, "signed out");
+  assert.equal((await send("/auth/change-email", { email: "x@example.org" })).status, 401, "signed out");
 });
 
 test("a changed password is told to the account's email, by either route, but signing up isn't", async () => {
@@ -671,7 +690,7 @@ test("a changed password is told to the account's email, by either route, but si
   await signUp("ann@example.org");
   await afterwards();
   assert.ok(!emails.some((e) => /password was changed/.test(e.subject)), "a new account gets no notice");
-  await send("/auth/password", { current: PASSWORD, next: "a brand new long password" });
+  await send("/auth/password", { next: "a brand new long password" });
   const notices = () => emails.filter((e) => e.to === "ann@example.org" && /password was changed/.test(e.subject)).length;
   await afterwards();
   assert.equal(notices(), 1);
@@ -769,12 +788,12 @@ test("a body read before the handler (a body parser mounted in front) is said pl
   }
 });
 
-test("sendEmail is given a signal that aborts after 30 seconds, so a stuck service can be let go", async () => {
+test("deliver is given a signal that aborts after 30 seconds, so a stuck service can be let go", async () => {
   let signal: AbortSignal | undefined;
   const handler = createHandler(fresh().auth, {
     ...EMAIL,
     origin: ORIGIN,
-    sendEmail: (_to, _subject, _text, options) => {
+    deliver: (_message, options) => {
       signal = options.signal;
     },
   });
@@ -815,14 +834,13 @@ test("a send whose email service times out is said to have timed out, not to hav
     const handler = createHandler(fresh().auth, {
       ...EMAIL,
       origin: ORIGIN,
-      sendEmail: (_to, _subject, _text, { signal }) =>
-        new Promise<void>((_, fail) => signal.addEventListener("abort", () => fail(signal.reason), { once: true })),
+      deliver: (_message, { signal }) => new Promise<void>((_, fail) => signal.addEventListener("abort", () => fail(signal.reason), { once: true })),
     });
     const logged = await captureErrors(async () => {
       await post(handler, "send-password-link", { email: "ann@example.org" }, HERE);
       for (let i = 0; i < 6; i++) await afterwards();
     });
-    assert.match(String(logged), /didn't answer in 30 seconds/);
+    assert.match(String(logged), /didn't finish in 30 seconds/);
     assert.doesNotMatch(String(logged), /pass its signal on/);
   } finally {
     AbortSignal.timeout = realTimeout;
@@ -942,4 +960,76 @@ test("a connection reset as its request arrives is never taken for this machine'
   );
   // Nor taken for a setup mistake: a visitor going away isn't the server being given no address.
   assert.ok(!warned.flat().join(" ").includes("no address"), "no false alarm in the log");
+});
+
+test("without passwords, the password routes aren't there, and a sign-in link signs up or signs in", async () => {
+  const { send, messages, linkTo } = setup({ signInWith: ["link"] });
+  for (const route of ["send-password-link", "set-password", "sign-in", "password"]) {
+    assert.equal((await send(`/auth/${route}`, {})).status, 404, route);
+  }
+  const asked = await send("/auth/send-sign-in-link", { email: "ann@example.org" });
+  assert.deepEqual([asked.status, asked.json], [202, {}]);
+  await afterwards();
+  assert.equal(must(messages.at(-1)).kind, "sign-up", "an address with no account is asked to sign up");
+  const up = await send("/auth/sign-in-with-link", { token: await linkTo("ann@example.org", "sign-in") });
+  assert.deepEqual(up.json, { user: { email: "ann@example.org" } });
+  const again = await send("/auth/send-sign-in-link", { email: "ann@example.org" });
+  assert.deepEqual([again.status, again.json], [asked.status, asked.json], "the same answer either way");
+  await afterwards();
+  assert.equal(must(messages.at(-1)).kind, "sign-in");
+});
+
+test("each message is data, of the kind that fits, to whoever it's for", async () => {
+  const { send, messages, linkTo } = setup();
+  const last = async () => {
+    await afterwards();
+    return must(messages.at(-1));
+  };
+  await send("/auth/send-password-link", { email: "ann@example.org" });
+  const up = await last();
+  assert.equal(up.kind, "sign-up");
+  assert.deepEqual(up.to, { email: "ann@example.org" });
+  assert.ok("link" in up && up.link.startsWith(`${ORIGIN}/account/link#password=`) && up.expires > Date.now());
+  assert.deepEqual(Object.keys(up).sort(), ["expires", "kind", "link", "to"], "nothing but data: no words");
+  await send("/auth/set-password", { token: await linkTo("ann@example.org", "password"), password: PASSWORD });
+  await send("/auth/send-password-link", { email: "ann@example.org" });
+  assert.equal((await last()).kind, "new-password");
+  await send("/auth/send-sign-in-link", { email: "ann@example.org" });
+  assert.equal((await last()).kind, "sign-in");
+  await send("/auth/send-sign-in-link", { email: "nobody@example.org" });
+  assert.deepEqual(await last(), { kind: "no-account", to: { email: "nobody@example.org" } });
+  await send("/auth/password", { next: "a brand new long password" });
+  assert.deepEqual(await last(), { kind: "password-changed", to: { email: "ann@example.org" } });
+  await send("/auth/change-email", { email: "ann@new.example" });
+  assert.equal((await last()).kind, "confirm-email");
+  await send("/auth/confirm-email", { token: await linkTo("ann@new.example", "email") });
+  const moved = await last();
+  assert.ok(moved.kind === "email-changed" && moved.email === "ann@new.example" && moved.to.email === "ann@example.org");
+  assert.ok(moved.link.includes("#undo="));
+});
+
+test("an address the app doesn't allow gets the same answer as any other, and nothing is sent", async () => {
+  const { auth } = fresh({ allow: ({ email }) => email !== "stranger@example.org" });
+  const messages: Message[] = [];
+  const handler = createHandler(auth, { ...EMAIL, origin: ORIGIN, deliver: (message) => void messages.push(message) });
+  const answers = [];
+  for (const email of ["stranger@example.org", "ann@example.org"]) {
+    const res = must(await post(handler, "send-password-link", { email }, HERE));
+    answers.push([res.status, await res.text()]);
+  }
+  assert.deepEqual(answers[0], answers[1]);
+  await afterwards();
+  assert.deepEqual(
+    messages.map((m) => m.to.email),
+    ["ann@example.org"],
+  );
+});
+
+test("deleting an account tells its address, and every answer says only the site's own pages may read it", async () => {
+  const { send, messages, signUp } = setup();
+  await signUp("ann@example.org");
+  const deleted = await send("/auth/delete-account", {});
+  assert.equal(deleted.headers.get("cross-origin-resource-policy"), "same-origin");
+  await afterwards();
+  assert.deepEqual(messages.at(-1), { kind: "account-deleted", to: { email: "ann@example.org" } });
 });

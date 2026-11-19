@@ -2,10 +2,11 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { RECENT_MINUTES } from "../../src/index.ts";
+import { withClock } from "../helpers.ts";
 import {
   askForLink,
   freshEmail,
-  freshPassword,
   type Harness,
   moveAccount,
   ORIGIN,
@@ -24,16 +25,14 @@ before(async () => {
 });
 after(() => h.close());
 
-test("wrong passwords at delete-account count towards the account's 10 checks an hour (55)", async () => {
+test("delete-account needs a recent sign-in: an older session is told to sign in again, and nothing is deleted (55)", async () => {
   const account = await signUp(h);
-  for (let i = 0; i < 10; i++) {
-    const route = i % 2 ? "/auth/delete-account" : "/auth/password";
-    const answer = await unlessBusy(() => account.visitor.post(route, { password: freshPassword(), current: freshPassword(), next: freshPassword() }));
-    assert.ok(answer.status >= 400 && answer.status < 500 && answer.status !== 429, `${route} answered ${answer.status}`);
-  }
-  const right = await account.visitor.post("/auth/delete-account", { password: account.password });
-  assert.equal(right.status, 429);
-  assert.equal(await whoIs(account.visitor), account.email, "nothing deleted");
+  await withClock(async (ahead) => {
+    ahead(RECENT_MINUTES * 60_000 + 1000);
+    const old = await account.visitor.post("/auth/delete-account", {});
+    assert.deepEqual([old.status, old.json?.error?.code], [403, "sign-in-again"]);
+    assert.equal(await whoIs(account.visitor), account.email, "nothing deleted, and still signed in");
+  });
 });
 
 test("deleting an account ends its sessions and every link, and its email then looks unknown (55)", async () => {
@@ -43,7 +42,7 @@ test("deleting an account ends its sessions and every link, and its email then l
   const other = await signIn(h, account);
   const passwordLink = await askForLink(h, "password", account.email);
   const signInLink = await askForLink(h, "sign-in", account.email);
-  const deleted = await unlessBusy(() => account.visitor.post("/auth/delete-account", { password: account.password }));
+  const deleted = await account.visitor.post("/auth/delete-account", {});
   assert.equal(deleted.status, 200);
   assert.equal(await whoIs(account.visitor), null);
   assert.equal(await whoIs(other), null);
@@ -63,7 +62,7 @@ test("the copy of an account's data has what README lists and nothing that signs
   const passwordLink = await askForLink(h, "password", account.email);
   const signInLink = await askForLink(h, "sign-in", account.email);
   const moveTo = freshEmail("next");
-  await unlessBusy(() => account.visitor.post("/auth/change-email", { password: account.password, email: moveTo }));
+  await unlessBusy(() => account.visitor.post("/auth/change-email", { email: moveTo }));
   const moveLink = (await h.takeEmail((m) => m.to === moveTo && m.link?.kind === "email")).link?.token ?? "";
 
   const answer = await account.visitor.get("/auth/my-data", { headers: { origin: "https://evil.example" } });

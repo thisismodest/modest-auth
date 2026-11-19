@@ -6,6 +6,96 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.6.0] - not yet released
+
+How people sign in is now the site's choice, the account's version is one stamp, and
+messages are data for the app to send. Several changes break the API; upgrading is below.
+
+### Changed
+
+- **`createAuth` needs `signInWith`:** `["link"]` (no passwords at all), or
+  `["link", "password"]` (as before). A password always comes with a link, for when it's
+  forgotten; any other choice is refused at start-up. Without passwords, a sign-in link
+  to an email with no account makes the account, and the password routes
+  (`send-password-link`, `set-password`, `sign-in`, `password`) aren't there.
+- **Changing the password or email, or deleting the account, needs a recent sign-in**
+  (a session started in the last 10 minutes, `RECENT_MINUTES`), not the password. An
+  older session is refused with `403` and the code `sign-in-again`. `changePassword`,
+  `requestEmailChange`, and `deleteAccount` take the session's token instead of a user
+  id and password; `/auth/password` takes `{ next }`, `/auth/change-email` `{ email }`,
+  and `/auth/delete-account` no fields. Nothing asks for the password, so a stolen
+  session can't be used to guess it, and the 10 checks an hour by an account's own
+  sessions are gone with the checks.
+- **`sendEmail` is now `deliver(message, { signal })`:** each message is data (`kind`,
+  `to`, and its `link` and `expires`, or the new email for `email-changed`), to send
+  however the app likes. `emailFor(message, { origin, name })` writes modest-auth's own
+  email for one; the handler's `name` moved there.
+- **Every account has a stamp,** replaced when how it's reached changes (a new password,
+  a new email, an undone move). A session starts, a move is stored, a password changes,
+  or an account goes only while the stamp is the one checked: one rule for every race,
+  where the password's hash and the email did that before.
+- An undone move leaves the account with no password (rather than one nothing
+  matches), and sends a link to get back in: to choose a new password, or, without
+  passwords, to sign in. `useEmailLink`'s `undo` is a `Link`, like `useUndoLink`'s
+  `reset`.
+- A password-only sign-in and a link's session refused for a change meanwhile say so
+  as their own way would: a wrong password, or an expired link.
+
+### Added
+
+- `allow(contact)`: who may have an account, if not everyone. Asked before a link is
+  sent or used, an account made, or a session started or used, so someone the app stops
+  allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
+  refusal. A refused address is answered as any other and sent nothing.
+- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`
+  (a link's message, for apps using the parts), and `auth.signInWith`.
+
+- A notice to the account's address when it's deleted (`account-deleted`), and the
+  `Cross-Origin-Resource-Policy: same-origin` header on every answer.
+
+### Fixed
+
+Found by an adversarial review of this release.
+
+- The copy of an account's data (`my-data`) showed a move it asked for only when the new
+  address had no account, so anyone with an account could learn whether another address
+  had one (also true in 0.5.0). Its move requests are now shown the same either way.
+- A password change still hashing when its session was signed out still landed. It now
+  lands only while the session that asked is there.
+- A session refused by `allow` came back if `allow` later said yes; now it ends for good.
+  A password check refuses an address `allow` refuses, even for an app that only checks.
+- Accepting an email move checks the account's stamp, so an undo landing in another
+  process at that moment isn't overwritten.
+- Reading the session cookie trimmed spaces and tabs with a pattern whose time grew with
+  the square of a long run of them, so one crafted 16KB `Cookie` header, sent by anyone,
+  held the server up for about 90 ms (also in 0.5.0). It's trimmed in one pass now.
+
+### Removed
+
+- The `password-check-failed` event, with the checks it told of.
+
+### Upgrading from 0.5.0
+
+Start with an empty database: the schema changed (a `stamp` for every account, and
+`password` may be empty).
+
+```ts
+// 0.5.0
+createAuth(db, options);
+createHandler(auth, { origin, linkPage, name: "Example", sendEmail: (to, subject, text, { signal }) => send({ to, subject, text, signal }) });
+
+// 0.6.0
+createAuth(db, { signInWith: ["password", "link"], ...options });
+createHandler(auth, {
+  origin,
+  linkPage,
+  deliver: (message, { signal }) => send({ to: message.to.email, ...emailFor(message, { origin, name: "Example" }), signal }),
+});
+```
+
+Pages that change the password, the email, or delete the account no longer send a
+password, and should offer to sign in again on `sign-in-again`.
+
 ## [0.5.0] - 2026-10-27
 
 ### Changed

@@ -92,7 +92,7 @@ test("asking for either kind of link gives 202 {} the same, in the same time, an
 
 test("a slow email service doesn't make the next request's time show whether the address has an account (36)", async (t) => {
   const slow = await startHarness({
-    sendEmail: async () => {
+    deliver: async () => {
       await wait(2000);
     },
   });
@@ -128,8 +128,8 @@ test("asking to move to an address with an account or without gives the same ans
   for (let i = 0; i < 2; i++) {
     const free = freshEmail("free");
     freeInboxes.push(free);
-    toFree.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { password: mover.password, email: free })));
-    toTaken.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { password: mover.password, email: taken.email })));
+    toFree.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { email: free })));
+    toTaken.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { email: taken.email })));
   }
   for (let i = 0; i < 2; i++) same(toTaken[i] as Answer, toFree[i] as Answer);
   t.diagnostic(
