@@ -1421,3 +1421,29 @@ test("a password link doesn't land on an account moved meanwhile in another proc
   await assert.rejects(auth.usePasswordLink(must(forgot.token), "ann's new long password", HERE), code("invalid-link"));
   assert.equal(must(db.prepare("SELECT stamp FROM auth_users").get()).stamp, "moved", "the move stands, its stamp unchanged");
 });
+
+/** The thief's later undo link (to thief@evil.example), used in another process just after the account moves to `home`. */
+const thiefUndoesAfter = (db: DatabaseSync, home: string) =>
+  db.exec(`CREATE TEMP TRIGGER thief AFTER UPDATE OF email ON auth_users
+    WHEN NEW.email = '${home}' AND EXISTS (SELECT 1 FROM auth_links WHERE kind = 'undo' AND email = 'thief@evil.example')
+    BEGIN UPDATE auth_users SET email = 'thief@evil.example', stamp = 'thief' WHERE id = NEW.id; END`);
+
+test("an undo ends later moves' undo links before it moves the account, so none can be used just after", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const first = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
+  await move(auth, first, PASSWORD, "thief2@evil.example", "192.0.2.160");
+  thiefUndoesAfter(db, "ann@example.org");
+  auth.useUndoLink(must(must(first.undo).token), "192.0.2.161");
+  assert.equal(must(db.prepare("SELECT email FROM auth_users").get()).email, "ann@example.org");
+});
+
+test("moving home ends later moves' undo links before it moves the account, too", async () => {
+  const { db, auth } = fresh();
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const first = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
+  const second = await move(auth, first, PASSWORD, "thief2@evil.example", "192.0.2.162");
+  thiefUndoesAfter(db, "ann@example.org");
+  await move(auth, second, PASSWORD, "ann@example.org", "192.0.2.163");
+  assert.equal(must(db.prepare("SELECT email FROM auth_users").get()).email, "ann@example.org");
+});
