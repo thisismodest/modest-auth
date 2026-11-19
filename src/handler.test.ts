@@ -71,8 +71,8 @@ type Json = {
   [key: string]: unknown;
 };
 
-const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passkey")[] } = {}) => {
-  const { auth } = fresh(more.signInWith ? { signInWith: more.signInWith } : {});
+const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passkey")[]; recovery?: "link" | "app" } = {}) => {
+  const { auth } = fresh({ ...(more.signInWith ? { signInWith: more.signInWith } : {}), ...(more.recovery ? { recovery: more.recovery } : {}) });
   const emails: { to: string; subject: string; text: string }[] = [];
   const messages: Message[] = [];
   const handler = createHandler(auth, {
@@ -103,7 +103,10 @@ const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passk
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
     // The line holding the link, and the token after its "#kind=": a 43-character token, nothing else.
     const prefix = `${ORIGIN}${EMAIL.linkPage}#${kind}=`;
-    const found = text.split("\n").find((line) => line.startsWith(prefix))?.slice(prefix.length);
+    const found = text
+      .split("\n")
+      .find((line) => line.startsWith(prefix))
+      ?.slice(prefix.length);
     const token = found && /^[\w-]{43}$/.test(found) ? found : undefined;
     assert.ok(token, `a ${kind} link was emailed to ${to}`);
     return token;
@@ -1070,4 +1073,22 @@ test("deleting an account tells its address, and every answer says only the site
   assert.equal(deleted.headers.get("cross-origin-resource-policy"), "same-origin");
   await afterwards();
   assert.deepEqual(messages.at(-1), { kind: "account-deleted", to: { email: "ann@example.org" } });
+});
+
+test("sign-in link routes only where links are sent, and the strict site's answer is the same whoever asks", async () => {
+  const passwordsOnly = setup({ signInWith: ["password"] });
+  for (const route of ["send-sign-in-link", "sign-in-with-link"]) assert.equal((await passwordsOnly.send(`/auth/${route}`, {})).status, 404, route);
+  const { auth, messages, send } = setup({ signInWith: ["passkey"], recovery: "app" });
+  auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.245")).token), "192.0.2.245");
+  const answers = [];
+  for (const email of ["ann@example.org", "nobody@example.org"]) {
+    const res = await send("/auth/send-sign-in-link", { email });
+    answers.push([res.status, res.json]);
+  }
+  assert.deepEqual(answers[0], answers[1]);
+  await afterwards();
+  assert.deepEqual(
+    messages.map((m) => m.kind),
+    ["passkey-only", "sign-up"],
+  );
 });

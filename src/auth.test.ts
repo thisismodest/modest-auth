@@ -1109,14 +1109,53 @@ test("breached passwords: a range answer over 1MB isn't read to the end; the pas
   assert.match(String(logged), /over 1MB/);
 });
 
-test("how people sign in must be chosen: a link always, a password only with one", () => {
+test("how people sign in must be chosen: any of link, password, and passkey, each once; strict recovery only with passkeys alone", () => {
   const db = new DatabaseSync(":memory:");
-  for (const signInWith of [undefined, [], ["password"], ["passkey"], ["password", "passkey"], ["link", "link"], ["link", "totp"], ["Link"], "link", [1]]) {
+  for (const signInWith of [undefined, [], ["link", "link"], ["link", "totp"], ["Link"], "link", [1]]) {
     assert.throws(() => createAuth(db, { signInWith } as never), /signInWith must list how people sign in/, JSON.stringify(signInWith));
   }
   assert.throws(() => createAuth(db, undefined as never), /signInWith/);
-  assert.deepEqual(createAuth(db, { signInWith: ["link"] }).signInWith, ["link"]);
-  assert.deepEqual(createAuth(db, { signInWith: ["link", "password"] }).signInWith, ["link", "password"]);
+  for (const signInWith of [["link"], ["password"], ["passkey"], ["password", "passkey"], ["link", "password", "passkey"]] as const) {
+    assert.deepEqual(createAuth(db, { signInWith }).signInWith, signInWith);
+  }
+  for (const signInWith of [["link"], ["password"], ["link", "passkey"], ["password", "passkey"]] as const) {
+    assert.throws(() => createAuth(db, { signInWith, recovery: "app" }), /recovery must be/, JSON.stringify(signInWith));
+  }
+  assert.throws(() => createAuth(db, { signInWith: ["passkey"], recovery: "email" as never }), /recovery must be/);
+  assert.doesNotThrow(() => createAuth(db, { signInWith: ["passkey"], recovery: "app" }));
+});
+
+test("with passwords alone, no sign-in links: a password link makes accounts and gets people back in", async () => {
+  const { auth } = fresh({ signInWith: ["password"] });
+  assert.equal(auth.signInLinks, false);
+  assert.throws(() => auth.requestLink("sign-in", "ann@example.org", HERE), /doesn't send sign-in links/);
+  await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const reset = must(auth.requestLink("password", "ann@example.org", "192.0.2.240"));
+  assert.ok(reset.token && reset.account, "a forgotten password is a link to choose another");
+});
+
+test("with passkeys and no passwords, a sign-in link makes the account, and gets its owner back in", () => {
+  const { auth } = fresh({ signInWith: ["passkey"] });
+  assert.equal(auth.signInLinks, true);
+  const up = must(auth.requestLink("sign-in", "ann@example.org", HERE));
+  assert.equal(auth.useSignInLink(must(up.token), HERE).made, true);
+  const back = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.241"));
+  assert.ok(back.token, "lost every passkey: a link to sign in once, and add another");
+});
+
+test("recovery by the app: nobody can have a link sent into an existing account, but the app's own code can make one", () => {
+  const { db, auth } = fresh({ signInWith: ["passkey"], recovery: "app" });
+  const up = must(auth.requestLink("sign-in", "ann@example.org", HERE));
+  const ann = auth.useSignInLink(must(up.token), HERE);
+  assert.equal(ann.made, true, "sign-up still proves the address by a link");
+  const before = count(db, "auth_links");
+  const asked = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.242"));
+  assert.deepEqual([asked.token, asked.account], [null, true], "nothing to open: the message says it signs in by passkey");
+  assert.equal(count(db, "auth_links") - before, 1, "the same work: a link stored that does nothing");
+  const vouched = must(auth.recoveryLink("Ann@Example.org"));
+  assert.deepEqual([vouched.kind, vouched.to, vouched.account], ["sign-in", "ann@example.org", true]);
+  assert.equal(auth.useSignInLink(must(vouched.token), "192.0.2.243").id, ann.id);
+  assert.equal(auth.recoveryLink("nobody@example.org"), null);
 });
 
 test("without passwords: a sign-in link makes the account, once, and signs in to it after", async () => {

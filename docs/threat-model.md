@@ -36,7 +36,8 @@ round modest-auth.
 
 | Threat | Mitigation | Where |
 | --- | --- | --- |
-| A way in the site didn't choose | How people sign in must be given (`signInWith`): a link always, and beside it a password, a passkey, or both; anything else refused at start-up. A way that isn't chosen is off entirely: its routes aren't there, and its functions refuse to run | `auth.ts`, `handler.ts` |
+| A way in the site didn't choose | How people sign in must be given (`signInWith`): any of a link, a password, and a passkey; anything else refused at start-up. A way not chosen is off entirely: its routes aren't there, and its functions refuse to run. Sign-in links are sent only where "link" is chosen, or there are no passwords (where they make accounts and get people back in) | `auth.ts`, `handler.ts` |
+| An inbox as a way into a passkey account | `recovery: "app"`, only with `signInWith: ["passkey"]`: no link into an existing account is sent at anyone's asking (the same answer, and work, as for any address; the inbox is told the account signs in by passkey), so only the app's own code can make one (`recoveryLink`). Sign-up still proves the address by a link, which makes a new account and nothing else | `auth.ts` |
 | Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request, for good: their sessions end, so none comes back if it allows them again. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
 | Signing up with someone else's email | An account is made only by a link emailed to the address: where there are passwords, whoever opens it chooses one; where there aren't, opening a sign-in link makes it | `auth.ts` |
 | Guessing, reusing, or stretching a link | 256-bit tokens, kept only as SHA-256 hashes; single-use, taken in one statement; 60 minutes to choose a password, 15 to sign in; a password link can't sign in, nor a sign-in link choose a password; a password refused at a link doesn't use it up; using a link, a new password, or deleting the account ends the email's other links | `auth.ts` |
@@ -215,9 +216,15 @@ round modest-auth.
 - **Synced passkeys don't count,** so a copy of one (in a compromised password manager,
   say) can't be told from the original. The counter check only catches copies of
   passkeys that count.
-- **An account with a passkey is still reachable by its link** (and its password, if
-  it has one), so it's only as strong as those. Choosing passkeys only, for an account,
-  is on the roadmap.
+- **An account is only as strong as its way back in.** Unless a site signs in by passkey
+  alone with `recovery: "app"`, that's a link to its email: `["passkey"]` is as strong as
+  `["link", "passkey"]` against someone who reads the inbox. Choosing passkeys only, for
+  one account on a site that offers more, is on the roadmap.
+- **With `recovery: "app"`, someone who signs up and leaves before adding a passkey,**
+  or loses every passkey, can only get back in by `recoveryLink`, so the app needs a way
+  to vouch for them.
+- **`recoveryLink` lets in whoever opens it.** It's for the app's own code, after the
+  app has checked who it's for; sent to the wrong person, it's an account handed over.
 - **A session that's ended doesn't stop a change already checked against it,** except a
   password change, which lands only while its session is there. The others don't wait
   on anything, so there's no gap to use.

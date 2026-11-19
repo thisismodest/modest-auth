@@ -92,7 +92,7 @@
 <span class="k">const</span> ORIGIN = <span class="s">"https://example.org"</span>; <span class="c">// your site's address (HTTPS)</span>
 <span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
-  signInWith: [<span class="s">"link"</span>, <span class="s">"password"</span>, <span class="s">"passkey"</span>], <span class="c">// "link" always; the others if you like</span>
+  signInWith: [<span class="s">"link"</span>, <span class="s">"passkey"</span>], <span class="c">// any of "link", "password", and "passkey"</span>
 });
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: ORIGIN,
@@ -124,9 +124,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
                 <tr><td><code>GET /auth/session</code></td><td></td><td><code>{ user: { email } }</code>, or <code>{ user: null }</code></td></tr>
-                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in (without passwords, to an email with no account, one that signs up)</td></tr>
                 <tr><td><code>POST /auth/link</code></td><td><code>{ token }</code></td><td><code>{ kind, email }</code>: which email a link is for</td></tr>
-                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in (without passwords, making the account if need be)</td></tr>
                 <tr><td><code>POST /auth/sign-out</code></td><td>none</td><td>Ends this session</td></tr>
                 <tr><td><code>POST /auth/sign-out-everywhere</code></td><td>none</td><td>Ends every session of the account</td></tr>
                 <tr><td><code>GET /auth/sessions</code></td><td></td><td>The account's sessions: <code>{ sessions: [{ id, started, lastUsed, current }] }</code></td></tr>
@@ -136,6 +134,16 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From that link, signed in to the account: moves it, and ends every session</td></tr>
                 <tr><td><code>POST /auth/undo-email</code></td><td><code>{ token }</code></td><td>From the notice to the old address (for 7 days): moves it back, ends every session, and emails a link to get back in</td></tr>
                 <tr><td><code>POST /auth/delete-account</code></td><td>none</td><td>Signed in recently: deletes the account and its sessions</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Where sign-in links are sent: a site that signs in by link, or has no passwords (where they make accounts and get people back in):</p>
+          <div class="table-card">
+            <table>
+              <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
+              <tbody>
+                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in, sign up, or get back in (with <code>recovery: "app"</code>, only to sign up)</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token }</code></td><td>From a sign-in link: signs in, making the account if need be</td></tr>
               </tbody>
             </table>
           </div>
@@ -300,7 +308,11 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>signInWith</code> <small>(createAuth)</small></h3>
-              <p>How people sign in: <code>"link"</code> always, and beside it <code>"password"</code>, <code>"passkey"</code>, or both. Required. A link is how an account is made, and the way back in when a password is forgotten or every passkey lost.</p>
+              <p>How people sign in: any of <code>"link"</code>, <code>"password"</code>, and <code>"passkey"</code>, each on its own or mixed. Required. Every account is still made by a link to its email.</p>
+            </div>
+            <div>
+              <h3><code>recovery</code> <small>(createAuth)</small></h3>
+              <p>How people get back in. By default, a link to their email: to choose a new password, or (without passwords) to sign in once and add a passkey. <code>"app"</code>, only with <code>signInWith: ["passkey"]</code>: no link into an existing account is sent at anyone's asking, so an inbox is never a way in; your own code makes one with <code>recoveryLink(email)</code>, for someone you've vouched for.</p>
             </div>
             <div>
               <h3><code>allow</code> <small>(createAuth)</small></h3>
@@ -389,6 +401,7 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it</td></tr>
                 <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, makes its password useless, and gives a <code>reset</code> link to get back in</td></tr>
                 <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
+                <tr><td><code>recoveryLink(email)</code></td><td>A link into the account, for your own code to send to someone you've vouched for; never from a route</td></tr>
                 <tr><td><code>passkeyOptions(session, origin, from)</code>, <code>addPasskey(session, made, name, origin, from)</code></td><td>Options to make a passkey, and adding the one made (a recent session)</td></tr>
                 <tr><td><code>signInOptions(origin, from)</code>, <code>signInWithPasskey(assertion, origin, from)</code></td><td>Options to sign in with one, and the account it signs in to</td></tr>
                 <tr><td><code>passkeysOf(userId)</code>, <code>removePasskey(session, id, from)</code></td><td>The account's passkeys, and removing one (a recent session)</td></tr>

@@ -13,11 +13,18 @@ account's version is one stamp, and messages are data for the app to send. Sever
 
 ### Changed
 
-- **`createAuth` needs `signInWith`:** `["link"]` (no passwords at all), or
-  `["link", "password"]` (as before). A password always comes with a link, for when it's
-  forgotten; any other choice is refused at start-up. Without passwords, a sign-in link
-  to an email with no account makes the account, and the password routes
-  (`send-password-link`, `set-password`, `sign-in`, `password`) aren't there.
+- **`createAuth` needs `signInWith`:** any of `"link"`, `"password"`, and `"passkey"`,
+  each on its own or mixed (`["link", "password"]` is as before). A method not chosen is
+  off: without passwords, a sign-in link to an email with no account makes the account,
+  and the password routes (`send-password-link`, `set-password`, `sign-in`, `password`)
+  aren't there; sign-in link routes are there only where `"link"` is chosen or there are
+  no passwords.
+- **Getting back in is separate from signing in** (`recovery`): a link to the
+  account's email by default (a password link where there are passwords, else a
+  sign-in link, opened once to add a passkey). With `signInWith: ["passkey"]`,
+  `recovery: "app"` sends no link into an existing account at anyone's asking (the
+  inbox gets a `passkey-only` message instead), and `recoveryLink(email)` makes one for
+  the app's own code alone.
 - **Changing the password or email, or deleting the account, needs a recent sign-in**
   (a session started in the last 10 minutes, `RECENT_MINUTES`), not the password. An
   older session is refused with `403` and the code `sign-in-again`. `changePassword`,
@@ -56,7 +63,7 @@ account's version is one stamp, and messages are data for the app to send. Sever
   sent or used, an account made, or a session started or used, so someone the app stops
   allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
   refusal. A refused address is answered as any other and sent nothing.
-- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`
+- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`, `recoveryLink`, `Refusal` (why a link asked for has nothing to open, on the link itself), `auth.signInLinks`
   (a link's message, for apps using the parts), and `auth.signInWith`.
 
 - A notice to the account's address when it's deleted (`account-deleted`), and the
