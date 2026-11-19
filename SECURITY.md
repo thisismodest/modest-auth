@@ -5,9 +5,10 @@ most useful contribution there is.
 
 ## Reporting a vulnerability
 
-**Please don't describe it in a public issue.** Report it privately through GitHub:
-the repository's **Security** tab → **Report a vulnerability**. Include what you found,
-how to reproduce it, and what an attacker could do with it.
+**Please don't describe it in a public issue.** Report it privately through GitHub, at
+<https://github.com/thisismodest/modest-auth/security/advisories/new> (the repository's
+**Security** tab → **Report a vulnerability**). Include what you found, how to reproduce
+it, and what an attacker could do with it.
 
 If that isn't offered, open an issue that says only that you have a security report
 (no details), and the maintainer will arrange a private way to receive it.

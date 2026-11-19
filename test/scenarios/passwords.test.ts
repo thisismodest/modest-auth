@@ -1,7 +1,7 @@
 // Scenarios 40 to 45 of docs/scenarios.md: the rules for new passwords, and the breached-password check.
 
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { after, before, test } from "node:test";
 import { sha1 } from "../helpers.ts";
 import { askForLink, freshEmail, freshPassword, type Harness, isRefusal, signUp, startHarness, unlessBusy, wait, whoIs } from "./harness.ts";
@@ -24,7 +24,7 @@ before(async () => {
 after(() => h.close());
 
 /** Characters chosen at random out of `alphabet`, as code points. */
-const randomFrom = (alphabet: string[], length: number) => Array.from({ length }, () => alphabet[(randomBytes(1)[0] as number) % alphabet.length]).join("");
+const randomFrom = (alphabet: string[], length: number) => Array.from({ length }, () => alphabet[randomInt(alphabet.length)]).join("");
 const ascii = [..."abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789-_"];
 const emoji = Array.from({ length: 80 }, (_, i) => String.fromCodePoint(0x1f600 + i));
 
