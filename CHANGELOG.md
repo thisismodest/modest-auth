@@ -75,6 +75,9 @@ Found by an adversarial review of this release.
   A password check refuses an address `allow` refuses, even for an app that only checks.
 - Accepting an email move checks the account's stamp, so an undo landing in another
   process at that moment isn't overwritten.
+- Reading the session cookie trimmed spaces and tabs with a pattern whose time grew with
+  the square of a long run of them, so one crafted 16KB `Cookie` header, sent by anyone,
+  held the server up for about 90 ms (also in 0.5.0). It's trimmed in one pass now.
 
 ### Removed
 

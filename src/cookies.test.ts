@@ -55,3 +55,10 @@ test("the cookie can't be made less safe by mistake: the site's origin decides, 
   for (const bad of [undefined, "", "example.org", "not a url"])
     assert.throws(() => sessionCookie(TOKEN, bad as string), /origin must be the site's address/, String(bad));
 });
+
+test("a Cookie header full of spaces and tabs is read at once, not in time growing with its square", () => {
+  const header = `x=${" \t".repeat(8000)}y; ${"\t ".repeat(8000)}`;
+  const started = performance.now();
+  assert.equal(readSessionCookie(header, "https://app.example.org"), null);
+  assert.ok(performance.now() - started < 20, `${(performance.now() - started).toFixed(1)} ms`);
+});
