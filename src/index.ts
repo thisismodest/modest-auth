@@ -6,6 +6,8 @@ export {
   type Auth,
   type AuthEvent,
   type AuthOptions,
+  CODE_TRIES,
+  CODES_A_DAY,
   type Contact,
   createAuth,
   EMAIL_LINK_MINUTES,
@@ -13,6 +15,7 @@ export {
   type Link,
   type LinkKind,
   type NewPasskey,
+  newAsker,
   PASSKEY_MINUTES,
   PASSWORD_LINK_MINUTES,
   type Passkey,
@@ -27,7 +30,7 @@ export {
   type SignInMethod,
   type User,
 } from "./auth.ts";
-export { clearedCookie, readSessionCookie, sessionCookie } from "./cookies.ts";
+export { clearedCodeCookie, clearedCookie, codeCookie, readCodeCookie, readSessionCookie, sessionCookie } from "./cookies.ts";
 export { cleanEmail } from "./emails.ts";
 export { AuthError, type AuthErrorCode } from "./errors.ts";
 export { createHandler, type Handler, type HandlerOptions } from "./handler.ts";

@@ -4,7 +4,7 @@
 // every process sharing the database shares them, and none can be pushed out by
 // flooding the table with other keys. Each key is stored as a hash, not as the
 // email or address itself; a copy of the database could still test a guess
-// against one, so rows go once their window has passed (an hour at most).
+// against one, so rows go once their window has passed (a day at most: the cap on codes).
 
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";

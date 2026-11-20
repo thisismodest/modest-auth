@@ -61,6 +61,15 @@ it brings. Nothing here is a promise of a date.
 - [x] **Messages as data,** for the app to deliver however it likes (any email service,
       its own words, any language), with `emailFor` for modest-auth's own.
 
+## Codes, and ending access (unreleased)
+
+- [x] **A sign-in link's code** (`"code"` in `signInWith`): 6 digits, in the same
+      message, typed instead in the browser that asked (its cookie), for someone reading
+      it on another device. The same routes as links; 5 wrong tries, and 10 codes a day
+      per address.
+- [x] **`endAccess`,** for the app's own code: every session, link, and passkey of an
+      account ends, and its password.
+
 ## Passkeys (0.6.0)
 
 Sign-in that can't be phished (WebAuthn), as a third method beside links and
@@ -157,7 +166,8 @@ without becoming a plugin system.
   - **A phone receives notices but doesn't sign in until its owner says so:** an account
     is only as strong as its weakest contact, and a number is weaker than an inbox.
   - **`User` becomes `{ id, email?, phone? }`.**
-  - **A typed code** (`"code"`, a sign-in method of its own) where a link won't do.
+  - **A typed code** (`"code"`, built: each sign-in link's code) for a phone, sent by
+    text instead of email.
   - **Its own rows in the threat model first:** a SIM swap gives away a number, so it's
     only as safe as its carrier; a typed code can be phished and guessed, so it needs
     few tries, short lives, and to work only where it was asked for; texts cost money,

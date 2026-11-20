@@ -23,14 +23,15 @@ README.md for what it promises, and docs/threat-model.md for how.
 Keep these apart; a change that blurs them is the wrong change.
 
 - **How people sign in day to day** (`signInWith`): any of `"link"`, `"password"`, and
-  `"passkey"`. Each works on its own; no method is required by another.
+  `"passkey"`, each working on its own; and `"code"`, beside `"link"` only: a sign-in
+  link's code, typed in the browser that asked, an addition to the link.
 - **How people get back in** (`recovery`): not a sign-in method. By default, a link to the
   account's email: a link to choose a new password where the site has passwords, else one
   that signs in once, to add a passkey. `"app"`, only with `signInWith: ["passkey"]`: no
   link into an existing account is sent at anyone's asking, so an inbox is never a way in,
   and only the app's own code makes one (`recoveryLink`).
 - **Where an account is reached and proven** (the contact): email, the only kind for now.
-  Sign-up always proves it by a link, whatever the methods; notices and recovery go there.
+  Sign-up always proves it by a link (or, beside the link, its code), whatever the methods; notices and recovery go there.
   Phones are on the roadmap, with the design written down there; nothing for them is
   built ahead of need. Accounts with no contact (a username and password) are out: the
   weakest sign-in there is, with no recovery and no notices.

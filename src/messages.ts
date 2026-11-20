@@ -13,10 +13,13 @@ import { MINUTE } from "./time.ts";
  * never back to whoever asked. It stops working at `expires`.
  */
 export type Message =
-  /** A link that makes an account at an address that has none: to choose a password, or (on a site without passwords) to sign in. */
-  | { kind: "sign-up"; to: Contact; link: string; expires: number }
-  /** A link that signs in. */
-  | { kind: "sign-in"; to: Contact; link: string; expires: number }
+  /**
+   * A link that makes an account at an address that has none: to choose a password, or (on a site without passwords)
+   * to sign in. Where "code" is a sign-in method, `code` too: typed instead, in the browser that asked.
+   */
+  | { kind: "sign-up"; to: Contact; link: string; expires: number; code?: string }
+  /** A link that signs in, and where "code" is a sign-in method, its `code`. */
+  | { kind: "sign-in"; to: Contact; link: string; expires: number; code?: string }
   /** A link to choose a new password, for an account that has forgotten it. */
   | { kind: "new-password"; to: Contact; link: string; expires: number }
   /** A sign-in link was asked for an address with no account, on a site where accounts are made by choosing a password. */
@@ -55,8 +58,10 @@ export function messageFor(link: Link, url: string): Message {
   if (link.token === null) return { kind: link.refused, to };
   if (link.kind === "move") return { kind: "approve-email", to, email: link.newEmail ?? "", link: url, expires };
   if (link.kind === "email") return { kind: "confirm-email", to, link: url, expires };
-  if (!link.account) return { kind: "sign-up", to, link: url, expires };
-  return { kind: link.kind === "password" ? "new-password" : "sign-in", to, link: url, expires };
+  const code = link.code === undefined ? {} : { code: link.code };
+  if (!link.account) return { kind: "sign-up", to, link: url, expires, ...code };
+  if (link.kind === "password") return { kind: "new-password", to, link: url, expires };
+  return { kind: "sign-in", to, link: url, expires, ...code };
 }
 
 /** The site, as its emails name it: its origin, and (optionally) its name, such as "Example Club". */
@@ -86,16 +91,21 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
     return `within ${minutes} minutes${how}:\n\n${link}\n\n`;
   };
   const notYou = "If it wasn't you, you can ignore this email.\n";
+  /** A sign-in link's code, if it has one: where to type it, and that nobody else will ask for it. */
+  const orCode = (code: string | undefined) =>
+    code === undefined
+      ? ""
+      : `Or type this code where you asked, on ${host}: ${code}\n\nOnly ever type it there: nobody from ${title} will ask you for it.\n\n`;
   switch (message.kind) {
     case "sign-up":
       return {
         subject: `Finish signing up to ${title}`,
-        text: `To finish signing up to ${where}, open this link ${open(message.link, message.expires)}If you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
+        text: `To finish signing up to ${where}, open this link ${open(message.link, message.expires)}${orCode(message.code)}If you didn't ask to sign up, you can ignore this email: no account is made without it.\n`,
       };
     case "sign-in":
       return {
         subject: `Sign in to ${title}`,
-        text: `To sign in to ${where}, open this link ${open(message.link, message.expires)}If you didn't ask to sign in, you can ignore this email.\n`,
+        text: `To sign in to ${where}, open this link ${open(message.link, message.expires)}${orCode(message.code)}If you didn't ask to sign in, you can ignore this email.\n`,
       };
     case "new-password":
       return {

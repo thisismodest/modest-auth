@@ -6,6 +6,47 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
+## [0.7.0] - 2026-11-20
+
+Codes, typed instead of opening a sign-in link, and a way for the app's own code to end
+every way into an account. Nothing changes for a site that doesn't turn codes on, except
+one new event type.
+
+### Upgrading
+
+- **A `switch` on `AuthEvent["type"]`** that must cover every type needs a case for
+  `access-ended`.
+- **To turn codes on:** `signInWith` with `"code"` beside `"link"`, and a `pepper`
+  (`openssl rand -base64 32`, kept outside the database). The handler does the rest; an
+  app using the parts passes `newAsker()` to `requestLink`, and sets `codeCookie`, on
+  every ask.
+
+### Added
+
+- **Codes,** a sign-in method beside links (`"code"` in `signInWith`, which needs `"link"`
+  too): each sign-in link someone asks for also has a 6-digit code, in the same message
+  (`code` on `sign-up` and `sign-in`), typed instead, in the browser that asked, for
+  someone reading the message on another device. The same routes: `send-sign-in-link`
+  gives the asking browser a short-lived `SameSite=Strict` cookie (`__Host-code`), and
+  `sign-in-with-link` takes `{ code }` as well as `{ token }`. A link and its code are
+  one; 5 wrong tries end the code (`CODE_TRIES`); 10 codes a day per address
+  (`CODES_A_DAY`), after which only codes stop working. For the parts: `requestLink`
+  takes the asking browser's token (`newAsker()`) as a fourth argument,
+  `useSignInCode(asker, code, from)`, `code` on the `Link`, and `codeCookie`,
+  `readCodeCookie`, and `clearedCodeCookie`. A new table, `auth_codes`, made on its own
+  when `createAuth` runs. A new error code, `wrong-code`, and the event `signed-in` can
+  say `by: "code"`.
+- **`pepper`,** a secret kept outside the database (`openssl rand -base64 32`), required
+  with codes: each code is kept as a hash keyed by it, so a copy of the database can't be
+  searched for one. Every short secret goes through it; links and sessions, with 256-bit
+  tokens, don't need it.
+- **`endAccess(email)`,** for the app's own code: every session, link, and passkey of the
+  account ends, and its password, so nobody is in, or can get in, but by a new link to the
+  address (with `recovery: "app"`, one the app makes). For when someone else got in, or
+  the app's own records no longer give the address to the person it was. It only takes
+  away, sends nothing, and works whatever `allow` says; the account, and its id, stay.
+  Told as the event `access-ended`.
+
 ## [0.6.0] - 2026-11-20
 
 How people sign in is now the site's choice, passkeys are one of the choices, moving an

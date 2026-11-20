@@ -84,8 +84,9 @@
               <thead><tr><th scope="col">Against</th><th scope="col">What it does</th></tr></thead>
               <tbody>
                 <tr><td>Guessing passwords</td><td>scrypt at OWASP's cost; 15 characters or more; 5,500 common passwords refused; limits per account, per address, and per IPv6 block, counted before any password is checked</td></tr>
-                <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions and emailed links only as hashes of 256-bit tokens</td></tr>
-                <tr><td>A way in the site didn't choose</td><td>How people sign in must be chosen: any of a link, a password, and a passkey; a way not chosen is off entirely</td></tr>
+                <tr><td>A copy of the database</td><td>Passwords only as salted scrypt hashes; sessions and emailed links only as hashes of 256-bit tokens; a link's code, only 6 digits, only as a hash keyed by the pepper, a secret kept outside the database, so a copy can't be searched for it</td></tr>
+                <tr><td>A way in the site didn't choose</td><td>How people sign in must be chosen: any of a link, a password, and a passkey, and a link's code beside the link; a way not chosen is off entirely</td></tr>
+                <tr><td>Guessing a sign-in link's code</td><td>6 digits, typed only in the browser that asked; 5 tries a code, and 10 codes a day per address, wherever the tries come from</td></tr>
                 <tr><td>Phishing</td><td>Passkeys: each answer must name exactly the site's own origin, sign a fresh single-use challenge, and come from someone present and verified on their device; only public keys are kept</td></tr>
                 <tr><td>Someone the site doesn't want</td><td>The site's <code>allow</code>, if it has one, is asked before any link, new account, or session, and can only refuse; the answer is the same either way</td></tr>
                 <tr><td>Signing up with someone else's email</td><td>An account is made only by a link emailed to the address</td></tr>

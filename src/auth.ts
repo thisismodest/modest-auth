@@ -20,7 +20,7 @@
 // node:sqlite database you give it, which may be your app's own, and may be
 // shared by several processes.
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { cleanEmail } from "./emails.ts";
 import { AuthError } from "./errors.ts";
@@ -41,8 +41,8 @@ export type Contact = { email: string };
  * Getting back in (a forgotten password, every passkey lost) isn't one of them: that's a link to the account's
  * email, whatever the site's methods, or only one the app makes (`recovery: "app"`).
  */
-export type SignInMethod = "link" | "password" | "passkey";
-const METHODS: readonly SignInMethod[] = ["link", "password", "passkey"];
+export type SignInMethod = "link" | "code" | "password" | "passkey";
+const METHODS: readonly SignInMethod[] = ["link", "code", "password", "passkey"];
 
 /** Something that happened to an account, for the app to keep: never a password, token, or email. `from` is addressKey's. */
 export type AuthEvent = {
@@ -59,19 +59,20 @@ export type AuthEvent = {
     | "passkey-added"
     | "passkey-removed"
     | "account-reset"
+    | "access-ended"
     | "recovery-link-made"
     | "account-deleted";
   at: number;
   userId?: string;
   from?: string;
-  /** For "signed-in" (a session started): after the password was checked, an emailed link used, or a passkey's signature checked. */
+  /** For "signed-in" (a session started): after the password was checked, an emailed link used (or its code typed), or a passkey's signature checked. */
   by?: SignInMethod;
 };
 // "sign-in-failed": a wrong email or password; "paused": a try refused by a limit, on the account or on where it
 // came from.
 
 export type AuthOptions = {
-  /** How people sign in: any of "link", "password", and "passkey". Required, so nobody gets a way in the site didn't choose. */
+  /** How people sign in: any of "link", "password", and "passkey", and "code" beside "link". Required, so nobody gets a way in the site didn't choose. */
   signInWith: readonly SignInMethod[];
   /**
    * How people get back in. By default, a link to the account's email: a link to choose a new password where the
@@ -103,6 +104,14 @@ export type AuthOptions = {
    * service that's down can't stop anyone choosing one.
    */
   breachedRange?(prefix: string, options: { signal: AbortSignal }): Promise<string | Response> | string | Response;
+  /**
+   * A secret kept outside the database (an environment variable, such as AUTH_PEPPER), of 32 characters or more:
+   * `openssl rand -base64 32` makes one. Every short secret is kept as a keyed hash under it, so a copy of the
+   * database, without it, can't be searched for one. Required where "code" is a sign-in method (a code is 6 digits).
+   * Links and sessions don't need it: their tokens are 256 bits, which no copy can search. Changing it only stops
+   * the codes waiting.
+   */
+  pepper?: string;
 };
 
 /** One of an account's sessions, as its owner sees it: `id` names it (it can't be used to sign in), and `current` is the one asking. */
@@ -191,6 +200,11 @@ export type Link = {
   expires: number;
   /** For a move's approval (kind "move"): the address it moves to. */
   newEmail?: string;
+  /**
+   * Where "code" is a sign-in method, a sign-in link's code (6 digits), to send with it: typed instead of opening
+   * the link, in the browser that asked (holding the `asker` given to requestLink).
+   */
+  code?: string;
 } & ({ token: string; refused?: undefined } | { token: null; refused: Refusal });
 
 export type Auth = {
@@ -206,14 +220,25 @@ export type Auth = {
    */
   recoveryLink(email: string): Link | null;
   /**
+   * Ends every way into the account at `email`, for the app's own code: every session, link, and passkey, and its
+   * password, so nobody is in, or can get in, but by a new link to the address (where `recovery` is "app", only one
+   * the app makes). For when someone else got in, or the app's own records no longer give the address to the person
+   * it was. It only takes away: nothing is sent, and it works whatever `allow` says. The account stays, so the next
+   * person to sign in at the address has it, and its id. False if there's no account at `email` (one that isn't an
+   * address is refused, as everywhere). Never from a route.
+   */
+  endAccess(email: string): boolean;
+  /**
    * A link to send to `email`, or null if none should be: at most 3 of each kind to one address in 15 minutes,
    * and the rest quietly aren't sent, so nobody can flood an inbox; every link sent in those 15 minutes still
    * works, so nobody can stop its owner getting one either. One goes whether or not there's an account, so
    * neither the answer nor the work after it shows which; none to an address `allow` refuses. At most 5 asked
    * for from one address in 15 minutes, and 20 from one IPv6 /48. A password link only where the site uses
-   * passwords. `from` is who's asking (addressKey in limits.ts).
+   * passwords. `from` is who's asking (addressKey in limits.ts). Where "code" is a sign-in method, a sign-in link
+   * also needs `asker`: a new random token (`newAsker`), given to the browser that asked (`codeCookie`) whatever the
+   * answer, null included, so whether one was given shows nothing; its code is stored under it either way.
    */
-  requestLink(kind: "password" | "sign-in", email: string, from: string): Link | null;
+  requestLink(kind: "password" | "sign-in", email: string, from: string, asker?: string): Link | null;
   /**
    * Which email a link is for (for a move's approval, the address it moves to), and its kind, without using it: for
    * the page it opens to show, so nobody is signed in to, or moves, someone else's account unawares.
@@ -228,6 +253,13 @@ export type Auth = {
    * person can ask for that (`reset`), to be rid of anything someone else added.
    */
   useSignInLink(token: string, from: string, options?: { reset?: boolean }): User & { made: boolean };
+  /**
+   * The account a sign-in link is for, by its code instead of the link: typed in the browser that asked (`asker`,
+   * from the link it was sent with). The same account the link would open, made if it would make it. A wrong code
+   * uses up one of CODE_TRIES, and the last ends the code (the link still works); every code typed for an address
+   * counts against CODES_A_DAY. Only where "code" is a sign-in method.
+   */
+  useSignInCode(asker: string, code: string, from: string): User & { made: boolean };
   /**
    * To move the account of `session` (one started in the last RECENT_MINUTES) to `email`: a link to send to the
    * address it has now, to approve it, or null if none should be sent (3 to one address in 15 minutes, as for other
@@ -323,6 +355,16 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS auth_links_email ON auth_links (email);
   CREATE INDEX IF NOT EXISTS auth_links_user ON auth_links (user);
   CREATE INDEX IF NOT EXISTS auth_links_expires ON auth_links (expires);
+  CREATE TABLE IF NOT EXISTS auth_codes (
+    asker TEXT PRIMARY KEY,
+    link TEXT NOT NULL,
+    email TEXT NOT NULL,
+    expires INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    tries INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS auth_codes_expires ON auth_codes (expires);
+  CREATE INDEX IF NOT EXISTS auth_codes_email ON auth_codes (email);
   CREATE TABLE IF NOT EXISTS auth_passkeys (
     id TEXT PRIMARY KEY,
     user TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
@@ -348,6 +390,13 @@ const newToken = () => randomBytes(32).toString("base64url");
 /** A new stamp: 128 random bits, never told to anyone. */
 const newStamp = () => randomBytes(16).toString("base64url");
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("base64url");
+/** A new token for a browser asking for a sign-in link with a code (given to requestLink, and to the browser by codeCookie). */
+export const newAsker = (): string => randomBytes(32).toString("base64url");
+/** Wrong tries a sign-in link's code takes before it's gone, and a new one has to be asked for. */
+export const CODE_TRIES = 5;
+/** Codes typed for one address in a day, right or wrong: with CODE_TRIES, how few guesses a 6-digit code gets. */
+export const CODES_A_DAY = 10;
+const CODE = /^\d{6}$/;
 /** How long a session lasts at most. */
 export const SESSION_MS = SESSION_DAYS * DAY;
 /** When a session started, from when it runs out. */
@@ -366,6 +415,7 @@ const live = (now: number) => [now, now - IDLE_DAYS * DAY] as const;
 const ADDRESS = /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){3}::\/64$/;
 const WRONG = () => new AuthError("wrong-credentials", "That email and password don't match.");
 const EXPIRED = () => new AuthError("invalid-link", "That link has expired or been used. Please ask for a new one.");
+const WRONG_CODE = () => new AuthError("wrong-code", "That code isn't right, or has run out. Please check it, or ask for a new one.");
 const SIGN_IN_AGAIN = () => new AuthError("sign-in-again", "Please sign in again to do that.");
 const BAD_PASSKEY = () => new AuthError("invalid-passkey", "That passkey couldn't be used here. Please try again, or sign in another way.");
 /** A link token as newToken makes it. */
@@ -390,8 +440,11 @@ function methodsOf(given: unknown): readonly SignInMethod[] {
   const methods = Array.isArray(given) ? given : [];
   const known = methods.every((method) => METHODS.includes(method));
   if (!known || methods.length === 0 || new Set(methods).size !== methods.length) {
-    throw new Error('signInWith must list how people sign in: any of "link", "password", and "passkey", each once.');
+    throw new Error('signInWith must list how people sign in: any of "link", "code", "password", and "passkey", each once.');
   }
+  // A code is a sign-in link's, typed instead of opening it: there's no code without the link.
+  if (methods.includes("code") && !methods.includes("link"))
+    throw new Error('signInWith with "code" needs "link" too: a code is a sign-in link\'s, typed instead.');
   return Object.freeze([...methods]);
 }
 
@@ -405,6 +458,20 @@ function recoveryOf(given: unknown, methods: readonly SignInMethod[]): "link" | 
   throw new Error('recovery must be "link", or "app" with signInWith: ["passkey"] (with a link or password on offer, an inbox is a way in anyway).');
 }
 
+/**
+ * The pepper, checked, as the one function every short secret is kept through: a keyed hash (HMAC-SHA256) of its
+ * parts. Required where a method that keeps one is chosen ("code"); refused if it's too short to be a secret.
+ */
+function pepperOf(given: unknown, methods: readonly SignInMethod[]): ((...parts: string[]) => string) | null {
+  if (given === undefined) {
+    if (methods.includes("code")) throw new Error('With "code", a pepper is needed: a secret kept outside the database, such as `openssl rand -base64 32`.');
+    return null;
+  }
+  if (typeof given !== "string" || given.length < 32)
+    throw new Error("pepper must be a secret of 32 characters or more, such as `openssl rand -base64 32` makes.");
+  return (...parts) => createHmac("sha256", given).update(parts.join("\0")).digest("base64url");
+}
+
 /** Accounts and sessions, kept in `db` (its tables are made if they aren't there). */
 export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const { allow, onEvent, breachedRange } = options ?? {};
@@ -412,6 +479,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const recovery = recoveryOf(options?.recovery, signInWith);
   if (allow !== undefined && typeof allow !== "function") throw new Error("allow must be a function: (contact) => true or false.");
   if (onEvent !== undefined && typeof onEvent !== "function") throw new Error("onEvent must be a function.");
+  const peppered = pepperOf(options?.pepper, signInWith);
+  /** A code's keyed hash, with the asking browser's token: a copy of the database, without the pepper, can't be searched for it. */
+  const codeHash = (asker: string, code: string) => {
+    if (!peppered) throw new Error('With "code", a pepper is needed.');
+    return peppered(asker, code);
+  };
   if (breachedRange !== undefined && typeof breachedRange !== "function") throw new Error("breachedRange must be a function.");
   const passwords = signInWith.includes("password");
   /** For what only a site with `method` does: calling it otherwise is a mistake in the app's code. */
@@ -423,8 +496,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    * (whoever opens it chooses one), else a sign-in link (opened once, to add a passkey).
    */
   const makes: LinkKind = passwords ? "password" : "sign-in";
+  /** Whether sign-in links carry a code, typed instead of opening the link, in the browser that asked. */
+  const codes = signInWith.includes("code");
+  /** Whether a sign-in link is how people sign in day to day (opened, or its code typed), not only the way back in. */
+  const everyday = signInWith.includes("link");
   /** Whether sign-in links are sent: to sign in, where that's a method; else where they're the link that makes accounts and gets people back in. */
-  const signInLinks = signInWith.includes("link") || makes === "sign-in";
+  const signInLinks = everyday || makes === "sign-in";
   /** The kinds of link this site sends. */
   const linkKinds: LinkKind[] = ["move", "email", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
   /** For sign-in links, where they aren't sent: a mistake in the app's code (people get back in by a password link here). */
@@ -566,6 +643,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   // strangers in bulk.
   const linksFrom = limit("links", 5, 15 * MINUTE);
   const linksFromBlock = limit("links-block", 20, 15 * MINUTE);
+  // CODES_A_DAY codes typed for one address a day, from anywhere, account or not: a 6-digit code's guesses stay few, for a year as
+  // for a day. Only codes pause; links and passkeys still work.
+  const codesPerAddress = limit("codes", CODES_A_DAY, DAY);
   /** Counts a try from an address with `each`, and from its IPv6 /48 (if it has one) with `inBlock`. */
   const andBlock = (each: Limit, inBlock: Limit) => (from: string) => {
     each(from);
@@ -575,6 +655,13 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const countFrom = andBlock(perAddress, perBlock);
   /** A link asked for (from has been checked by fromWhere). */
   const countLinkFrom = andBlock(linksFrom, linksFromBlock);
+  /** The asking browser's token, where sign-in links have codes: a mistake in the app's code without one. */
+  const askerOrRefuse = (asker: string | undefined): string => {
+    if (typeof asker !== "string" || !LINK_TOKEN.test(asker)) {
+      throw new Error("With codes, requestLink needs the asking browser's token (asker): newAsker() makes one, and codeCookie gives it to the browser.");
+    }
+    return asker;
+  };
   const fromWhere = (from: string) => {
     // Without an address, everyone would share one allowance: that's a mistake in the calling code.
     if (typeof from !== "string" || !ADDRESS.test(from)) throw new Error("from must be where the request came from, as addressKey gives it.");
@@ -625,7 +712,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
   type UserRow = { id: string; email: string; password: string | null; stamp: string };
   /** A link's options: whether it can be opened (else why not, for its message), whether there's an account there, and whose it is. */
-  type LinkOptions = { refused?: Refusal | undefined; account?: boolean; of?: { id: string }; newEmail?: string };
+  type LinkOptions = { refused?: Refusal | undefined; account?: boolean; of?: { id: string }; newEmail?: string; asker?: string };
   const userRow = (where: "email" | "id", value: string) =>
     db.prepare(`SELECT id, email, password, stamp FROM auth_users WHERE ${where} = ?`).get(value) as UserRow | undefined;
 
@@ -730,6 +817,34 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     if (!allowed(link.email)) throw EXPIRED();
     return link;
   };
+  /** Uses the link whose stored hash is `hash` (a code's), as takeLink does a token's. */
+  const takeLinkByHash = (hash: string, kind: LinkKind): LinkRow | undefined => {
+    const link = db
+      .prepare("DELETE FROM auth_links WHERE token = ? AND kind = ? AND expires > ? RETURNING kind, email, user, expires, new_email AS newEmail")
+      .get(hash, kind, Date.now()) as LinkRow | undefined;
+    // For an address the app no longer allows, the change is undone, as for its link: the link waits, unused.
+    if (link && !allowed(link.email)) throw WRONG_CODE();
+    return link;
+  };
+  /**
+   * Signs in by a sign-in link, opened or its code typed, as part of a change. Where they aren't how people sign in
+   * day to day, one into an account is only ever the way back in: a fresh start, so a thief's passkeys and sessions
+   * don't outlast it. Where they are, the person can choose one (`reset`).
+   */
+  const useSignIn = (link: LinkRow, reset: boolean, from: string) => {
+    // Where there are passwords, accounts are made by password links, not sign-in links.
+    if (link.user === null && passwords) throw EXPIRED();
+    return settle(link.email, link.user, null, reset || !everyday, from);
+  };
+  /** A code's sign-in: one the link itself couldn't make (a sign-up where accounts come by password) answers as a wrong code. */
+  const attempt = <T>(signIn: () => T): T => {
+    try {
+      return signIn();
+    } catch (error) {
+      if (error instanceof AuthError && error.code === "invalid-link") throw WRONG_CODE();
+      throw error;
+    }
+  };
   /** The account a link moves, which must still be there. */
   const accountOf = (link: LinkRow) => {
     const row = link.user ? userRow("id", link.user) : undefined;
@@ -759,32 +874,67 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       endLinks(email, row.id);
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
-    const stamp = newStamp();
-    // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
-    db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
-    afterNewPassword(row.id, email);
-    forgetPasskeys(row.id);
+    const stamp = startAfresh(row.id, email, password);
     emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
     return { id: row.id, email, made: false, stamp };
+  };
+  /**
+   * A fresh start, as part of a change: a new stamp and `password` (none, for a reset: whoever else got in may have
+   * set one), and every session, link, and passkey of the account ends, so whatever anyone else added goes. The new
+   * stamp.
+   */
+  const startAfresh = (userId: string, email: string, password: string | null): string => {
+    const stamp = newStamp();
+    db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, userId);
+    afterNewPassword(userId, email);
+    forgetPasskeys(userId);
+    return stamp;
   };
   /**
    * A new link of `kind` to `email`, stored as its hash, to send. `refused`: one that does nothing (stored only so
    * the work is the same either way), given with no token, and why, for its message. With `of`, it's that
    * account's own (one into it, or a move it asked for); `newEmail`, where a move goes.
    */
-  const newLink = (kind: LinkKind, email: string, { refused, account = true, of, newEmail }: LinkOptions = {}): Link => {
-    const token = newToken();
-    const expires = linkExpires(kind);
-    db.prepare("INSERT INTO auth_links (token, kind, email, expires, user, new_email) VALUES (?, ?, ?, ?, ?, ?)").run(
-      tokenHash(token),
-      refused ? "none" : kind,
-      email,
-      expires,
-      of?.id ?? null,
-      newEmail ?? null,
-    );
-    const base = { kind, to: email, account, expires, ...(newEmail === undefined ? {} : { newEmail }) };
-    return refused ? { ...base, token: null, refused } : { ...base, token };
+  const newLink = (kind: LinkKind, email: string, { refused, account = true, of, newEmail, asker }: LinkOptions = {}): Link =>
+    // The link and its code, together or not at all
+    atomically(() => {
+      const token = newToken();
+      const expires = linkExpires(kind);
+      db.prepare("INSERT INTO auth_links (token, kind, email, expires, user, new_email) VALUES (?, ?, ?, ?, ?, ?)").run(
+        tokenHash(token),
+        refused ? "none" : kind,
+        email,
+        expires,
+        of?.id ?? null,
+        newEmail ?? null,
+      );
+      const base = { kind, to: email, account, expires, ...(newEmail === undefined ? {} : { newEmail }) };
+      // A code only on a sign-in link someone asked for (a browser holding its asker): not on one the app makes. One
+      // that does nothing gets one too, under its asker, so typing at it does the same work as at a real one.
+      const code = asker !== undefined && kind === "sign-in" && codes ? newCode(token, asker, email, expires) : undefined;
+      if (refused) return { ...base, token: null, refused };
+      return code === undefined ? { ...base, token } : { ...base, token, code };
+    });
+  /**
+   * A sign-in link's code, stored under the asking browser's token: both only as hashes, the code with the asker's.
+   * It lasts as long as its link was made to, whatever happens to the link meanwhile, so typing at it does the same
+   * work until then: whether the link has been used, or ended, shows nothing.
+   */
+  const newCode = (token: string, asker: string, email: string, expires: number) => {
+    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    try {
+      db.prepare("INSERT INTO auth_codes (asker, link, email, expires, code) VALUES (?, ?, ?, ?, ?)").run(
+        tokenHash(asker),
+        tokenHash(token),
+        email,
+        expires,
+        codeHash(asker, code),
+      );
+    } catch (error) {
+      if (String(error).includes("UNIQUE")) throw new Error("That asker has been used: make a new one for each request, with newAsker().");
+      throw error;
+    }
+    return code;
   };
   /**
    * A link someone asked to have sent to `email`: counted against that inbox (null, quietly, past its limit), and
@@ -870,7 +1020,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     // Links hold the emails of people who may have no account: once they've gone, not left in the WAL either.
     const cleared = db.prepare("DELETE FROM auth_links WHERE token IN (SELECT token FROM auth_links WHERE expires <= ? LIMIT 2000)").run(now).changes;
     db.prepare("DELETE FROM auth_challenges WHERE challenge IN (SELECT challenge FROM auth_challenges WHERE expires <= ? LIMIT 2000)").run(now);
-    if (cleared || unflushed) flush(false);
+    // Codes hold emails too, and last as their links were made to.
+    const codesCleared = db.prepare("DELETE FROM auth_codes WHERE asker IN (SELECT asker FROM auth_codes WHERE expires <= ? LIMIT 2000)").run(now).changes;
+    if (cleared || codesCleared || unflushed) flush(false);
   };
 
   const auth: Auth = {
@@ -888,7 +1040,19 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       return newLink(makes, email, { of: { id: row.id } });
     },
 
-    requestLink(kind, given, from) {
+    endAccess(given) {
+      const email = emailOrRefuse(given);
+      return atomically(() => {
+        const row = userRow("email", email);
+        if (!row) return false;
+        startAfresh(row.id, email, null);
+        // Told as an event, so the app has a record of it.
+        emit("access-ended", { userId: row.id });
+        return true;
+      });
+    },
+
+    requestLink(kind, given, from, asker) {
       if (kind === "password") needs("password");
       else if (kind !== "sign-in") throw new Error('kind must be "password" or "sign-in" (an email link comes from requestEmailChange).');
       else needsSignInLinks();
@@ -901,7 +1065,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       // With no account, only the kind that makes one has anything to open; into an existing account, only where
       // anyone may ask for one: where only the app may, the message says the account signs in by passkey.
       const refused = here ? (recovery === "link" ? undefined : "passkey-only") : kind === makes ? undefined : "no-account";
-      return offer(kind, email, { refused, account: !!here, ...(here && !refused ? { of: { id: here.id } } : {}) });
+      return offer(kind, email, {
+        refused,
+        account: !!here,
+        ...(kind === "sign-in" && codes ? { asker: askerOrRefuse(asker) } : {}),
+        ...(here && !refused ? { of: { id: here.id } } : {}),
+      });
     },
 
     lookUpLink(token, from) {
@@ -929,13 +1098,54 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       fromWhere(from);
       const { stamp, ...user } = atomically(() => {
         const link = takeLink(token, "sign-in");
-        // Where there are passwords, accounts are made by password links, not sign-in links.
-        if (link.user === null && passwords) throw EXPIRED();
-        // Where links aren't how people sign in day to day, one into an account is only ever the way back in: a fresh
-        // start, so a thief's passkeys and sessions don't outlast it. Where they are, the person can choose one.
-        return settle(link.email, link.user, null, reset || !signInWith.includes("link"), from);
+        return useSignIn(link, reset, from);
       });
       return handOver(user, stamp, "link", from);
+    },
+
+    useSignInCode(asker, code, from) {
+      if (!codes) throw new Error('This site doesn\'t sign in with codes: add "code" to signInWith first.');
+      fromWhere(from);
+      if (typeof asker !== "string" || !LINK_TOKEN.test(asker) || typeof code !== "string" || !CODE.test(code)) throw WRONG_CODE();
+      const hashed = tokenHash(asker);
+      // The code alone, not its link: a code lasts as its link was made to, used or not, so the work here is the
+      // same until then whatever has happened to the link (or the account) meanwhile.
+      const found = db.prepare("SELECT link, code, email FROM auth_codes WHERE asker = ? AND expires > ?").get(hashed, Date.now()) as
+        | { link: string; code: string; email: string }
+        | undefined;
+      // Counted for the address, right or wrong, before it's checked (and outside the change, as every limit is):
+      // guesses spread over many codes count together. A link that does nothing has a code too, counted the same.
+      // Past the day's, answered as a wrong code: a pause would show that codes were typed at the address today,
+      // the owner's own perhaps.
+      let capped = false;
+      if (found) {
+        try {
+          codesPerAddress(found.email);
+        } catch (error) {
+          if (!(error instanceof AuthError && error.code === "too-many-tries")) throw error;
+          capped = true;
+        }
+      }
+      // One change, the same past the cap as before it (so how many were typed today shows nothing): a try taken
+      // (so tries sent all at once can't share one), the code compared, and then, if it's right and not capped, the
+      // link used. Past CODE_TRIES no try is taken, and nothing is right.
+      const signedIn = attempt(() =>
+        atomically(() => {
+          if (!found) return null;
+          const taken = db.prepare("UPDATE auth_codes SET tries = tries + 1 WHERE asker = ? AND tries < ? RETURNING tries").get(hashed, CODE_TRIES) as
+            | { tries: number }
+            | undefined;
+          if (!taken) return null;
+          if (!timingSafeEqual(Buffer.from(codeHash(asker, code)), Buffer.from(found.code)) || capped) return null;
+          const link = takeLinkByHash(found.link, "sign-in");
+          if (!link) return null;
+          db.prepare("DELETE FROM auth_codes WHERE asker = ?").run(hashed);
+          return useSignIn(link, false, from);
+        }),
+      );
+      if (!signedIn) throw WRONG_CODE();
+      const { stamp, ...user } = signedIn;
+      return handOver(user, stamp, "code", from);
     },
 
     async signIn(given, password, from) {
@@ -1100,6 +1310,9 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         const done = db.prepare("DELETE FROM auth_users WHERE id = ? AND stamp = ?").run(row.id, row.stamp);
         if (done.changes === 0) throw SIGN_IN_AGAIN();
         endLinks(row.email, row.id);
+        // The address is wiped from its codes, which last to their time (so a try at one does the same work, and shows
+        // nothing of the deletion): nothing names the account, or the address, afterwards.
+        db.prepare("UPDATE auth_codes SET email = ? WHERE email = ?").run(newToken(), row.email);
         flush();
         emit("account-deleted", { userId: row.id, from });
       });
