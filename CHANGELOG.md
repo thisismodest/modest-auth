@@ -6,7 +6,7 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## Unreleased
 
-## [0.6.0] - not yet released
+## [0.6.0] - 2026-11-20
 
 How people sign in is now the site's choice, passkeys are one of the choices, moving an
 account to a new email needs its current address to approve, and messages are data for
