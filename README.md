@@ -8,6 +8,33 @@ Zero-dependency authentication for Node.js: sign-in by emailed link, and by pass
 > has had repeated rounds of internal adversarial review, by AI reviewers each given one
 > area, whose findings are fixed: useful, but not a substitute for an independent one.)
 
+## In a minute
+
+```ts
+import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { createAuth, createHandler, emailFor, handleNode, toRequest } from "modest-auth";
+
+const ORIGIN = "http://localhost:3000";
+const auth = createAuth(new DatabaseSync("app.db"), { signInWith: ["link"] });
+const handler = createHandler(auth, {
+  origin: ORIGIN,
+  linkPage: "/account/link", // your page that emailed links open
+  deliver: (message) => console.log(emailFor(message, { origin: ORIGIN }).text), // print, for now
+});
+
+createServer(async (req, res) => {
+  if (await handleNode(handler, req, res)) return; // the /auth/* routes
+  const user = handler.userOf(toRequest(req));
+  res.end(user ? `Hello, ${user.email}` : "Hello");
+}).listen(3000);
+```
+
+`POST /auth/send-sign-in-link` with `{ "email": "ann@example.org" }` prints a sign-in
+link; your link page sends its token to `/auth/sign-in-with-link`, and Ann is signed in.
+[`examples/node-http.ts`](examples/node-http.ts) is the same with every page, passwords,
+and passkeys (`node examples/node-http.ts`). For a real site, see the quick start below.
+
 ## Why another one
 
 Most authentication breaches aren't in the cryptography. They're logic bugs in
@@ -32,114 +59,29 @@ safely, this is for you.
 
 ## What it does
 
-- **How people sign in is the site's choice,** and has to be made (`signInWith`): any of
-  an emailed link, a password, and a passkey, each on its own or mixed. Every account
-  is still made by a link to its email, which proves the address.
-- **Getting back in is separate:** a link to the account's email, whatever the methods
-  (to choose a new password where there are passwords, else to sign in once and add a
-  passkey). Or, on a site that signs in by passkey alone, `recovery: "app"`: no link
-  into an existing account is sent at anyone's asking, so an inbox is never a way in,
-  and only the app's own code makes one (`recoveryLink`), for someone it has vouched for.
-- **Passkeys** (WebAuthn), which can't be phished: added after a recent sign-in, and
-  used without typing an email (the device offers the site's passkeys). Checked with
-  nothing but `node:crypto`, step by step as the spec numbers them; no attestation, which
-  is for organisations that only allow certain hardware. Only public keys are kept, so a
-  copy of the database signs nothing. A counter that doesn't go up, where a passkey
-  counts at all, means a copy of it, and is refused. Adding or removing one is told to the
-  account's email; removing one signs every other session out; and getting back in by a
-  link is a fresh start, ending every session, link, and passkey of the account, so one a
-  thief added goes too.
-- **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
-  with someone else's email. Where there are passwords, whoever opens the link chooses
-  one; where there aren't, opening a sign-in link makes the account.
-- **Who may have an account,** if not everyone: your `allow(contact)` is asked before a
-  link is sent, an account made, or a session started or used, so someone you stop
-  allowing is signed out at their next request, for good (their sessions end). It can
-  only refuse, never let anyone in,
-  and the answer to whoever's asking is the same either way.
-- **Changes need a recent sign-in:** changing the password or email, or deleting the
-  account, needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older
-  one is asked to sign in again, by any way the site has. Nothing asks for the password,
-  so a stolen session can't be used to guess it.
-- **Forgotten passwords:** a password link, sent to an email that has an account,
-  chooses a new password, and signs out everywhere else.
-- **Changing the email,** as OWASP advises: the address the account has approves it
-  first, by a link, then the new address confirms it, by a link opened where the account
-  is signed in. Nothing goes to the new address until the old one approves, so someone
-  with the password, or a session, can't move the account away. Every session ends.
-- **Notices:** a message to the account when its password changes, a passkey is added
-  or removed, or it's deleted.
-- **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
-  was made, its sessions, and links waiting to be used; nothing that signs anyone in.
-- **A record of events,** if you want one: sessions started, wrong passwords, pauses,
-  new accounts, password and email changes, signing out, and deletions, given to your
-  `onEvent` after each answer, with the account's id and where it came from, but never
-  a password, token, or email.
-- **Breached passwords refused,** if you want: new passwords checked against a
-  breached-password set such as Have I Been Pwned's, through your `breachedRange`,
-  which is given only the first 5 characters of the password's SHA-1 (of its normal
-  form, and of the form typed if that differs).
-- **Signing in** with a link emailed on request, always offered, or with the password
-  where there is one: so someone whose sign-in is paused by another's guessing can still
-  get in.
-- **Messages are yours to send:** modest-auth gives your `deliver` each one as data
-  (what it's for, who it's to, and its link), after answering. Send it with any email
-  service, in modest-auth's own words (`emailFor`) or your own, in any language.
-- **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
-  choose a password, 15 to sign in). The token follows `#` in the link, which browsers
-  never send to a server, so it stays out of logs and `Referer` headers. At most 3 of
-  each kind to one address in 15 minutes, and asking for more never ends the ones sent
-  (using one does: then the address's other links end too), so nobody can flood an
-  inbox, or (while the email queue isn't full) stop its owner getting a link.
-- **New passwords** follow NIST SP 800-63B: 15 to 200 characters (counted as
-  characters, not bytes), any characters at all, no rules about mixing them, but not
-  one of the 5,500 passwords that long in two public lists of common ones (one from
-  the UK's National Cyber Security Centre), nor one with just spaces, punctuation,
-  capitals, or numbers on the end added; not made from the email; and not with fewer
-  than four different characters.
-- **Passwords:** hashed with scrypt at OWASP's suggested cost (N=2¹⁷, r=8), salted,
-  compared in constant time. Never stored, never logged. Each hash records its cost,
-  so the cost can be raised: an older hash is made again at the new cost the next time
-  its owner signs in.
-- **Sessions:** a 256-bit random token in a cookie. The database keeps only a hash of
-  it, so a copy of the database can't be used to sign in as anyone. A session lasts 30
-  days, or ends after 7 days unused. Sign out, sign out everywhere, or see the account's
-  sessions (when each started, and was last used) and end any one.
-- **The cookie:** `HttpOnly`, `SameSite=Lax`, and over HTTPS `Secure` with the
-  `__Host-` prefix, so no script can read it and no other host can set or receive it.
-- **Emails:** normalised, so the same letters in compatibility forms (`ａｎｎ` and
-  `ann`) are one account, and domains kept in their ASCII form (`bücher.de` is kept as
-  `xn--bcher-kva.de`); and invisible characters, quotes, and brackets refused, so
-  one can't carry markup into a page that shows it. (Letters from other alphabets that
-  look alike, such as a Cyrillic `а`, make a different address: see the threat model.)
-- **Guessing is slowed,** counted before any password is checked, and kept in the
-  database (so a restart doesn't reset it, every process shares it, and nothing can
-  flood it out):
-  - 10 tries at one account from one address in 15 minutes pauses that address for
-    that account (but not its owner, signing in from elsewhere);
-  - 100 tries at one account an hour from anywhere pauses signing in to it by password
-    (its owner can still sign in by link);
-  - 20 sign-ins, links, or password checks from one address in 15 minutes pauses
-    that address, and 200 from one IPv6 /48;
-  - 5 links asked for from one address in 15 minutes, and 20 from one IPv6 /48, so
-    nobody can use sign-up to email strangers in bulk.
+- **Sign in by an emailed link, a password, or a passkey:** the site chooses which
+  (`signInWith`).
+- **Accounts made only by a link to their email,** so nobody can sign up with someone
+  else's.
+- **Getting back in, separate from signing in** (`recovery`): a link to the account's
+  email, or, on a passkey-only site, only a link the app's own code makes.
+- **Passkeys** (WebAuthn), checked with nothing but `node:crypto`. Only public keys are
+  kept.
+- **Sessions** in the database, with only a hash of each token kept: sign out, sign out
+  everywhere, or see and end any one.
+- **Forgotten passwords;** and **changing the password or email** (as OWASP advises),
+  **or deleting the account,** after a recent sign-in.
+- **Notices** to the account when its password changes, a passkey is added or removed,
+  or it's deleted.
+- **Who may have an account,** if not everyone (`allow`), which can only refuse.
+- **Messages as data,** for you to send however you like (`deliver`), in modest-auth's
+  words (`emailFor`) or your own.
+- **A copy of an account's data** for its owner, **a record of events** (`onEvent`), and
+  **breached passwords refused** (`breachedRange`), if you want them.
+- **Guessing slowed, no telling who has an account,** sign-ins that can't take the
+  server down, and changes only from the site's own pages.
 
-  IPv6 addresses count by their /64; a port added by a proxy is ignored; and
-  `X-Forwarded-For` is only believed from the proxies you name, read past however
-  many there are. Name none and it's ignored, which is always safe; get it wrong and
-  the log says what to set.
-- **No telling who has an account:** signing in, signing up, and asking for a link
-  each give the same answer, after the same work, whether or not the email has one;
-  and an email goes either way (for a sign-in link to an email with no account, one
-  saying so). See the threat model for one small exception.
-- **Sign-ins can't take the server down:** password hashing runs only a few at a time,
-  sized to the machine (no more than its cores, half its memory, or Node's thread pool
-  less two, so file reads always keep a thread), with a short queue. Under a flood,
-  further sign-ins are refused as "busy" (without counting against anyone) until it
-  passes.
-- **Only the site's own pages can change anything:** every route that does requires
-  the site's own `Origin`, and a small JSON body (which another site's page can't send
-  without the browser asking first).
+How each works is in "In detail" below.
 
 ## Quick start
 
@@ -521,6 +463,117 @@ res.setHeader("set-cookie", sessionCookie(auth.startSession(user), "https://exam
 const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://example.org") ?? "");
 ```
 
+## In detail
+
+- **How people sign in is the site's choice,** and has to be made (`signInWith`): any of
+  an emailed link, a password, and a passkey, each on its own or mixed. Every account
+  is still made by a link to its email, which proves the address.
+- **Getting back in is separate:** a link to the account's email, whatever the methods
+  (to choose a new password where there are passwords, else to sign in once and add a
+  passkey). Or, on a site that signs in by passkey alone, `recovery: "app"`: no link
+  into an existing account is sent at anyone's asking, so an inbox is never a way in,
+  and only the app's own code makes one (`recoveryLink`), for someone it has vouched for.
+- **Passkeys** (WebAuthn), which can't be phished: added after a recent sign-in, and
+  used without typing an email (the device offers the site's passkeys). Checked with
+  nothing but `node:crypto`, step by step as the spec numbers them; no attestation, which
+  is for organisations that only allow certain hardware. Only public keys are kept, so a
+  copy of the database signs nothing. A counter that doesn't go up, where a passkey
+  counts at all, means a copy of it, and is refused. Adding or removing one is told to the
+  account's email; removing one signs every other session out; and getting back in by a
+  link is a fresh start, ending every session, link, and passkey of the account, so one a
+  thief added goes too.
+- **Accounts:** an email, made by a link emailed to that address, so nobody can sign up
+  with someone else's email. Where there are passwords, whoever opens the link chooses
+  one; where there aren't, opening a sign-in link makes the account.
+- **Who may have an account,** if not everyone: your `allow(contact)` is asked before a
+  link is sent, an account made, or a session started or used, so someone you stop
+  allowing is signed out at their next request, for good (their sessions end). It can
+  only refuse, never let anyone in,
+  and the answer to whoever's asking is the same either way.
+- **Changes need a recent sign-in:** changing the password or email, or deleting the
+  account, needs a session started in the last 10 minutes (`RECENT_MINUTES`); an older
+  one is asked to sign in again, by any way the site has. Nothing asks for the password,
+  so a stolen session can't be used to guess it.
+- **Forgotten passwords:** a password link, sent to an email that has an account,
+  chooses a new password, and signs out everywhere else.
+- **Changing the email,** as OWASP advises: the address the account has approves it
+  first, by a link, then the new address confirms it, by a link opened where the account
+  is signed in. Nothing goes to the new address until the old one approves, so someone
+  with the password, or a session, can't move the account away. Every session ends.
+- **Notices:** a message to the account when its password changes, a passkey is added
+  or removed, or it's deleted.
+- **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
+  was made, its sessions, and links waiting to be used; nothing that signs anyone in.
+- **A record of events,** if you want one: sessions started, wrong passwords, pauses,
+  new accounts, password and email changes, signing out, and deletions, given to your
+  `onEvent` after each answer, with the account's id and where it came from, but never
+  a password, token, or email.
+- **Breached passwords refused,** if you want: new passwords checked against a
+  breached-password set such as Have I Been Pwned's, through your `breachedRange`,
+  which is given only the first 5 characters of the password's SHA-1 (of its normal
+  form, and of the form typed if that differs).
+- **Signing in** with a link emailed on request, always offered, or with the password
+  where there is one: so someone whose sign-in is paused by another's guessing can still
+  get in.
+- **Messages are yours to send:** modest-auth gives your `deliver` each one as data
+  (what it's for, who it's to, and its link), after answering. Send it with any email
+  service, in modest-auth's own words (`emailFor`) or your own, in any language.
+- **Emailed links:** single-use, kept only as a hash, and short-lived (60 minutes to
+  choose a password, 15 to sign in). The token follows `#` in the link, which browsers
+  never send to a server, so it stays out of logs and `Referer` headers. At most 3 of
+  each kind to one address in 15 minutes, and asking for more never ends the ones sent
+  (using one does: then the address's other links end too), so nobody can flood an
+  inbox, or (while the email queue isn't full) stop its owner getting a link.
+- **New passwords** follow NIST SP 800-63B: 15 to 200 characters (counted as
+  characters, not bytes), any characters at all, no rules about mixing them, but not
+  one of the 5,500 passwords that long in two public lists of common ones (one from
+  the UK's National Cyber Security Centre), nor one with just spaces, punctuation,
+  capitals, or numbers on the end added; not made from the email; and not with fewer
+  than four different characters.
+- **Passwords:** hashed with scrypt at OWASP's suggested cost (N=2¹⁷, r=8), salted,
+  compared in constant time. Never stored, never logged. Each hash records its cost,
+  so the cost can be raised: an older hash is made again at the new cost the next time
+  its owner signs in.
+- **Sessions:** a 256-bit random token in a cookie. The database keeps only a hash of
+  it, so a copy of the database can't be used to sign in as anyone. A session lasts 30
+  days, or ends after 7 days unused. Sign out, sign out everywhere, or see the account's
+  sessions (when each started, and was last used) and end any one.
+- **The cookie:** `HttpOnly`, `SameSite=Lax`, and over HTTPS `Secure` with the
+  `__Host-` prefix, so no script can read it and no other host can set or receive it.
+- **Emails:** normalised, so the same letters in compatibility forms (`ａｎｎ` and
+  `ann`) are one account, and domains kept in their ASCII form (`bücher.de` is kept as
+  `xn--bcher-kva.de`); and invisible characters, quotes, and brackets refused, so
+  one can't carry markup into a page that shows it. (Letters from other alphabets that
+  look alike, such as a Cyrillic `а`, make a different address: see the threat model.)
+- **Guessing is slowed,** counted before any password is checked, and kept in the
+  database (so a restart doesn't reset it, every process shares it, and nothing can
+  flood it out):
+  - 10 tries at one account from one address in 15 minutes pauses that address for
+    that account (but not its owner, signing in from elsewhere);
+  - 100 tries at one account an hour from anywhere pauses signing in to it by password
+    (its owner can still sign in by link);
+  - 20 sign-ins, links, or password checks from one address in 15 minutes pauses
+    that address, and 200 from one IPv6 /48;
+  - 5 links asked for from one address in 15 minutes, and 20 from one IPv6 /48, so
+    nobody can use sign-up to email strangers in bulk.
+
+  IPv6 addresses count by their /64; a port added by a proxy is ignored; and
+  `X-Forwarded-For` is only believed from the proxies you name, read past however
+  many there are. Name none and it's ignored, which is always safe; get it wrong and
+  the log says what to set.
+- **No telling who has an account:** signing in, signing up, and asking for a link
+  each give the same answer, after the same work, whether or not the email has one;
+  and an email goes either way (for a sign-in link to an email with no account, one
+  saying so). See the threat model for one small exception.
+- **Sign-ins can't take the server down:** password hashing runs only a few at a time,
+  sized to the machine (no more than its cores, half its memory, or Node's thread pool
+  less two, so file reads always keep a thread), with a short queue. Under a flood,
+  further sign-ins are refused as "busy" (without counting against anyone) until it
+  passes.
+- **Only the site's own pages can change anything:** every route that does requires
+  the site's own `Origin`, and a small JSON body (which another site's page can't send
+  without the browser asking first).
+
 ## Standards
 
 - **NIST SP 800-63B:** passwords as it asks (length, blocklist, no composition rules,
@@ -540,7 +593,7 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 | JWTs | A session in the database can be ended at once; a JWT is valid until it expires. For a site with a server, sessions are simpler and safer. |
 | Attestation | It proves what device made a passkey, for organisations that only allow certain hardware; synced passkeys mostly can't give it, and nothing here relies on it. |
 | Plugins, adapters, hooks | Every extension point is a way to break the guarantees above. The functions you give it only deliver (`deliver`), observe (`onEvent`), or refuse (`allow`, `breachedRange`): none can let anyone in. |
-| Other databases | `node:sqlite` is built into Node; one database is one thing to get right. |
+| Other databases | `node:sqlite` is built into Node; one database is one thing to get right. Postgres perhaps later, beside SQLite, only if it adds no way in: see the roadmap. |
 | Social sign-in, SSO | Possibly later, one at a time, and only if they can be made as small and certain as the rest. See the roadmap. |
 | A user interface | Your forms, your words. |
 

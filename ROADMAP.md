@@ -3,7 +3,7 @@
 Each step adds as little as it can, and lands with tests for every security property
 it brings. Nothing here is a promise of a date.
 
-## Now: the core (0.x, unreleased)
+## The core
 
 - [x] Accounts: email and password
 - [x] Passwords: scrypt at OWASP's cost, constant-time checks, hashing a few at a time, sized to the machine
@@ -129,7 +129,7 @@ give one).
       second, unaffiliated maintainer reviewing changes.
 - [ ] A requirement-by-requirement check against OWASP ASVS 5.0 (authentication and
       sessions), in `docs/asvs.md`
-- [ ] Two sites using it in production
+- [ ] Two sites using it in production, before the API is called settled
 - [ ] Published to npm with provenance; GitHub's private vulnerability reporting on
 - [ ] The public API settled: from 1.0, breaking changes only in major versions
 
@@ -165,6 +165,10 @@ without becoming a plugin system.
     range and country.
 - **Push** isn't a contact: it reaches a device, not a person, and proves nothing about
   who's there. It can carry notices already, as `deliver` gets each message as data.
+- **Postgres, beside SQLite,** for sites on several machines, and for running
+  modest-auth as an auth server of its own, apart from the app. Only if it adds no way
+  in: the same queries and transactions, tested against both, with nothing in
+  modest-auth's code that behaves differently on one. SQLite stays the default.
 - **More sign-ins at once,** for a site with a few thousand people signing in around
   the same time. Checking a session is already cheap; a password sign-in is costly by
   design (about 170 ms and 130MB each; from 0.5.0, as many at once as the machine's
@@ -176,5 +180,5 @@ without becoming a plugin system.
 
 - JWT sessions
 - A plugin or hook system
-- Database adapters, or an ORM
+- An ORM, or adapters that let any database plug in
 - Configuration that makes it less secure
