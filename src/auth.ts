@@ -233,10 +233,11 @@ export type Auth = {
   /**
    * Moves the account to the email an email link was sent to, ending every session: only for `userId`, the
    * account signed in where the link is opened (the one it moves), so a link sent to someone else does nothing.
-   * `previous` is the email it had; `undo`, a link to send there that undoes the move, for UNDO_DAYS. Null when
-   * it moves back to an address it was moved away from, while that move's undo link lasts: that's the undo.
+   * `previous` is the email it had; `undo`, a link to send there that undoes the move, for UNDO_DAYS. Moving back
+   * to an address it was moved away from, while that move's undo link lasts, is that undo, in full (as
+   * `useUndoLink`): no `undo`, but a `reset` link to send to the address it's back at.
    */
-  useEmailLink(token: string, userId: string, from: string): User & { previous: string; undo: Link | null };
+  useEmailLink(token: string, userId: string, from: string): User & { previous: string } & ({ undo: Link; reset: null } | { undo: null; reset: Link });
   /**
    * Undoes a move, from the address it moved from: the account has that email again, every session ends, and
    * its password stops working (whoever moved it may know it). `reset` is a link to send there (to choose a new
@@ -777,6 +778,19 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     return stamp;
   };
   /**
+   * Undoes the move of `userId` away from the address `email` (it is now at `current`), whose undo link runs out at `expires`: the link to
+   * send there to get back in.
+   */
+  const undoMove = (userId: string, current: string, email: string, expires: number, from: string) => {
+    // No password any more: whoever moved it may know it. The way back in is the link that makes accounts.
+    moveBack(userId, current, email, null, expires);
+    // The way back in, for this account: none where only the app makes links into accounts (the undo took every
+    // passkey, and whoever reads this inbox may be who it was moved away from), so the message says so instead.
+    const reset = newLink(makes, email, recovery === "link" ? { of: { id: userId } } : { refused: "passkey-only" });
+    emit("email-change-undone", { userId, from });
+    return reset;
+  };
+  /**
    * The account `email` can still take back by an undo (its oldest live one), if only one can: whoever reads
    * that inbox moved it away. Several accounts moved away from one address is left to their undo links.
    */
@@ -1143,24 +1157,23 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const { email } = link;
       // Gone (or, in moveTo, the address taken meanwhile): nothing to move.
       const row = accountOf(link);
-      // Back to an address it was moved away from, while that move's undo link lasts: the same as using it. Later
-      // moves' undo links end, and none goes to the address it leaves, so whoever moved it there can't take it back.
+      // Back to an address it was moved away from, while that move's undo link lasts: that undo, in full, so whatever
+      // whoever moved it added (a password, passkeys, a later move's undo link) goes, as if the link were used.
       const home = db.prepare("SELECT expires FROM auth_links WHERE kind = 'undo' AND user = ? AND email = ? AND expires > ?").get(row.id, email, Date.now()) as
         | { expires: number }
         | undefined;
-      // Ended before the move, as in moveBack.
-      if (home) endLaterUndos(row.id, home.expires);
+      if (home) return { id: row.id, email, previous: row.email, undo: null, reset: undoMove(row.id, row.email, email, home.expires, from) };
       const stamp = moveTo(row.id, email, { was: row.stamp });
       endAllSessions(row.id);
       endLinks(row.email, row.id);
       endLinks(email);
-      // Otherwise an undo link for the address it moved from (each move its own: using one ends only later ones),
-      // stored only while the account is still as this move left it, so an undo landing meanwhile in another process
-      // (which ends later moves' undo links) isn't outlasted by this one.
-      const undo = home ? null : newLink("undo", row.email, { of: { id: row.id, stamp } });
+      // An undo link for the address it moved from (each move its own: using one ends only later ones), stored only
+      // while the account is still as this move left it, so an undo landing meanwhile in another process (which ends
+      // later moves' undo links) isn't outlasted by this one.
+      const undo = newLink("undo", row.email, { of: { id: row.id, stamp } });
       flush();
       emit("email-changed", { userId: row.id, from });
-      return { id: row.id, email, previous: row.email, undo };
+      return { id: row.id, email, previous: row.email, undo, reset: null };
     },
 
     useUndoLink(token, from) {
@@ -1171,13 +1184,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const { email, expires } = link;
       // Gone (or, in moveBack, the address since taken by another account): nothing to move back.
       const row = accountOf(link);
-      // No password any more: whoever moved it may know it. The way back in is the link that makes accounts.
-      moveBack(row.id, row.email, email, null, expires);
-      // The way back in, for this account: none where only the app makes links into accounts (the undo took every
-      // passkey, and whoever reads this inbox may be who it was moved away from), so the message says so instead.
-      const reset = newLink(makes, email, recovery === "link" ? { of: { id: row.id } } : { refused: "passkey-only" });
-      emit("email-change-undone", { userId: row.id, from });
-      return { id: row.id, email, reset };
+      return { id: row.id, email, reset: undoMove(row.id, row.email, email, expires, from) };
     },
 
     deleteAccount(session, from) {

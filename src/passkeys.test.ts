@@ -386,3 +386,13 @@ test("a passkey or session stored in another process as a fresh start begins doe
     assert.equal(left(), 0, "an undo");
   }
 });
+
+test("moving home takes a passkey added while the account was away, as an undo does", async () => {
+  const { auth, ann, session } = await setup();
+  const away = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
+  const thief = auth.startSession(await auth.signIn("thief@evil.example", PASSWORD, HERE));
+  add(auth, thief);
+  const owner = auth.startSession(await auth.signIn("thief@evil.example", PASSWORD, HERE));
+  auth.useEmailLink(must(must(auth.requestEmailChange(owner, "ann@example.org", HERE)).token), away.id, HERE);
+  assert.deepEqual(auth.passkeysOf(ann.id), []);
+});

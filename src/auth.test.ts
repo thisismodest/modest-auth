@@ -1066,15 +1066,15 @@ test("a copy of everything kept about an account, with nothing in it that signs 
   assert.equal(auth.dataOf("nobody"), null);
 });
 
-test("an undo still works when the account is already back at that address: everyone out, and the password useless", async () => {
+test("moving back to an address the account was moved from is that undo, in full: the password useless, and a link to get back in", async () => {
   const { auth } = fresh();
   const ann = await signUp(auth, "ann@example.org", PASSWORD, HERE);
-  const there = await move(auth, ann, PASSWORD, "ann@new.example", HERE);
-  await move(auth, there, PASSWORD, "ann@example.org", "192.0.2.200");
-  const session = await openSession(auth, "ann@example.org", "192.0.2.201");
-  assert.equal(auth.useUndoLink(must(must(there.undo).token), HERE).email, "ann@example.org");
-  assert.equal(auth.userOf(session), null);
-  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, "192.0.2.202"), code("wrong-credentials"));
+  const there = await move(auth, ann, PASSWORD, "thief@evil.example", HERE);
+  const home = await move(auth, there, PASSWORD, "ann@example.org", "192.0.2.200");
+  assert.equal(home.undo, null);
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, "192.0.2.202"), code("wrong-credentials"), "whoever moved it may know it");
+  assert.throws(() => auth.useUndoLink(must(must(there.undo).token), HERE), code("invalid-link"), "the undo is done");
+  assert.equal((await auth.usePasswordLink(must(must(home.reset).token), "ann's new long password", "192.0.2.203")).id, ann.id);
 });
 
 test("breached passwords: the range can be the fetch Response itself; one that isn't OK allows the password, and says so", async () => {
