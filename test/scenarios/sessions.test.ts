@@ -143,18 +143,12 @@ test("changing the password ends every other session and keeps this one (18)", a
   assert.equal(await whoIs(account.visitor), account.email);
 });
 
-test("confirming a move ends every session, and undoing it does too (18)", async () => {
+test("confirming a move ends every session (18)", async () => {
   const { account, other } = await twoSessions();
-  const first = account.email;
   const kept = tokenOf(account.visitor);
-  const { undo } = await moveAccount(h, account, freshEmail("moved"));
+  await moveAccount(h, account, freshEmail("moved"));
   assert.equal(await whoIs(other), null);
   assert.equal(await whoIs(withCookie(kept)), null);
-  const after = await signIn(h, account);
-  const undone = await h.visitor().post("/auth/undo-email", { token: undo });
-  assert.equal(undone.status, 200);
-  assert.equal(await whoIs(after), null);
-  await h.takeEmail((m) => m.to === first && m.link?.kind === "password");
 });
 
 test("deleting the account ends every session (18)", async () => {

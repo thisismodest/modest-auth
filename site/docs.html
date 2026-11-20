@@ -130,9 +130,9 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
                 <tr><td><code>GET /auth/sessions</code></td><td></td><td>The account's sessions: <code>{ sessions: [{ id, started, lastUsed, current }] }</code></td></tr>
                 <tr><td><code>POST /auth/end-session</code></td><td><code>{ id }</code></td><td>Ends one of them</td></tr>
                 <tr><td><code>GET /auth/my-data</code></td><td></td><td>Everything kept about the account, as a file to save</td></tr>
-                <tr><td><code>POST /auth/change-email</code></td><td><code>{ email }</code></td><td>Signed in recently: emails a link to the new address</td></tr>
-                <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From that link, signed in to the account: moves it, and ends every session</td></tr>
-                <tr><td><code>POST /auth/undo-email</code></td><td><code>{ token }</code></td><td>From the notice to the old address (for 7 days): moves it back, ends every session, and emails a link to get back in</td></tr>
+                <tr><td><code>POST /auth/change-email</code></td><td><code>{ email }</code></td><td>Signed in recently: emails the address the account has a link to approve the move</td></tr>
+                <tr><td><code>POST /auth/approve-email</code></td><td><code>{ token }</code></td><td>From that link: emails the new address a link to confirm it</td></tr>
+                <tr><td><code>POST /auth/confirm-email</code></td><td><code>{ token }</code></td><td>From the new address's link, signed in to the account: moves it, and ends every session</td></tr>
                 <tr><td><code>POST /auth/delete-account</code></td><td>none</td><td>Signed in recently: deletes the account and its sessions</td></tr>
               </tbody>
             </table>
@@ -212,7 +212,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
           <h2 id="link-page">The link page</h2>
           <p>
             Emailed links open your page at <code>linkPage</code>, with the token after <code>#</code>:
-            <code>/account/link#password=…</code>, <code>#sign-in=…</code>, <code>#email=…</code>, or <code>#undo=…</code>. Browsers never
+            <code>/account/link#password=…</code>, <code>#sign-in=…</code>, <code>#move=…</code>, or <code>#email=…</code>. Browsers never
             send what follows <code>#</code> to a server, so the token stays out of logs, and a mail
             service that opens links to check them can't use one up. The page:
           </p>
@@ -220,7 +220,7 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
             <li><strong>Reads the token first,</strong> before any other script runs, and takes it out of the address bar. Keep analytics and other sites' scripts off it.</li>
             <li><strong>Asks <code>/auth/link</code> which email it's for, and says so:</strong> "Choose a password for ann@example.org", or "Sign in as ann@example.org".</li>
             <li><strong>Waits for the person to act.</strong> It never acts by itself: someone could send a person their own link, to sign them in to the wrong account. Showing the email is what lets them notice.</li>
-            <li><strong>Sends the token</strong> with the password to <code>set-password</code>, or alone to <code>sign-in-with-link</code>, <code>confirm-email</code>, or <code>undo-email</code>.</li>
+            <li><strong>Sends the token</strong> with the password to <code>set-password</code>, or alone to <code>sign-in-with-link</code>, <code>approve-email</code>, or <code>confirm-email</code>.</li>
           </ol>
           <div class="window">
             <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>link.js</span></div>
@@ -397,9 +397,9 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>sessionsOf(userId, token)</code>, <code>endSessionOf(userId, id)</code></td><td>The account's sessions, and ending one</td></tr>
                 <tr><td><code>dataOf(userId)</code></td><td>Everything kept about the account</td></tr>
                 <tr><td><code>changePassword(session, next, from)</code></td><td>A new password, for a session started in the last 10 minutes; every session ends</td></tr>
-                <tr><td><code>requestEmailChange(session, email, from)</code></td><td>A link to send to the new address, or null (a recent session)</td></tr>
-                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email and an <code>undo</code> link for it (none when it moves back to an address it was moved from, while that undo lasts: that's the undo, in full, with a <code>reset</code> link)</td></tr>
-                <tr><td><code>useUndoLink(token, from)</code></td><td>Moves it back, makes its password useless, and gives a <code>reset</code> link to get back in</td></tr>
+                <tr><td><code>requestEmailChange(session, email, from)</code></td><td>A link to send to the address the account has, to approve the move, or null (a recent session)</td></tr>
+                <tr><td><code>approveEmailChange(token, from)</code></td><td>From that link: a link to send to the new address, to confirm it, or null</td></tr>
+                <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email</td></tr>
                 <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
                 <tr><td><code>recoveryLink(email)</code></td><td>A link into the account, for your own code to send to someone you've vouched for; never from a route</td></tr>
                 <tr><td><code>passkeyOptions(session, origin, from)</code>, <code>addPasskey(session, made, name, origin, from)</code></td><td>Options to make a passkey, and adding the one made (a recent session)</td></tr>

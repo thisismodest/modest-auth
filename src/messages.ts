@@ -17,12 +17,17 @@ export type Message =
   | { kind: "sign-up"; to: Contact; link: string; expires: number }
   /** A link that signs in. */
   | { kind: "sign-in"; to: Contact; link: string; expires: number }
-  /** A link to choose a new password, for an account that has forgotten it (or lost it, by an undone move). */
+  /** A link to choose a new password, for an account that has forgotten it. */
   | { kind: "new-password"; to: Contact; link: string; expires: number }
   /** A sign-in link was asked for an address with no account, on a site where accounts are made by choosing a password. */
   | { kind: "no-account"; to: Contact }
   /** A sign-in link was asked for an account that signs in by passkey only, where only the site can send a way back in. */
   | { kind: "passkey-only"; to: Contact }
+  /**
+   * To an account's address: someone signed in to it asked to move it to `email`. `link` approves it, and a link to
+   * confirm the new address goes there next. Nothing changes without it.
+   */
+  | { kind: "approve-email"; to: Contact; email: string; link: string; expires: number }
   /** A link that moves an account to this, its new address, opened where the account is signed in. */
   | { kind: "confirm-email"; to: Contact; link: string; expires: number }
   /** An account asked to move to this address, which has an account of its own: nothing changed. */
@@ -31,8 +36,6 @@ export type Message =
   | { kind: "password-changed"; to: Contact }
   /** The account was just deleted, with everything kept about it. */
   | { kind: "account-deleted"; to: Contact }
-  /** To the address an account just moved from: it moved to `email`, and `link` undoes it. */
-  | { kind: "email-changed"; to: Contact; email: string; link: string; expires: number }
   /**
    * A passkey was just added to the account. Its name isn't given: whoever added it chose it, and it mustn't speak
    * in the site's own email (the owner sees names in their list of passkeys).
@@ -42,16 +45,15 @@ export type Message =
   | { kind: "passkey-removed"; to: Contact };
 
 /**
- * The message for a link that `requestLink`, `requestEmailChange`, or `useUndoLink` (its `reset`) gave: what it's
- * for, from its kind and whether it can be opened, with `url`, the page it opens (the link page, with the token
- * after "#"). For an app using the parts without the handler, which does this itself. An undo link goes in the
- * "email-changed" message instead, which also names the new address.
+ * The message for a link that `requestLink`, `requestEmailChange`, `approveEmailChange`, or `recoveryLink` gave:
+ * what it's for, from its kind and whether it can be opened, with `url`, the page it opens (the link page, with the
+ * token after "#"). For an app using the parts without the handler, which does this itself.
  */
 export function messageFor(link: Link, url: string): Message {
-  if (link.kind === "undo") throw new Error('An undo link goes in an "email-changed" message, with the address the account moved to.');
   const to = { email: link.to };
   const { expires } = link;
   if (link.token === null) return { kind: link.refused, to };
+  if (link.kind === "move") return { kind: "approve-email", to, email: link.newEmail ?? "", link: url, expires };
   if (link.kind === "email") return { kind: "confirm-email", to, link: url, expires };
   if (!link.account) return { kind: "sign-up", to, link: url, expires };
   return { kind: link.kind === "password" ? "new-password" : "sign-in", to, link: url, expires };
@@ -78,11 +80,10 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
   const { origin, host } = new URL(site.origin);
   const title = name ?? host;
   const where = name ? `${name} (${host})` : host;
-  /** The link, and how long it lasts from now: in minutes up to two hours, then in days. */
+  /** The link, and how long it lasts from now, in minutes. */
   const open = (link: string, expires: number, how = "") => {
     const minutes = Math.max(1, Math.ceil((expires - Date.now()) / MINUTE));
-    const left = minutes <= 120 ? `${minutes} minutes` : `${Math.ceil(minutes / (24 * 60))} days`;
-    return `within ${left}${how}:\n\n${link}\n\n`;
+    return `within ${minutes} minutes${how}:\n\n${link}\n\n`;
   };
   const notYou = "If it wasn't you, you can ignore this email.\n";
   switch (message.kind) {
@@ -110,6 +111,11 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
       return {
         subject: `Sign in to ${title}`,
         text: `Someone asked for a link to sign in to ${where} with this email address. Your account signs in with a passkey only, so no link is sent: use your passkey at ${origin}. If you've lost every passkey, ask the site to help you back in.\n\n${notYou}`,
+      };
+    case "approve-email":
+      return {
+        subject: `Approve changing your email address on ${title}`,
+        text: `Someone signed in to your account on ${where} asked to change its email address from this one to ${message.email}. To approve it, open this link ${open(message.link, message.expires)}A link to confirm the new address goes there next. If it wasn't you, don't open it, and nothing changes: someone else may be signed in to your account, so sign in at ${origin}, sign out everywhere, and change how you sign in.\n`,
       };
     case "confirm-email":
       return {
@@ -140,11 +146,6 @@ export function emailFor(message: Message, site: Site): { subject: string; text:
       return {
         subject: `Your account was deleted on ${title}`,
         text: `Your account on ${where} was just deleted, with everything kept about it, and every session ended.\n\nIf it wasn't you, someone could sign in to it: sign up again at ${origin}, and keep this address's inbox safe.\n`,
-      };
-    case "email-changed":
-      return {
-        subject: `Your email address was changed on ${title}`,
-        text: `The email address for your account on ${where} was just changed from this one to ${message.email}, and every session ended.\n\nIf it wasn't you, undo it ${open(message.link, message.expires, " at this link, which moves the account back to this address, signs everyone out, and sends you a link to get back in")}`,
       };
   }
 }

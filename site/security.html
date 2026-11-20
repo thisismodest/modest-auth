@@ -92,9 +92,9 @@
                 <tr><td>Guessing or reusing a link</td><td>256-bit tokens, single-use, 60 minutes to choose a password and 15 to sign in; using one, or a new password, ends the rest</td></tr>
                 <tr><td>A link leaking from its URL</td><td>The token follows <code>#</code>, which browsers never send to a server; a mail service checking links can't use one</td></tr>
                 <tr><td>Sending someone your own link</td><td>The link page shows which email it's for, and acts only when the person does</td></tr>
-                <tr><td>Moving someone's account away</td><td>Needs a sign-in in the last 10 minutes, and a link to the new address opened where the account is signed in; the old address is told, and can undo it for 7 days, which also makes the password useless</td></tr>
+                <tr><td>Moving someone's account away</td><td>As OWASP advises: a sign-in in the last 10 minutes asks, the address the account has approves by a link, and only then does the new address get a link to confirm it, opened where the account is signed in</td></tr>
                 <tr><td>A stolen session changing the account</td><td>Changing the password or email, or deleting the account, needs a sign-in in the last 10 minutes; nothing asks for the password, so there's nothing to guess with it</td></tr>
-                <tr><td>Changes nobody noticed</td><td>An email when the password changes, and to the old address when the email does</td></tr>
+                <tr><td>Changes nobody noticed</td><td>An email when the password changes, a passkey is added or removed, or the account is deleted; and the account's own address must approve any change to it</td></tr>
                 <tr><td>Flooding an inbox</td><td>3 links of each kind to one address in 15 minutes, the rest quietly not sent; each one sent still works, so nobody can stop its owner getting one</td></tr>
                 <tr><td>Stealing a session</td><td>A cookie scripts can't read, sent only to this exact site over HTTPS; a session ends after 7 days unused, and 30 at most</td></tr>
                 <tr><td>Other sites acting for someone</td><td>Every change must come from the site's own pages, as JSON</td></tr>
@@ -114,7 +114,7 @@
           <ul class="checks not">
             <li><strong>Whoever reads an inbox can take over its account,</strong> by choosing a new password or signing in by link, as on most sites.</li>
             <li><strong>Anyone can have a few emails sent to any address:</strong> up to 5 from one address in 15 minutes. They say who sent them and what they're for, but it's mail nobody asked for.</li>
-            <li><strong>A session stolen in its first 10 minutes</strong> can change the account's password or email. The account's email is told, with a way back.</li>
+            <li><strong>A session stolen in its first 10 minutes</strong> can change the account's password, or ask to change its email (which the account's own address must approve). The account's email is told of each.</li>
             <li><strong>Someone with many addresses can pause signing in with the password to an account for up to an hour.</strong> Its owner can still sign in by an emailed link.</li>
             <li><strong>Letters from other alphabets that look alike</strong> (a Cyrillic "а") make a different account that looks the same.</li>
             <li><strong>An account is only as strong as its way back in:</strong> by default, a link to its email. A site that signs in by passkey alone can choose <code>recovery: "app"</code>, so an inbox is never a way in.</li>

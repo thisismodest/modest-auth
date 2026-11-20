@@ -2,7 +2,6 @@
 // themselves (signatures, origins, the binary parts) are tested in webauthn.test.ts.
 
 import assert from "node:assert/strict";
-import type { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { makePasskey } from "../test/authenticator.ts";
 import { code, count, fresh, HERE, later, must, PASSWORD, withClock } from "../test/helpers.ts";
@@ -23,18 +22,6 @@ const setup = async (options: Parameters<typeof fresh>[0] = {}) => {
 const add = (auth: Auth, session: string, passkey = makePasskey(), name?: string) => {
   const options = auth.passkeyOptions(session, ORIGIN, HERE);
   return { passkey, added: auth.addPasskey(session, passkey.create(options.challenge, ORIGIN), name, ORIGIN, HERE) };
-};
-
-/**
- * What another process would find at each change of the account's stamp: how many of its passkeys were left. `clear`
- * forgets what's been seen.
- */
-const watchStamps = (db: DatabaseSync) => {
-  db.exec(`CREATE TEMP TABLE seen (passkeys INTEGER);
-    CREATE TEMP TRIGGER watching AFTER UPDATE OF stamp ON auth_users
-    BEGIN INSERT INTO seen SELECT count(*) FROM auth_passkeys WHERE user = NEW.id; END`);
-  const seen = () => (db.prepare("SELECT passkeys FROM seen").all() as { passkeys: number }[]).map((row) => row.passkeys);
-  return Object.assign(seen, { clear: () => void db.exec("DELETE FROM seen") });
 };
 
 /** Signing in with a passkey as a person does: options, then their device's answer. */
@@ -185,17 +172,6 @@ test("removing needs a recent sign-in, and only the account's own", async () => 
   });
 });
 
-test("an undone move removes every passkey, so one a thief added can't sign in", async () => {
-  const { auth, ann, session } = await setup();
-  const own = add(auth, session).passkey;
-  const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
-  const thief = auth.startSession(await auth.signIn("thief@evil.example", PASSWORD, "192.0.2.40"));
-  const thiefs = add(auth, thief).passkey;
-  auth.useUndoLink(must(must(moved.undo).token), "192.0.2.41");
-  for (const passkey of [thiefs, own]) assert.throws(() => signInWith(auth, passkey, ann.id), code("invalid-passkey"));
-  assert.deepEqual(auth.passkeysOf(ann.id), []);
-});
-
 test("passkeys go with the account, and its copy of data names them without their keys", async () => {
   const { db, auth, ann, session } = await setup();
   add(auth, session, makePasskey(), "Laptop");
@@ -287,16 +263,6 @@ test("where links are a sign-in method, signing in by one keeps passkeys, unless
   assert.equal(auth.userOf(other), null);
 });
 
-test("with recovery by the app, an undo sends no way in to the old address", async () => {
-  const { auth } = fresh({ signInWith: ["passkey"], recovery: "app" });
-  const ann = auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@old.example", HERE)).token), HERE);
-  const session = auth.startSession(ann);
-  const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "ann@new.example", HERE)).token), ann.id, HERE);
-  const back = auth.useUndoLink(must(must(moved.undo).token), "192.0.2.63");
-  assert.deepEqual([back.reset.token, back.reset.refused], [null, "passkey-only"], "whoever reads the old inbox gets no link in");
-  assert.ok(auth.recoveryLink("ann@old.example"), "the app can still let its owner back in");
-});
-
 test("recoveryLink is told as an event, with no token in it", async () => {
   const events: AuthEvent[] = [];
   const { auth } = fresh({ signInWith: ["passkey"], recovery: "app", onEvent: (e) => void events.push(e) });
@@ -313,16 +279,6 @@ test("a passkey's name can't hold a web address", async () => {
   assert.equal(add(auth, session, makePasskey(), "iPhone. If not you, secure it at www.example-help.com").added.name, "Passkey");
 });
 
-test("a passkey isn't stored if the account changes as it's added, so a fresh start in another process isn't outlasted", async () => {
-  const { db, auth, ann, session } = await setup();
-  const options = auth.passkeyOptions(session, ORIGIN, HERE);
-  // Another process's fresh start, landing just after this one's stamp changes and before the passkey is stored.
-  db.exec("CREATE TEMP TRIGGER elsewhere AFTER UPDATE OF stamp ON auth_users BEGIN UPDATE auth_users SET stamp = 'elsewhere' WHERE id = NEW.id; END");
-  const passkey = makePasskey();
-  assert.throws(() => auth.addPasskey(session, passkey.create(options.challenge, ORIGIN), undefined, ORIGIN, HERE), code("sign-in-again"));
-  assert.deepEqual(auth.passkeysOf(ann.id), []);
-});
-
 test("a fresh start by sign-in link takes the password too, so one a thief set doesn't outlast it", async () => {
   const { auth, ann, session } = await setup();
   await auth.changePassword(session, "the thief's own long password", HERE);
@@ -331,68 +287,20 @@ test("a fresh start by sign-in link takes the password too, so one a thief set d
   await assert.rejects(auth.signIn(ann.email, "the thief's own long password", HERE), code("wrong-credentials"));
 });
 
-test("passkeys go before the stamp changes, so a passkey sign-in in another process can't read the new stamp and keep its session", async () => {
-  const { db, auth, ann, session } = await setup();
+test("a change is all or nothing: one that fails part-way changes nothing, and tells no event", async () => {
+  const events: AuthEvent[] = [];
+  const { db, auth, ann, session } = await setup({ onEvent: (event) => void events.push(event) });
   add(auth, session);
-  add(auth, session);
-  const seen = watchStamps(db);
-  const [first] = auth.passkeysOf(ann.id);
-  auth.removePasskey(session, must(first).id, HERE);
-  assert.deepEqual(seen(), [1], "removing one: gone when the stamp changes");
-  seen.clear();
   const link = must(auth.requestLink("sign-in", "ann@example.org", HERE));
-  auth.useSignInLink(must(link.token), HERE, { reset: true });
-  assert.deepEqual(seen(), [0], "a fresh start: every one gone when the stamp changes");
-});
-
-test("an undo takes every passkey before the stamp changes, too", async () => {
-  const { db, auth, ann, session } = await setup();
-  add(auth, session);
-  const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
-  const seen = watchStamps(db);
-  auth.useUndoLink(must(must(moved.undo).token), HERE);
-  assert.deepEqual(seen(), [0]);
-});
-
-/**
- * Another process's passkey and session, stored just as a fresh start clears the account's first (both checked against
- * the stamp it had then). How many of them are left.
- */
-const arriveLate = (db: DatabaseSync) => {
-  db.exec(`CREATE TEMP TABLE arrived (done INTEGER);
-    CREATE TEMP TRIGGER arriving AFTER DELETE ON auth_passkeys WHEN NOT EXISTS (SELECT 1 FROM arrived)
-    BEGIN
-      INSERT INTO arrived VALUES (1);
-      INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) VALUES ('late', OLD.user, x'00', -7, 0, 'Late', 0);
-      INSERT INTO auth_sessions (token, user, expires, seen) VALUES ('late', OLD.user, 9000000000000000, 0);
-    END`);
-  return () => count(db, "auth_passkeys WHERE id = 'late'") + count(db, "auth_sessions WHERE token = 'late'");
-};
-
-test("a passkey or session stored in another process as a fresh start begins doesn't outlast it", async () => {
-  {
-    const { db, auth, session } = await setup();
-    add(auth, session);
-    const left = arriveLate(db);
-    auth.useSignInLink(must(must(auth.requestLink("sign-in", "ann@example.org", HERE)).token), HERE, { reset: true });
-    assert.equal(left(), 0, "a reset sign-in link");
-  }
-  {
-    const { db, auth, ann, session } = await setup();
-    add(auth, session);
-    const moved = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
-    const left = arriveLate(db);
-    auth.useUndoLink(must(must(moved.undo).token), HERE);
-    assert.equal(left(), 0, "an undo");
-  }
-});
-
-test("moving home takes a passkey added while the account was away, as an undo does", async () => {
-  const { auth, ann, session } = await setup();
-  const away = auth.useEmailLink(must(must(auth.requestEmailChange(session, "thief@evil.example", HERE)).token), ann.id, HERE);
-  const thief = auth.startSession(await auth.signIn("thief@evil.example", PASSWORD, HERE));
-  add(auth, thief);
-  const owner = auth.startSession(await auth.signIn("thief@evil.example", PASSWORD, HERE));
-  auth.useEmailLink(must(must(auth.requestEmailChange(owner, "ann@example.org", HERE)).token), away.id, HERE);
-  assert.deepEqual(auth.passkeysOf(ann.id), []);
+  await later();
+  events.length = 0;
+  // A fresh start that fails as it takes the passkeys (the sessions have already ended by then).
+  db.exec("CREATE TEMP TRIGGER failing BEFORE DELETE ON auth_passkeys BEGIN SELECT RAISE(ABORT, 'failed part-way'); END");
+  assert.throws(() => auth.useSignInLink(must(link.token), HERE, { reset: true }), /failed part-way/);
+  await later();
+  assert.equal(auth.userOf(session)?.id, ann.id, "the sessions it ended are back");
+  assert.equal(auth.passkeysOf(ann.id).length, 1);
+  assert.deepEqual(events, [], "nothing told of a change that wasn't kept");
+  db.exec("DROP TRIGGER failing");
+  assert.equal(auth.useSignInLink(must(link.token), HERE, { reset: true }).id, ann.id, "and the link wasn't used up");
 });

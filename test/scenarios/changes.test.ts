@@ -1,16 +1,14 @@
-// Scenarios 46 to 54 of docs/scenarios.md: changing the password and the email, and the undo link.
+// Scenarios 46 to 54 of docs/scenarios.md: changing the password and the email.
 
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, before, test } from "node:test";
 import {
-  type Account,
-  askForLink,
+  askToMove,
   freshEmail,
   freshPassword,
   type Harness,
   isRefusal,
-  moveAccount,
   rowsMentioning,
   signIn,
   signUp,
@@ -29,13 +27,6 @@ after(() => h.close());
 const signsIn = async (email: string, password: string) => (await unlessBusy(() => h.visitor().post("/auth/sign-in", { email, password }))).status === 200;
 const linkStillGood = async (token: string) => (await h.visitor().post("/auth/link", { token })).status === 200;
 
-/** Asks to move `account` to `to`: the token of the link emailed there. */
-async function askToMove(account: Account, to: string): Promise<string> {
-  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: to }));
-  assert.equal(asked.status, 202, asked.text);
-  return (await h.takeEmail((m) => m.to === to && m.link?.kind === "email")).link?.token ?? "";
-}
-
 test("a password change keeps this session, ends the others, and sends a notice without the password (46)", async () => {
   const account = await signUp(h);
   const other = await signIn(h, account);
@@ -53,7 +44,7 @@ test("a move link does nothing signed out, or signed in to another account, and 
   const account = await signUp(h);
   const victim = await signUp(h);
   const to = freshEmail("new");
-  const token = await askToMove(account, to);
+  const token = await askToMove(h, account, to);
 
   const signedOut = await h.visitor().post("/auth/confirm-email", { token });
   assert.ok(isRefusal(signedOut.status), `signed out: ${signedOut.status}`);
@@ -73,7 +64,7 @@ test("a move link does nothing signed out, or signed in to another account, and 
 test("a move to an address someone signed up at before it was confirmed fails cleanly, merging nothing (48)", async (t) => {
   const account = await signUp(h);
   const to = freshEmail("new");
-  const token = await askToMove(account, to);
+  const token = await askToMove(h, account, to);
   const squatter = await signUp(h, to);
   const confirmed = await account.visitor.post("/auth/confirm-email", { token });
   t.diagnostic(`confirm answered ${confirmed.status} ${confirmed.text}`);
@@ -84,75 +75,35 @@ test("a move to an address someone signed up at before it was confirmed fails cl
   assert.ok(await signsIn(account.email, account.password));
 });
 
-test("undoing a move when the old address has an account again leaves no two accounts sharing it (49)", async (t) => {
-  // Another account moves to the old address before the undo.
-  const ann = freshEmail("ann");
-  const first = await signUp(h, ann);
-  const { undo } = await moveAccount(h, first, freshEmail("a2"));
-  const other = await signUp(h);
-  await moveAccount(h, other, ann);
-  const undone = await h.visitor().post("/auth/undo-email", { token: undo });
-  t.diagnostic(`undo, with another account now at the old address: ${undone.status} ${undone.text}`);
-  assert.ok(undone.status < 500);
-  assert.ok(rowsMentioning(h.db, "auth_users", ann) <= 1, "one account at most at the old address");
-
-  // A password link at the old address first (which restores the account), then the undo.
-  const bea = freshEmail("bea");
-  const second = await signUp(h, bea);
-  const moved = await moveAccount(h, second, freshEmail("b2"));
-  const reset = await askForLink(h, "password", bea);
-  assert.equal((await unlessBusy(() => h.visitor().post("/auth/set-password", { token: reset, password: freshPassword() }))).status, 200);
-  const late = await h.visitor().post("/auth/undo-email", { token: moved.undo });
-  t.diagnostic(`undo after a password link restored the account: ${late.status} ${late.text}`);
-  assert.ok(late.status < 500);
-  assert.ok(rowsMentioning(h.db, "auth_users", bea) <= 1, "one account at most at the old address");
-});
-
-test("the owner's undo outlasts a thief's two moves and new password, and gives the owner a way back in (50)", async () => {
+test("a thief with the password can't move the account: nothing reaches the new address until the old one approves (49)", async () => {
   const owner = await signUp(h);
-  const home = owner.email;
-  const ownerPassword = owner.password;
-  // The thief has the password and a session.
-  const thief: Account = { ...owner, visitor: await signIn(h, owner) };
-  const { undo } = await moveAccount(h, thief, freshEmail("t1"));
-  await signIn(h, thief, thief.visitor);
-  await moveAccount(h, thief, freshEmail("t2"));
-  await signIn(h, thief, thief.visitor);
-  const thiefPassword = freshPassword();
-  assert.equal((await unlessBusy(() => thief.visitor.post("/auth/password", { next: thiefPassword }))).status, 200);
-  // The home address's password links are used up meanwhile.
-  for (let i = 0; i < 3; i++) await h.visitor().post("/auth/send-password-link", { email: home });
+  const thief = await signIn(h, owner);
+  const to = freshEmail("thief");
+  const before = h.emails.length;
+  const asked = await unlessBusy(() => thief.post("/auth/change-email", { email: to }));
+  assert.equal(asked.status, 202, asked.text);
   await wait(200);
-  const before = h.emails.filter((m) => m.to === home && m.link?.kind === "password").length;
-
-  const undone = await h.visitor().post("/auth/undo-email", { token: undo });
-  assert.equal(undone.status, 200, undone.text);
-  assert.equal(await whoIs(thief.visitor), null);
-  assert.equal(await signsIn(home, ownerPassword), false, "the old password is useless");
-  assert.equal(await signsIn(home, thiefPassword), false, "and the thief's");
-  await wait(200);
-  const links = h.emails.filter((m) => m.to === home && m.link?.kind === "password");
-  assert.equal(links.length, before + 1, "a password link even past the limit");
-  const visitor = h.visitor();
-  assert.equal(
-    (await unlessBusy(() => visitor.post("/auth/set-password", { token: links[links.length - 1]?.link?.token, password: freshPassword() }))).status,
-    200,
+  const sent = h.emails.slice(before);
+  assert.deepEqual(
+    sent.map((m) => [m.to, m.link?.kind]),
+    [[owner.email, "move"]],
+    "one email, to the address the account has, asking it to approve",
   );
-  assert.equal(await whoIs(visitor), home);
+  assert.equal(rowsMentioning(h.db, "auth_users", owner.email), 1, "nothing moved");
+  assert.ok(await signsIn(owner.email, owner.password));
 });
 
-test("a thief undoing their own second move doesn't cancel the owner's undo of the first (51)", async () => {
-  const owner = await signUp(h);
-  const home = owner.email;
-  const thief: Account = { ...owner, visitor: await signIn(h, owner) };
-  const first = await moveAccount(h, thief, freshEmail("t1"));
-  await signIn(h, thief, thief.visitor);
-  const second = await moveAccount(h, thief, freshEmail("t2"));
-  assert.equal((await h.visitor().post("/auth/undo-email", { token: second.undo })).status, 200);
-  const undone = await h.visitor().post("/auth/undo-email", { token: first.undo });
-  assert.equal(undone.status, 200, undone.text);
-  assert.equal(rowsMentioning(h.db, "auth_users", home), 1);
-  await h.takeEmail((m) => m.to === home && m.link?.kind === "password");
+test("an approval link signs nobody in, works once, and does nothing once the account has moved elsewhere (50)", async () => {
+  const account = await signUp(h);
+  const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: freshEmail("a") }));
+  assert.equal(asked.status, 202);
+  const stale = (await h.takeEmail((m) => m.to === account.email && m.link?.kind === "move")).link?.token ?? "";
+  const visitor = h.visitor();
+  const confirm = await askToMove(h, account, freshEmail("b"));
+  assert.equal(await whoIs(visitor), null, "approving signs nobody in");
+  assert.equal((await account.visitor.post("/auth/confirm-email", { token: confirm })).status, 200);
+  const late = await visitor.post("/auth/approve-email", { token: stale });
+  assert.ok(isRefusal(late.status), `an approval for an address the account no longer has: ${late.status}`);
 });
 
 test("a move asked for while the password changed isn't stored (52)", (t) => {
@@ -174,17 +125,7 @@ test("a move to the same address, in any spelling, is refused or does nothing, w
     const sent = h.emails.slice(before);
     t.diagnostic(`${to}: ${asked.status} ${asked.text}; emails: ${sent.map((m) => `${m.to} ${m.link?.kind ?? "notice"}`).join(", ") || "none"}`);
     assert.ok(asked.status < 500);
-    const link = sent.find((m) => m.link?.kind === "email");
-    if (link) {
-      const confirmed = await account.visitor.post("/auth/confirm-email", { token: link.link?.token });
-      t.diagnostic(`its link: ${confirmed.status}`);
-      await wait(200);
-    }
-    assert.equal(h.emails.slice(before).filter((m) => m.link?.kind === "undo").length, 0, "no old-address notice to the same inbox");
+    assert.equal(sent.length, 0, "nothing sent");
     assert.equal(await whoIs(account.visitor), account.email, "still signed in, at the same address");
   }
-});
-
-test("an undo link at 7 days and a minute is refused (54)", (t) => {
-  t.skip("needs the clock moved on, and README documents no way to control time");
 });

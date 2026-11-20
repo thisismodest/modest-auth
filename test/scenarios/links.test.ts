@@ -158,7 +158,7 @@ test("every emailed link carries its token only after '#', never in the query or
   const first = account.email;
   await moveAccount(h, account, freshEmail("moved"));
   const linked = h.emails.filter((m) => m.link && (m.to === first || m.to === account.email));
-  assert.deepEqual(new Set(linked.map((m) => m.link?.kind)), new Set(["password", "sign-in", "email", "undo"]));
+  assert.deepEqual(new Set(linked.map((m) => m.link?.kind)), new Set(["password", "sign-in", "move", "email"]));
   for (const email of linked) {
     const token = email.link?.token ?? "";
     assert.equal(email.text.split(token).length - 1, 1, "the token appears once");
@@ -206,11 +206,11 @@ test("a password link used after its account was deleted gives none of the old a
   }
 });
 
-test("after two accounts moved away from one address in turn, a password link there restores neither (12)", async (t) => {
+test("after two accounts moved away from one address in turn, a password link there opens neither (12)", async (t) => {
   const ann = freshEmail("ann");
   const x = await signUp(h, ann);
   await moveAccount(h, x, freshEmail("x"));
-  // A second account comes to ann@ by a move (a password link there would restore the first), then leaves.
+  // A second account comes to ann@ by a move, then leaves.
   const y = await signUp(h, freshEmail("y"));
   await signIn(h, y, y.visitor);
   await moveAccount(h, y, ann);
@@ -221,7 +221,7 @@ test("after two accounts moved away from one address in turn, a password link th
   const visitor = h.visitor();
   const answer = await unlessBusy(() => visitor.post("/auth/set-password", { token, password: freshPassword() }));
   t.diagnostic(`set-password at ann@ answered ${answer.status}`);
-  // Neither moved account has had its password made useless, nor its address taken back.
+  // Neither moved account is opened, nor its password changed: the link is a sign-up.
   for (const account of [x, y]) {
     const back = await unlessBusy(() => h.visitor().post("/auth/sign-in", { email: account.email, password: account.password }));
     assert.equal(back.status, 200, `${account.email} still signs in where it moved`);

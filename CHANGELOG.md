@@ -8,8 +8,9 @@ Every change that affects how it's used, or what it promises. The format follows
 
 ## [0.6.0] - not yet released
 
-How people sign in is now the site's choice, passkeys are one of the choices, the
-account's version is one stamp, and messages are data for the app to send. Several changes break the API; upgrading is below.
+How people sign in is now the site's choice, passkeys are one of the choices, moving an
+account to a new email needs its current address to approve, and messages are data for
+the app to send. Several changes break the API; upgrading is below.
 
 ### Changed
 
@@ -24,7 +25,14 @@ account's version is one stamp, and messages are data for the app to send. Sever
   sign-in link, opened once to add a passkey). With `signInWith: ["passkey"]`,
   `recovery: "app"` sends no link into an existing account at anyone's asking (the
   inbox gets a `passkey-only` message instead), and `recoveryLink(email)` makes one for
-  the app's own code alone.
+  the app's own code alone. Getting back in by a link is a fresh start: every session,
+  link, and passkey of the account ends (a sign-in link's `reset` takes the password
+  too).
+- **Changing the email, as OWASP advises:** the address the account has approves the
+  move first (`approve-email`, `approveEmailChange`, the `approve-email` message), and
+  only then does the new address get a link to confirm it. Someone with the password,
+  or a session, can't move an account away. The undo link to the old address is gone
+  with the need for it.
 - **Changing the password or email, or deleting the account, needs a recent sign-in**
   (a session started in the last 10 minutes, `RECENT_MINUTES`), not the password. An
   older session is refused with `403` and the code `sign-in-again`. `changePassword`,
@@ -34,97 +42,67 @@ account's version is one stamp, and messages are data for the app to send. Sever
   session can't be used to guess it, and the 10 checks an hour by an account's own
   sessions are gone with the checks.
 - **`sendEmail` is now `deliver(message, { signal })`:** each message is data (`kind`,
-  `to`, and its `link` and `expires`, or the new email for `email-changed`), to send
+  `to`, and its `link` and `expires`, or the new address for `approve-email`), to send
   however the app likes. `emailFor(message, { origin, name })` writes modest-auth's own
   email for one; the handler's `name` moved there.
 - **Every account has a stamp,** replaced when how it's reached changes (a new password,
-  a new email, an undone move). A session starts, a move is stored, a password changes,
-  or an account goes only while the stamp is the one checked: one rule for every race,
-  where the password's hash and the email did that before.
-- An undone move leaves the account with no password (rather than one nothing
-  matches), and sends a link to get back in: to choose a new password, or, without
-  passwords, to sign in. `useEmailLink`'s `undo` is a `Link`, like `useUndoLink`'s
-  `reset`.
+  a new email, a passkey added or removed). A session starts, a password changes, a
+  passkey is added, or an account goes only while the stamp is the one checked.
+- **Each change of more than one statement is one transaction,** so another process
+  sharing the database waits for it and sees all of it or none; one that fails
+  part-way changes nothing, and tells no event.
 - A password-only sign-in and a link's session refused for a change meanwhile say so
   as their own way would: a wrong password, or an expired link.
+- The per-account limit's pause always says to wait the whole hour, so it doesn't tell
+  when someone last tried the email.
 
 ### Added
 
 - **Passkeys** (WebAuthn), as a third sign-in method (`signInWith: ["link", "passkey"]`,
   with or without `"password"`), checked with nothing but `node:crypto`: added after a
   recent sign-in, used without typing an email, listed, and removed, each told to the
-  account's address. Routes `passkey-options`, `add-passkey`, `sign-in-options`,
-  `sign-in-with-passkey`, `passkeys`, and `remove-passkey`; functions `passkeyOptions`,
-  `addPasskey`, `signInOptions`, `signInWithPasskey`, `passkeysOf`, and `removePasskey`;
-  the error code `invalid-passkey`; the events `passkey-added` and `passkey-removed`; and
-  the messages of the same names. Getting back in by a link is a fresh start (every
-  session, link, and passkey of the account ends); removing a passkey signs every other
-  session out. `useSignInLink`'s `reset` option (`reset: "true"` at
-  `sign-in-with-link`) makes a sign-in link a fresh start on a site that signs in by
-  link, for someone who has lost a passkey.
+  account's address (without the passkey's name, which whoever added it chose).
+  Routes `passkey-options`, `add-passkey`, `sign-in-options`, `sign-in-with-passkey`,
+  `passkeys`, and `remove-passkey`; functions `passkeyOptions`, `addPasskey`,
+  `signInOptions`, `signInWithPasskey`, `passkeysOf`, and `removePasskey`; the error
+  code `invalid-passkey`; the events `passkey-added` and `passkey-removed`; and the
+  messages of the same names. Removing a passkey signs every other session out.
+  `useSignInLink`'s `reset` option (`reset: "true"` at `sign-in-with-link`) makes a
+  sign-in link a fresh start on a site that signs in by link, for someone who has lost
+  a passkey.
 - `allow(contact)`: who may have an account, if not everyone. Asked before a link is
   sent or used, an account made, or a session started or used, so someone the app stops
-  allowing is signed out at their next request, for good. It can only refuse; a mistake in it is a
-  refusal. A refused address is answered as any other and sent nothing.
-- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`, `messageFor`, `recoveryLink`, `Refusal` (why a link asked for has nothing to open, on the link itself), `auth.signInLinks`
-  (a link's message, for apps using the parts), and `auth.signInWith`.
-
+  allowing is signed out at their next request, for good. It can only refuse; a mistake
+  in it is a refusal. A refused address is answered as any other and sent nothing.
+- `Message`, `Site`, `Contact`, `SignInMethod`, `RECENT_MINUTES`, `emailFor`,
+  `messageFor` (a link's message, for apps using the parts), `recoveryLink`,
+  `approveEmailChange`, `Refusal` (why a link asked for has nothing to open, on the
+  link itself), `auth.signInLinks`, and `auth.signInWith`.
 - The events `account-reset` (a fresh start by link) and `recovery-link-made`.
 - A notice to the account's address when it's deleted (`account-deleted`), and the
   `Cross-Origin-Resource-Policy: same-origin` header on every answer.
 
 ### Fixed
 
-Found by three rounds of adversarial review of this release.
+Found by adversarial review of this release; each was also in 0.5.0.
 
 - The copy of an account's data (`my-data`) showed a move it asked for only when the new
   address had no account, so anyone with an account could learn whether another address
-  had one (also true in 0.5.0). Its move requests are now shown the same either way.
+  had one. Its move requests are now shown the same either way.
 - A password change still hashing when its session was signed out still landed. It now
   lands only while the session that asked is there.
-- A session refused by `allow` came back if `allow` later said yes; now it ends for good.
-  A password check refuses an address `allow` refuses, even for an app that only checks.
-- Accepting an email move checks the account's stamp, so an undo landing in another
-  process at that moment isn't overwritten.
 - Reading the session cookie trimmed spaces and tabs with a pattern whose time grew with
   the square of a long run of them, so one crafted 16KB `Cookie` header, sent by anyone,
-  held the server up for about 90 ms (also in 0.5.0). It's trimmed in one pass now.
-- On a site that signs in by passkey, getting back in by a link left a thief's passkey
-  and sessions in place. It's now a fresh start.
+  held the server up for about 90 ms. It's trimmed in one pass now.
 - A link opened any account at its address when used: one made, or moved there, after a
   sign-up link was sent could be taken with it. A link to an account now opens only that
   account, and a sign-up link opens nothing that has an account by then.
-- Under `recovery: "app"`, undoing a move sent the old address a link in. It now sends
-  none: the old address can move the account back, but not sign in.
 - A full inbox wasn't stored a link, so the database work told it apart; it's stored
-  one either way now. `lookUpLink` refused only kinds no site uses: it now refuses those
-  this site doesn't.
+  one either way now. `lookUpLink` refuses kinds of link the site doesn't send.
 - The Node adapter answered `PUT` and `DELETE` to reading routes as `GET`; only `GET`
   (and `HEAD`) read now.
-- A passkey's name, chosen by whoever added it, was written into the owner's notice,
-  so a thief could make the warning say to ignore it. Notices no longer name the passkey
-  (the `passkey-added` and `passkey-removed` messages have no `name`), and a name can't
-  hold a full stop, so a web address, wherever an app shows it.
-- A passkey sign-in, or a passkey being added, in another process as a fresh start
-  landed could outlast it. A fresh start now ends every session, passkey, and challenge
-  both before and after the stamp changes, and removing a passkey deletes it first.
-- Two more races between processes: a later undo link, used as an earlier one was,
-  could overwrite it; and a recovery could land on an account moved meanwhile, leaving
-  that move with no undo link. An undo now moves the account only while its link is
-  there (so the earlier wins, and a failed one isn't used up), and ends later moves'
-  undo links before it moves the account (as does moving home); a recovery lands only
-  while the stamp is the one it read.
-- Moving an account back by hand, to an address a thief had moved it from, sent the
-  thief's address an undo link that outlasted the owner's. Moving back while that
-  move's undo link lasts is now that undo, in full: the password made useless, every
-  passkey gone, and a `reset` link given instead of an `undo` one.
-- A reset sign-in link kept a password a thief had set; a fresh start takes it too.
-- A passkey added, or a move's undo link made, in one process as a fresh start landed
-  in another could outlast it. Each is stored only while the account is unchanged.
-- The per-account limit's pause told when someone last tried the email; it always
-  says to wait the whole hour now.
-- An address could hold `/`, `?`, or `#` before its `@`, so pass for a web link in a
-  notice; refused now.
+- An address could hold `/`, `?`, or `#` before its `@`, so pass for a web link in an
+  email; refused now.
 - The advice to name a CDN's address ranges in `trustedProxies` is gone: its other
   customers send from them too, with any `X-Forwarded-For`. Put a proxy you run behind
   it, and name that.
@@ -132,6 +110,9 @@ Found by three rounds of adversarial review of this release.
 ### Removed
 
 - The `password-check-failed` event, with the checks it told of.
+- Undo links: `useUndoLink`, `/auth/undo-email`, `UNDO_DAYS`, `useEmailLink`'s `undo`,
+  and the `email-changed` message. A move needs the old address's approval first.
+- The errors naming 0.5.0's settings (`sendEmail`, `name`, `proxies`) when given.
 
 ### Upgrading from 0.5.0
 

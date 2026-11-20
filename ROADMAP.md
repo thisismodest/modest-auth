@@ -31,7 +31,9 @@ it brings. Nothing here is a promise of a date.
       tokens, sent by a function the app supplies (now `deliver(message)`: any
       email service, called over HTTPS: no SDK). Email confirmation also lets sign-up
       stop saying which emails have accounts.
-- [x] **Changing an email address,** confirmed by email, ending every other session.
+- [x] **Changing an email address,** as OWASP advises (0.6.0): approved by the address
+      the account has, then confirmed by the new one, ending every session. (Until
+      0.6.0, an undo link to the old address after the move instead.)
 - [x] **A copy of someone's data on request** (UK GDPR).
 - [x] **A record of security events** (sign-ins, failures, pauses, password changes)
       the app can keep, without passwords or tokens in it.
@@ -78,7 +80,10 @@ give one).
 - [x] **Challenges** single-use, five minutes, hashed, kept apart by kind and account.
 - [x] **Adding, signing in without an email, listing, and removing,** with notices to
       the account's address, and the stamp changed on every addition and removal.
-- [x] **An undone move removes every passkey.**
+- [x] **Getting back in by a link is a fresh start:** every session, link, and passkey
+      of the account ends.
+- [x] **Each change of more than one statement is one transaction,** so another process
+      sharing the database sees all of it or none.
 - [x] **Tests** with a software authenticator making real keys of each algorithm, each
       check shown to refuse what it should, and the CBOR reader fuzzed.
 - [x] **The example's pages** making and using one with `navigator.credentials`.
@@ -99,6 +104,20 @@ give one).
       by a link that proves the address; recovery is the app's, by a link its own code
       makes (an admin, support), never from a route.
 - [ ] **Passkeys only, for an account that chooses it,** on a site that offers more.
+
+## Edge cases still to solve
+
+- [ ] **An account with no way in yet.** On a passkey-only site, someone opens the
+      sign-up link and leaves before adding a passkey: the account exists, with nothing
+      to sign in with. With `recovery: "link"` they can ask for another link; with
+      `"app"`, only `recoveryLink` gets them back. Perhaps the account isn't made until
+      its first passkey is added.
+- [ ] **Every passkey lost, with `recovery: "app"`:** a standard way for the app to
+      vouch for someone, rather than each app inventing its own.
+- [ ] **Links outlive a change to the site's methods** until they run out (60 minutes
+      at most).
+- [ ] **Notices can be dropped under a flood,** with everything past the 1,000 waiting.
+- [ ] `HEAD` to a reading route answers `404`, not the head of its `GET`.
 
 ## Before 1.0
 

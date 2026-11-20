@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { emailFor, type Message, messageFor } from "./messages.ts";
-import { DAY, MINUTE } from "./time.ts";
+import { MINUTE } from "./time.ts";
 
 const ORIGIN = "https://app.example.org";
 const to = { email: "ann@example.org" };
@@ -18,7 +18,7 @@ const EVERY: Message[] = [
   { kind: "email-in-use", to },
   { kind: "password-changed", to },
   { kind: "account-deleted", to },
-  { kind: "email-changed", to, email: "ann@new.example", link, expires: Date.now() + 7 * DAY },
+  { kind: "approve-email", to, email: "ann@new.example", link, expires: soon() },
 ];
 
 test("emailFor writes every kind: the link exactly once where there is one, and none where there isn't", () => {
@@ -30,9 +30,8 @@ test("emailFor writes every kind: the link exactly once where there is one, and 
   }
 });
 
-test("emailFor says how long a link lasts: in minutes, or in days for an undo", () => {
+test("emailFor says how long a link lasts", () => {
   assert.match(emailFor({ kind: "sign-in", to, link, expires: Date.now() + 15 * MINUTE }, { origin: ORIGIN }).text, /within 15 minutes/);
-  assert.match(emailFor(EVERY[9] as Message, { origin: ORIGIN }).text, /within 7 days/);
 });
 
 test("emailFor names the site with its host, which a copycat can't borrow", () => {
@@ -41,9 +40,9 @@ test("emailFor names the site with its host, which a copycat can't borrow", () =
   assert.match(text, /Example Club \(app\.example\.org\)/);
 });
 
-test("messageFor: each link becomes the message that fits it, a refused one by the reason it was refused, and an undo link isn't one on its own", () => {
+test("messageFor: each link becomes the message that fits it, and a refused one by the reason it was refused", () => {
   const url = `${ORIGIN}/account/link#x`;
-  const open = (kind: "password" | "sign-in" | "email" | "undo", account: boolean) => ({ kind, to: "ann@example.org", token: "t", account, expires: soon() });
+  const open = (kind: "password" | "sign-in" | "email", account: boolean) => ({ kind, to: "ann@example.org", token: "t", account, expires: soon() });
   const refused = (kind: "sign-in" | "email", why: "no-account" | "email-in-use" | "passkey-only", account: boolean) =>
     ({ kind, to: "ann@example.org", token: null, refused: why, account, expires: soon() }) as const;
   assert.equal(messageFor(open("password", false), url).kind, "sign-up");
@@ -58,5 +57,6 @@ test("messageFor: each link becomes the message that fits it, a refused one by t
   ] as const) {
     assert.deepEqual(messageFor(refused(kind, why, account), url), { kind: why, to });
   }
-  assert.throws(() => messageFor(open("undo", true), url), /email-changed/);
+  const move = { kind: "move", to: "ann@example.org", newEmail: "ann@new.example", token: "t", account: true, expires: soon() } as const;
+  assert.deepEqual(messageFor(move, url), { kind: "approve-email", to, email: "ann@new.example", link: url, expires: move.expires });
 });

@@ -6,9 +6,9 @@ import { RECENT_MINUTES } from "../../src/index.ts";
 import { withClock } from "../helpers.ts";
 import {
   askForLink,
+  askToMove,
   freshEmail,
   type Harness,
-  moveAccount,
   ORIGIN,
   signIn,
   signUp,
@@ -37,8 +37,10 @@ test("delete-account needs a recent sign-in: an older session is told to sign in
 
 test("deleting an account ends its sessions and every link, and its email then looks unknown (55)", async () => {
   const account = await signUp(h);
-  const { undo } = await moveAccount(h, account, freshEmail("moved"));
   await signIn(h, account, account.visitor);
+  // A move asked for, waiting on its approval.
+  assert.equal((await unlessBusy(() => account.visitor.post("/auth/change-email", { email: freshEmail("moved") }))).status, 202);
+  const approval = (await h.takeEmail((m) => m.to === account.email && m.link?.kind === "move")).link?.token ?? "";
   const other = await signIn(h, account);
   const passwordLink = await askForLink(h, "password", account.email);
   const signInLink = await askForLink(h, "sign-in", account.email);
@@ -46,7 +48,7 @@ test("deleting an account ends its sessions and every link, and its email then l
   assert.equal(deleted.status, 200);
   assert.equal(await whoIs(account.visitor), null);
   assert.equal(await whoIs(other), null);
-  for (const token of [undo, passwordLink, signInLink]) {
+  for (const token of [approval, passwordLink, signInLink]) {
     assert.equal((await h.visitor().post("/auth/link", { token })).json?.error?.code, "invalid-link");
   }
   const right = await unlessBusy(() => h.visitor().post("/auth/sign-in", { email: account.email, password: account.password }));
@@ -62,8 +64,7 @@ test("the copy of an account's data has what README lists and nothing that signs
   const passwordLink = await askForLink(h, "password", account.email);
   const signInLink = await askForLink(h, "sign-in", account.email);
   const moveTo = freshEmail("next");
-  await unlessBusy(() => account.visitor.post("/auth/change-email", { email: moveTo }));
-  const moveLink = (await h.takeEmail((m) => m.to === moveTo && m.link?.kind === "email")).link?.token ?? "";
+  const moveLink = await askToMove(h, account, moveTo);
 
   const answer = await account.visitor.get("/auth/my-data", { headers: { origin: "https://evil.example" } });
   assert.equal(answer.status, 200);

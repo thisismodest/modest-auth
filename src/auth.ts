@@ -10,10 +10,11 @@
 // are single-use and short-lived, and kept only as hashes.
 //
 // Every account has a stamp, replaced whenever how it's reached changes (a new
-// password, a new email, an undone move). Anything checked before a change
-// lands (a session about to start, a link about to be stored, an account about
-// to go) goes ahead only while the stamp is still the one that was checked, so
-// one rule covers every race between them.
+// password, a new email, a passkey added or removed). Anything checked before a
+// change lands (a session about to start, a password about to change, an
+// account about to go) goes ahead only while the stamp is still the one that
+// was checked. And a change that takes more than one statement is one
+// transaction, so another process sharing the file sees all of it or none.
 //
 // It keeps its tables (auth_users, auth_sessions, auth_links, auth_limits) in a
 // node:sqlite database you give it, which may be your app's own, and may be
@@ -52,7 +53,6 @@ export type AuthEvent = {
     | "account-made"
     | "password-changed"
     | "email-changed"
-    | "email-change-undone"
     | "signed-out"
     | "signed-out-everywhere"
     | "session-ended"
@@ -155,13 +155,11 @@ export const SIGN_IN_LINK_MINUTES = 15;
 
 /**
  * What an emailed link does: choose a password (making the account, if there isn't one), sign in (making the
- * account, where the site has no passwords), move an account to a new email, or undo a move (sent to the
- * address it moved from).
+ * account, where the site has no passwords), approve moving an account to a new email (sent to the address it has),
+ * or confirm the new one (sent there).
  */
-export type LinkKind = "password" | "sign-in" | "email" | "undo";
-/** How long the address an account moved from can undo the move. */
-export const UNDO_DAYS = 7;
-/** How long a link to move an account to a new email lasts. */
+export type LinkKind = "password" | "sign-in" | "move" | "email";
+/** How long a link to approve or confirm moving an account to a new email lasts. */
 export const EMAIL_LINK_MINUTES = 60;
 /** How long someone has to make or use a passkey once asked: the challenge lasts this long. */
 export const PASSKEY_MINUTES = 5;
@@ -186,10 +184,14 @@ export type Refusal = "no-account" | "email-in-use" | "passkey-only";
  * message says so instead, so one goes either way. `account` says whether there's an account there, and must
  * never change what the person asking is told. Not worth sending after `expires`.
  */
-export type Link = { kind: LinkKind; to: string; account: boolean; expires: number } & (
-  | { token: string; refused?: undefined }
-  | { token: null; refused: Refusal }
-);
+export type Link = {
+  kind: LinkKind;
+  to: string;
+  account: boolean;
+  expires: number;
+  /** For a move's approval (kind "move"): the address it moves to. */
+  newEmail?: string;
+} & ({ token: string; refused?: undefined } | { token: null; refused: Refusal });
 
 export type Auth = {
   /** How people sign in here, as given. */
@@ -212,7 +214,10 @@ export type Auth = {
    * passwords. `from` is who's asking (addressKey in limits.ts).
    */
   requestLink(kind: "password" | "sign-in", email: string, from: string): Link | null;
-  /** Which email a link is for, and its kind, without using it: for the page it opens to show, so nobody is signed in to someone else's account unawares. */
+  /**
+   * Which email a link is for (for a move's approval, the address it moves to), and its kind, without using it: for
+   * the page it opens to show, so nobody is signed in to, or moves, someone else's account unawares.
+   */
   lookUpLink(token: string, from: string): { kind: LinkKind; email: string };
   /** The account, given a password link's token and the password chosen: made (`made`), or its password replaced (every session ending). */
   usePasswordLink(token: string, password: string, from: string): Promise<User & { made: boolean }>;
@@ -224,27 +229,23 @@ export type Auth = {
    */
   useSignInLink(token: string, from: string, options?: { reset?: boolean }): User & { made: boolean };
   /**
-   * A link to send to `email`, to move the account of `session` (one started in the last RECENT_MINUTES) to it;
-   * or null if none should be sent (3 to one address in 15 minutes, as for other links, and none to an address
-   * `allow` refuses). If the address already has an account, the message says so instead (`token` null): the
-   * same answer and work either way.
+   * To move the account of `session` (one started in the last RECENT_MINUTES) to `email`: a link to send to the
+   * address it has now, to approve it, or null if none should be sent (3 to one address in 15 minutes, as for other
+   * links). Nothing goes to the new address until whoever reads this one approves.
    */
   requestEmailChange(session: string, email: string, from: string): Link | null;
   /**
-   * Moves the account to the email an email link was sent to, ending every session: only for `userId`, the
-   * account signed in where the link is opened (the one it moves), so a link sent to someone else does nothing.
-   * `previous` is the email it had; `undo`, a link to send there that undoes the move, for UNDO_DAYS. Moving back
-   * to an address it was moved away from, while that move's undo link lasts, is that undo, in full (as
-   * `useUndoLink`): no `undo`, but a `reset` link to send to the address it's back at.
+   * From a move's approval link: the link to send to the new address, to confirm it there, or null if none should be
+   * sent (3 to one address in 15 minutes, and none to an address `allow` refuses). If the new address has an account
+   * already, the message says so instead (`token` null): the same answer and work either way.
    */
-  useEmailLink(token: string, userId: string, from: string): User & { previous: string } & ({ undo: Link; reset: null } | { undo: null; reset: Link });
+  approveEmailChange(token: string, from: string): Link | null;
   /**
-   * Undoes a move, from the address it moved from: the account has that email again, every session ends, and
-   * its password stops working (whoever moved it may know it). `reset` is a link to send there (to choose a new
-   * password, or to sign in where there are none), made here so no limit can stop it. Every later move's undo
-   * link ends; an earlier one stays, so a thief's own undo can't cancel the owner's.
+   * Moves the account to the email a confirmation link was sent to, ending every session: only for `userId`, the
+   * account signed in where the link is opened (the one it moves), so a link sent to someone else does nothing.
+   * `previous` is the email it had.
    */
-  useUndoLink(token: string, from: string): User & { reset: Link };
+  useEmailLink(token: string, userId: string, from: string): User & { previous: string };
   /** The account, if the password is right. A wrong email and a wrong password get the same answer. */
   signIn(email: string, password: string, from: string): Promise<User>;
   /**
@@ -316,7 +317,8 @@ const SCHEMA = `
     kind TEXT NOT NULL,
     email TEXT NOT NULL,
     expires INTEGER NOT NULL,
-    user TEXT REFERENCES auth_users(id) ON DELETE CASCADE
+    user TEXT REFERENCES auth_users(id) ON DELETE CASCADE,
+    new_email TEXT
   );
   CREATE INDEX IF NOT EXISTS auth_links_email ON auth_links (email);
   CREATE INDEX IF NOT EXISTS auth_links_user ON auth_links (user);
@@ -378,8 +380,8 @@ const emailOrRefuse = (given: string) => {
 const LIFETIME: Record<LinkKind, number> = {
   password: PASSWORD_LINK_MINUTES * MINUTE,
   "sign-in": SIGN_IN_LINK_MINUTES * MINUTE,
+  move: EMAIL_LINK_MINUTES * MINUTE,
   email: EMAIL_LINK_MINUTES * MINUTE,
-  undo: UNDO_DAYS * DAY,
 };
 const linkExpires = (kind: LinkKind) => Date.now() + LIFETIME[kind];
 
@@ -424,7 +426,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   /** Whether sign-in links are sent: to sign in, where that's a method; else where they're the link that makes accounts and gets people back in. */
   const signInLinks = signInWith.includes("link") || makes === "sign-in";
   /** The kinds of link this site sends. */
-  const linkKinds: LinkKind[] = ["email", "undo", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
+  const linkKinds: LinkKind[] = ["move", "email", ...(passwords ? (["password"] as const) : []), ...(signInLinks ? (["sign-in"] as const) : [])];
   /** For sign-in links, where they aren't sent: a mistake in the app's code (people get back in by a password link here). */
   const needsSignInLinks = () => {
     if (!signInLinks) throw new Error('This site doesn\'t send sign-in links: add "link" to signInWith first.');
@@ -449,12 +451,42 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     // Details not known (such as where a sign-out came from, when the app didn't say) are left out, not undefined.
     const known = Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined));
     const event: AuthEvent = { type, at: Date.now(), ...known };
-    setImmediate(() => {
-      // Whether it throws or (being async) rejects: logged, never passed on.
-      Promise.resolve()
-        .then(() => onEvent(event))
-        .catch((error: unknown) => console.error("modest-auth: onEvent failed:", error instanceof Error ? error.name : typeof error));
-    });
+    const tell = () =>
+      setImmediate(() => {
+        // Whether it throws or (being async) rejects: logged, never passed on.
+        Promise.resolve()
+          .then(() => onEvent(event))
+          .catch((error: unknown) => console.error("modest-auth: onEvent failed:", error instanceof Error ? error.name : typeof error));
+      });
+    // Part of a change: told once it's kept, and not at all if it isn't.
+    if (pending) pending.push(tell);
+    else tell();
+  };
+  /** What waits for the change being made (atomically) to be kept: its events, and emptying the WAL. */
+  let pending: (() => void)[] | null = null;
+  /**
+   * Runs `change` as one transaction, so another process sharing the file sees all of it or none, and can't write
+   * between two of its statements: waiting first, as any write does, for one that's writing. Inside the app's own
+   * transaction (it may be the app's connection too), a savepoint of it. What it throws undoes all of it. Limits are
+   * counted before, never inside, so a refusal can't undo its own count.
+   */
+  const atomically = <T>(change: () => T): T => {
+    if (pending) return change();
+    const nested = db.isTransaction;
+    db.exec(nested ? "SAVEPOINT modest_auth" : "BEGIN IMMEDIATE");
+    const after: (() => void)[] = [];
+    pending = after;
+    try {
+      const result = change();
+      db.exec(nested ? "RELEASE modest_auth" : "COMMIT");
+      pending = null;
+      for (const run of after) run();
+      return result;
+    } catch (error) {
+      pending = null;
+      db.exec(nested ? "ROLLBACK TO modest_auth; RELEASE modest_auth" : "ROLLBACK");
+      throw error;
+    }
   };
   /**
    * Refuses a new password found in the breached-password set, if the app gave one to check against: as it's
@@ -580,36 +612,17 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     endChallenges(userId);
     flush();
   };
-  /**
-   * Every passkey of the account goes, and every challenge it was given: after a reset or an undo, whoever had it may
-   * have added their own.
-   */
+  /** Every passkey of the account goes, and every challenge it was given: after a reset, whoever got in may have added their own. */
   const forgetPasskeys = (userId: string) => {
     db.prepare("DELETE FROM auth_passkeys WHERE user = ?").run(userId);
     endChallenges(userId);
-  };
-  /**
-   * A fresh start for the account: `change` gives it a new stamp (and whatever else), and every session, passkey, and
-   * challenge ends, both before and after. Another process can't hold one of these across the stamp's change: one
-   * stored before it (a passkey sign-in's session, a passkey being added, both checked against the old stamp) goes
-   * with the second clearing, and none can be stored after it, as each needs the stamp it checked.
-   */
-  const freshStart = (userId: string, change: () => string) => {
-    const clear = () => {
-      endAllSessions(userId);
-      forgetPasskeys(userId);
-    };
-    clear();
-    const stamp = change();
-    clear();
-    return stamp;
   };
   /** Challenges given to the account to add a passkey, not yet used: they end when anything about how it's reached changes. */
   const endChallenges = (userId: string) => void db.prepare("DELETE FROM auth_challenges WHERE user = ?").run(userId);
 
   type UserRow = { id: string; email: string; password: string | null; stamp: string };
   /** A link's options: whether it can be opened (else why not, for its message), whether there's an account there, and whose it is. */
-  type LinkOptions = { refused?: Refusal | undefined; account?: boolean; of?: { id: string; stamp?: string } };
+  type LinkOptions = { refused?: Refusal | undefined; account?: boolean; of?: { id: string }; newEmail?: string };
   const userRow = (where: "email" | "id", value: string) =>
     db.prepare(`SELECT id, email, password, stamp FROM auth_users WHERE ${where} = ?`).get(value) as UserRow | undefined;
 
@@ -688,13 +701,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   /** How many sessions ended. */
   const endAllSessions = (userId: string) => db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId).changes;
   /**
-   * Every link to an email ends, and every link to move the account `userId` to another: once one is used, or
+   * Every link to an email ends, and every link of the account `userId` (a move it asked for): once one is used, or
    * the password or email changes, or the account goes.
    */
-  // Not an undo link: that stays with the address a move took the account from, whatever is done to the account.
-  const endLinks = (email: string, userId = "") =>
-    void db.prepare("DELETE FROM auth_links WHERE (email = ? OR user = ?) AND kind != 'undo'").run(email, userId);
-  type LinkRow = { kind: LinkKind; email: string; user: string | null; expires: number };
+  const endLinks = (email: string, userId = "") => void db.prepare("DELETE FROM auth_links WHERE email = ? OR user = ?").run(email, userId);
+  type LinkRow = { kind: LinkKind; email: string; user: string | null; expires: number; newEmail: string | null };
   /**
    * A live link of one of `kinds` (never "none": those are stored only to do the same work), by its token: looked
    * at (`take` false) or used, once only (`take` true). "invalid-link" if there's none.
@@ -702,16 +713,15 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const findLink = (token: string, kinds: LinkKind[], take: boolean): LinkRow => {
     if (typeof token !== "string" || !LINK_TOKEN.test(token)) throw EXPIRED();
     const which = `token = ? AND kind IN (${kinds.map(() => "?").join(", ")}) AND expires > ?`;
-    const sql = take
-      ? `DELETE FROM auth_links WHERE ${which} RETURNING kind, email, user, expires`
-      : `SELECT kind, email, user, expires FROM auth_links WHERE ${which}`;
+    const columns = "kind, email, user, expires, new_email AS newEmail";
+    const sql = take ? `DELETE FROM auth_links WHERE ${which} RETURNING ${columns}` : `SELECT ${columns} FROM auth_links WHERE ${which}`;
     const row = db.prepare(sql).get(tokenHash(token), ...kinds, Date.now()) as LinkRow | undefined;
     if (!row) throw EXPIRED();
     return row;
   };
-  /** Uses a link of `kind`, once only (or, `take` false, only looks at it), for an address the app still allows. */
-  const takeLink = (token: string, kind: LinkKind, take = true) => {
-    const link = findLink(token, [kind], take);
+  /** Uses a link of `kind`, once only, for an address the app still allows. */
+  const takeLink = (token: string, kind: LinkKind) => {
+    const link = findLink(token, [kind], true);
     if (!allowed(link.email)) throw EXPIRED();
     return link;
   };
@@ -722,92 +732,11 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     return row;
   };
   /**
-   * Gives the account `userId` the address `email` (and `password`, if given: null for none), with a new stamp;
-   * "invalid-link" if another account has the address. The new stamp.
-   */
-  const moveTo = (userId: string, email: string, { password, was, undo }: { password?: string | null; was?: string; undo?: { expires: number } } = {}) => {
-    const holder = userRow("email", email);
-    if (holder && holder.id !== userId) throw EXPIRED();
-    const stamp = newStamp();
-    // With `was`, only while the account still has that stamp: nothing changed it (an undo, say) meanwhile. With
-    // `undo`, only while that undo link to `email` is still there: an earlier one, used meanwhile in another process,
-    // ends it, and holds the claim.
-    const unchanged =
-      (was === undefined ? "" : " AND stamp = ?") +
-      (undo === undefined ? "" : " AND EXISTS (SELECT 1 FROM auth_links WHERE kind = 'undo' AND user = auth_users.id AND email = ? AND expires = ?)");
-    const still = [...(was === undefined ? [] : [was]), ...(undo === undefined ? [] : [email, undo.expires])];
-    let moved: number;
-    try {
-      moved =
-        password === undefined
-          ? Number(db.prepare(`UPDATE auth_users SET email = ?, stamp = ? WHERE id = ?${unchanged}`).run(email, stamp, userId, ...still).changes)
-          : Number(
-              db.prepare(`UPDATE auth_users SET email = ?, password = ?, stamp = ? WHERE id = ?${unchanged}`).run(email, password, stamp, userId, ...still)
-                .changes,
-            );
-    } catch (error) {
-      // Taken by another process sharing the database, between the check and the change.
-      if (userRow("email", email)) throw EXPIRED();
-      throw error;
-    }
-    if (moved === 0) throw EXPIRED();
-    return stamp;
-  };
-  /** The account's undo links from moves later than the one whose undo link runs out at `expires`. */
-  const endLaterUndos = (userId: string, expires: number) =>
-    void db.prepare("DELETE FROM auth_links WHERE kind = 'undo' AND user = ? AND expires > ?").run(userId, expires);
-  /**
-   * Moves an account back to the address a move took it from (an undo, ending at `undoExpires`), with `password`
-   * (null for none) and no passkeys: every session ends, and every link of the account and of both addresses, but
-   * not an earlier move's undo link. The new stamp.
-   */
-  const moveBack = (userId: string, current: string, email: string, password: string | null, undoExpires: number) => {
-    // Later moves' undo links end first, so none can be used, in another process, once this has moved the account.
-    endLaterUndos(userId, undoExpires);
-    // Every passkey goes too: whoever moved it may have added their own.
-    const stamp = freshStart(userId, () => moveTo(userId, email, { password, undo: { expires: undoExpires } }));
-    // Undo links stay unless they're this account's own, from a later move: so the earliest owner always wins.
-    db.prepare("DELETE FROM auth_links WHERE (user = ? OR email IN (?, ?)) AND NOT (kind = 'undo' AND (expires < ? OR user != ?))").run(
-      userId,
-      current,
-      email,
-      undoExpires,
-      userId,
-    );
-    flush();
-    return stamp;
-  };
-  /**
-   * Undoes the move of `userId` away from the address `email` (it is now at `current`), whose undo link runs out at `expires`: the link to
-   * send there to get back in.
-   */
-  const undoMove = (userId: string, current: string, email: string, expires: number, from: string) => {
-    // No password any more: whoever moved it may know it. The way back in is the link that makes accounts.
-    moveBack(userId, current, email, null, expires);
-    // The way back in, for this account: none where only the app makes links into accounts (the undo took every
-    // passkey, and whoever reads this inbox may be who it was moved away from), so the message says so instead.
-    const reset = newLink(makes, email, recovery === "link" ? { of: { id: userId } } : { refused: "passkey-only" });
-    emit("email-change-undone", { userId, from });
-    return reset;
-  };
-  /**
-   * The account `email` can still take back by an undo (its oldest live one), if only one can: whoever reads
-   * that inbox moved it away. Several accounts moved away from one address is left to their undo links.
-   */
-  const undoTo = (email: string) => {
-    const rows = db
-      .prepare(
-        "SELECT l.user AS user, l.expires AS expires, u.email AS current FROM auth_links l JOIN auth_users u ON u.id = l.user WHERE l.kind = 'undo' AND l.email = ? AND l.expires > ? ORDER BY l.expires",
-      )
-      .all(email, Date.now()) as { user: string; expires: number; current: string }[];
-    return new Set(rows.map((row) => row.user)).size === 1 ? rows[0] : undefined;
-  };
-  /**
-   * The account a link opens. A link made for an account (`account`, its id) opens only that one: still at the
-   * link's address, or taken back to it after a move. A link made for none (a sign-up) only ever makes a new account,
-   * so one that turns up at the address meanwhile isn't opened. With `password`, or `reset`, it's a fresh start: a
-   * new stamp, the new password (or, for a reset, none), and every session, link, and passkey of the account ends, so
-   * whatever a thief added goes. Otherwise (signing in by link) the account is left as it is.
+   * The account a link opens, as part of a change (atomically). A link made for an account (`account`, its id) opens
+   * only that one, still at the link's address. A link made for none (a sign-up) only makes a new account, so one
+   * that turns up at the address meanwhile isn't opened. With `password`, or `reset`, it's a fresh start: a new
+   * stamp, the new password (or, for a reset, none), and every session, link, and passkey of the account ends, so
+   * whatever anyone else added goes. Otherwise (signing in by link) the account is left as it is.
    */
   const settle = (email: string, account: string | null, password: string | null, reset: boolean, from: string): User & { made: boolean; stamp: string } => {
     const row = userRow("email", email);
@@ -815,60 +744,41 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       if (row) throw EXPIRED();
       const id = randomUUID();
       const stamp = newStamp();
-      try {
-        db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES (?, ?, ?, ?, ?)").run(id, email, password, stamp, Date.now());
-      } catch (error) {
-        // Made by another process sharing the database, between the check and the insert.
-        if (userRow("email", email)) throw EXPIRED();
-        throw error;
-      }
+      db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES (?, ?, ?, ?, ?)").run(id, email, password, stamp, Date.now());
       endLinks(email);
       emit("account-made", { userId: id, from });
       return { id, email, made: true, stamp };
     }
-    if (!row) {
-      const back = undoTo(email);
-      if (back?.user !== account) throw EXPIRED();
-      const stamp = moveBack(back.user, back.current, email, password, back.expires);
-      emit("email-change-undone", { userId: back.user, from });
-      return { id: back.user, email, made: false, stamp };
-    }
-    if (row.id !== account) throw EXPIRED();
+    if (row?.id !== account) throw EXPIRED();
     if (password === null && !reset) {
       endLinks(email);
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
+    const stamp = newStamp();
     // A reset takes the password too (none, until one is chosen at a link): whoever else got in may have set it.
-    // Only while the account is as it was read: one moved meanwhile in another process keeps that move's undo link.
-    const stamp = freshStart(row.id, () => {
-      const next = newStamp();
-      if (db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ?").run(password, next, row.id, row.stamp).changes === 0) {
-        throw EXPIRED();
-      }
-      return next;
-    });
+    db.prepare("UPDATE auth_users SET password = ?, stamp = ? WHERE id = ?").run(password, stamp, row.id);
     afterNewPassword(row.id, email);
+    forgetPasskeys(row.id);
     emit(password === null ? "account-reset" : "password-changed", { userId: row.id, from });
     return { id: row.id, email, made: false, stamp };
   };
   /**
    * A new link of `kind` to `email`, stored as its hash, to send. `refused`: one that does nothing (stored only so
    * the work is the same either way), given with no token, and why, for its message. With `of`, it's that
-   * account's own (a move, or its undo); given its `stamp` too, it's stored only while the account still has it, so
-   * a change asked for by a session goes nowhere if anything changed since ("sign-in-again").
+   * account's own (one into it, or a move it asked for); `newEmail`, where a move goes.
    */
-  const newLink = (kind: LinkKind, email: string, { refused, account = true, of }: LinkOptions = {}): Link => {
+  const newLink = (kind: LinkKind, email: string, { refused, account = true, of, newEmail }: LinkOptions = {}): Link => {
     const token = newToken();
     const expires = linkExpires(kind);
-    const row = [tokenHash(token), refused ? "none" : kind, email, expires] as const;
-    const stored =
-      of?.stamp === undefined
-        ? db.prepare("INSERT INTO auth_links (token, kind, email, expires, user) VALUES (?, ?, ?, ?, ?)").run(...row, of?.id ?? null)
-        : db
-            .prepare("INSERT INTO auth_links (token, kind, email, expires, user) SELECT ?, ?, ?, ?, id FROM auth_users WHERE id = ? AND stamp = ?")
-            .run(...row, of.id, of.stamp);
-    if (stored.changes === 0) throw SIGN_IN_AGAIN();
-    const base = { kind, to: email, account, expires };
+    db.prepare("INSERT INTO auth_links (token, kind, email, expires, user, new_email) VALUES (?, ?, ?, ?, ?, ?)").run(
+      tokenHash(token),
+      refused ? "none" : kind,
+      email,
+      expires,
+      of?.id ?? null,
+      newEmail ?? null,
+    );
+    const base = { kind, to: email, account, expires, ...(newEmail === undefined ? {} : { newEmail }) };
     return refused ? { ...base, token: null, refused } : { ...base, token };
   };
   /**
@@ -904,12 +814,10 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       .get(tokenHash(challenge), kind, userId, Date.now());
     if (!taken) throw BAD_PASSKEY();
   };
-  /** The account's new stamp, for a change to how it's reached that a session asked for: only while it's still `stamp`. */
+  /** A new stamp, for a change to how the account is reached that a session asked for: only while it's still `stamp`. */
   const restamp = (userId: string, stamp: string) => {
-    const next = newStamp();
-    if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(next, userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
+    if (db.prepare("UPDATE auth_users SET stamp = ? WHERE id = ? AND stamp = ?").run(newStamp(), userId, stamp).changes === 0) throw SIGN_IN_AGAIN();
     endChallenges(userId);
-    return next;
   };
   type PasskeyRow = { id: string; name: string; created: number; used: number | null };
   /** The account's passkeys, the most recently added first, as its owner sees them. */
@@ -932,6 +840,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
    */
   const flush = (wait = true) => {
     unflushed = true;
+    // Part of a change: once it's kept.
+    if (pending) return void pending.push(() => flush(wait));
     if (db.isTransaction) return;
     const timeout = (db.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
     try {
@@ -981,24 +891,18 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       countLinkFrom(from);
       const email = emailOrRefuse(given);
       sweep(Date.now());
-      // An account here, or one this address can take back by the link that makes accounts (so the message says
-      // what it will do). Every one looked up, allowed or not: the same work whatever the answer.
+      // Looked up allowed or not: the same work whatever the answer.
       const here = userRow("email", email);
-      const back = kind === makes ? undoTo(email) : undefined;
-      // The account a link here would open, if any: one at the address, else one it can take back.
-      const opens = here?.id ?? back?.user;
-      const account = opens !== undefined;
-      // With no account, only the kind that makes one has anything to open; into an existing account (or one this
-      // address can take back), only where anyone may ask for one: where only the app may, the message says the
-      // account signs in by passkey (the owner of a moved account holds its undo link).
-      const refused = account ? (recovery === "link" ? undefined : "passkey-only") : kind === makes ? undefined : "no-account";
-      return offer(kind, email, { refused, account, ...(opens && !refused ? { of: { id: opens } } : {}) });
+      // With no account, only the kind that makes one has anything to open; into an existing account, only where
+      // anyone may ask for one: where only the app may, the message says the account signs in by passkey.
+      const refused = here ? (recovery === "link" ? undefined : "passkey-only") : kind === makes ? undefined : "no-account";
+      return offer(kind, email, { refused, account: !!here, ...(here && !refused ? { of: { id: here.id } } : {}) });
     },
 
     lookUpLink(token, from) {
       fromWhere(from);
-      const { kind, email } = findLink(token, linkKinds, false);
-      return { kind, email };
+      const { kind, email, newEmail } = findLink(token, linkKinds, false);
+      return { kind, email: newEmail ?? email };
     },
 
     async usePasswordLink(token, password, from) {
@@ -1008,20 +912,24 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       // Looked at first, but only used once the password will do: a password refused doesn't use up the link.
       const looked = findLink(token, ["password"], false);
       const hashed = await newPassword(password, looked.email);
-      const link = takeLink(token, "password");
-      const { stamp, ...user } = settle(link.email, link.user, hashed, false, from);
+      const { stamp, ...user } = atomically(() => {
+        const link = takeLink(token, "password");
+        return settle(link.email, link.user, hashed, false, from);
+      });
       return handOver(user, stamp, "link", from);
     },
 
     useSignInLink(token, from, { reset = false } = {}) {
       needsSignInLinks();
       fromWhere(from);
-      const link = takeLink(token, "sign-in");
-      // Where there are passwords, accounts are made by password links, not sign-in links.
-      if (link.user === null && passwords) throw EXPIRED();
-      // Where links aren't how people sign in day to day, one into an account is only ever the way back in: a fresh
-      // start, so a thief's passkeys and sessions don't outlast it. Where they are, the person can choose one.
-      const { stamp, ...user } = settle(link.email, link.user, null, reset || !signInWith.includes("link"), from);
+      const { stamp, ...user } = atomically(() => {
+        const link = takeLink(token, "sign-in");
+        // Where there are passwords, accounts are made by password links, not sign-in links.
+        if (link.user === null && passwords) throw EXPIRED();
+        // Where links aren't how people sign in day to day, one into an account is only ever the way back in: a fresh
+        // start, so a thief's passkeys and sessions don't outlast it. Where they are, the person can choose one.
+        return settle(link.email, link.user, null, reset || !signInWith.includes("link"), from);
+      });
       return handOver(user, stamp, "link", from);
     },
 
@@ -1102,8 +1010,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         | undefined;
       if (!row) return null;
       const sessions = liveSessions(userId, now);
-      // Its own links (its move requests shown as such whatever they were stored as, so the copy can't show whether
-      // another address has an account), and those to its address that do something.
+      // Its own links (its moves shown as such whatever they were stored as, so the copy can't show whether another
+      // address has an account), and those to its address that do something.
       const links = db
         .prepare(
           "SELECT CASE WHEN kind = 'none' THEN 'email' ELSE kind END AS kind, email, expires FROM auth_links WHERE (user = ? OR (email = ? AND kind != 'none')) AND expires > ? ORDER BY expires",
@@ -1127,15 +1035,18 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       // Only while nothing changed since the session was checked; the email as it is now.
       const stamp = newStamp();
       // And while the session that asked is still there: ended meanwhile (signed out everywhere), it changes nothing.
-      const done = db
-        .prepare(
-          "UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ? AND EXISTS (SELECT 1 FROM auth_sessions WHERE token = ? AND user = id) RETURNING email",
-        )
-        .get(hashed, stamp, row.id, row.stamp, row.hashed) as { email: string } | undefined;
-      if (!done) throw SIGN_IN_AGAIN();
-      afterNewPassword(row.id, done.email);
-      emit("password-changed", { userId: row.id, from });
-      return handOver({ id: row.id, email: done.email }, stamp, "password", from);
+      const email = atomically(() => {
+        const done = db
+          .prepare(
+            "UPDATE auth_users SET password = ?, stamp = ? WHERE id = ? AND stamp = ? AND EXISTS (SELECT 1 FROM auth_sessions WHERE token = ? AND user = id) RETURNING email",
+          )
+          .get(hashed, stamp, row.id, row.stamp, row.hashed) as { email: string } | undefined;
+        if (!done) throw SIGN_IN_AGAIN();
+        afterNewPassword(row.id, done.email);
+        emit("password-changed", { userId: row.id, from });
+        return done.email;
+      });
+      return handOver({ id: row.id, email }, stamp, "password", from);
     },
 
     requestEmailChange(session, given, from) {
@@ -1143,57 +1054,50 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       countLinkFrom(from);
       const email = emailOrRefuse(given);
       if (email === row.email) throw new AuthError("invalid-email", "That's the account's email already.");
-      // To an address with an account already, one that does nothing, and a message saying so. Only while nothing
-      // changed since the session was checked: a new password meanwhile ends the request too.
-      const taken = !!userRow("email", email);
-      return offer("email", email, { refused: taken ? "email-in-use" : undefined, account: taken, of: { id: row.id, stamp: row.stamp } });
+      // To the address it has first: nothing goes to the new one until whoever reads this one approves.
+      return offer("move", row.email, { of: { id: row.id }, newEmail: email });
+    },
+
+    approveEmailChange(token, from) {
+      fromWhere(from);
+      const link = takeLink(token, "move");
+      // Moved meanwhile, or gone: the approval was for an address it no longer has.
+      const row = accountOf(link);
+      if (row.email !== link.email || !link.newEmail) throw EXPIRED();
+      // To an address with an account already, one that does nothing, and a message saying so: the same answer, and
+      // work, either way.
+      const taken = !!userRow("email", link.newEmail);
+      return offer("email", link.newEmail, { refused: taken ? "email-in-use" : undefined, account: taken, of: { id: row.id } });
     },
 
     useEmailLink(token, signedIn, from) {
       fromWhere(from);
       // Only by the account it moves, signed in where it's opened: checked before the link is used up.
       if (findLink(token, ["email"], false).user !== signedIn) throw EXPIRED();
-      const link = takeLink(token, "email");
-      const { email } = link;
-      // Gone (or, in moveTo, the address taken meanwhile): nothing to move.
-      const row = accountOf(link);
-      // Back to an address it was moved away from, while that move's undo link lasts: that undo, in full, so whatever
-      // whoever moved it added (a password, passkeys, a later move's undo link) goes, as if the link were used.
-      const home = db.prepare("SELECT expires FROM auth_links WHERE kind = 'undo' AND user = ? AND email = ? AND expires > ?").get(row.id, email, Date.now()) as
-        | { expires: number }
-        | undefined;
-      if (home) return { id: row.id, email, previous: row.email, undo: null, reset: undoMove(row.id, row.email, email, home.expires, from) };
-      const stamp = moveTo(row.id, email, { was: row.stamp });
-      endAllSessions(row.id);
-      endLinks(row.email, row.id);
-      endLinks(email);
-      // An undo link for the address it moved from (each move its own: using one ends only later ones), stored only
-      // while the account is still as this move left it, so an undo landing meanwhile in another process (which ends
-      // later moves' undo links) isn't outlasted by this one.
-      const undo = newLink("undo", row.email, { of: { id: row.id, stamp } });
-      flush();
-      emit("email-changed", { userId: row.id, from });
-      return { id: row.id, email, previous: row.email, undo, reset: null };
-    },
-
-    useUndoLink(token, from) {
-      fromWhere(from);
-      // Looked at, not used: moveBack moves the account only while this link is there, and then ends it, so of two
-      // undo links used at once in different processes, the earlier one wins.
-      const link = takeLink(token, "undo", false);
-      const { email, expires } = link;
-      // Gone (or, in moveBack, the address since taken by another account): nothing to move back.
-      const row = accountOf(link);
-      return { id: row.id, email, reset: undoMove(row.id, row.email, email, expires, from) };
+      return atomically(() => {
+        const link = takeLink(token, "email");
+        const row = accountOf(link);
+        // Taken by another account meanwhile: nothing to move.
+        if (userRow("email", link.email)) throw EXPIRED();
+        db.prepare("UPDATE auth_users SET email = ?, stamp = ? WHERE id = ?").run(link.email, newStamp(), row.id);
+        endAllSessions(row.id);
+        endLinks(row.email, row.id);
+        endLinks(link.email);
+        flush();
+        emit("email-changed", { userId: row.id, from });
+        return { id: row.id, email: link.email, previous: row.email };
+      });
     },
 
     deleteAccount(session, from) {
       const row = recent(session, from);
-      const done = db.prepare("DELETE FROM auth_users WHERE id = ? AND stamp = ?").run(row.id, row.stamp);
-      if (done.changes === 0) throw SIGN_IN_AGAIN();
-      endLinks(row.email, row.id);
-      flush();
-      emit("account-deleted", { userId: row.id, from });
+      atomically(() => {
+        const done = db.prepare("DELETE FROM auth_users WHERE id = ? AND stamp = ?").run(row.id, row.stamp);
+        if (done.changes === 0) throw SIGN_IN_AGAIN();
+        endLinks(row.email, row.id);
+        flush();
+        emit("account-deleted", { userId: row.id, from });
+      });
     },
     passkeyOptions(session, origin, from) {
       needs("passkey");
@@ -1221,20 +1125,20 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       } catch {
         throw BAD_PASSKEY();
       }
-      takeChallenge(checked.challenge, "add", row.id);
       const passkey: Passkey = { id: checked.id, name: isPasskeyName(name) ? name : "Passkey", created: Date.now(), lastUsed: null };
-      const stamp = restamp(row.id, row.stamp);
-      // Stored only while the stamp is the one just set, so a fresh start landing in another process meanwhile (which
-      // ends every passkey) can't be outlasted. A passkey's id is the device's: one already here (this account's or
-      // another's) isn't taken again.
-      const stored = db
-        .prepare(
-          "INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) SELECT ?, id, ?, ?, ?, ?, ? FROM auth_users WHERE id = ? AND stamp = ? ON CONFLICT (id) DO NOTHING",
-        )
-        .run(passkey.id, checked.publicKey, checked.algorithm, checked.counter, passkey.name, passkey.created, row.id, stamp);
-      if (stored.changes === 0) throw userRow("id", row.id)?.stamp === stamp ? BAD_PASSKEY() : SIGN_IN_AGAIN();
-      emit("passkey-added", { userId: row.id, from });
-      return passkey;
+      return atomically(() => {
+        takeChallenge(checked.challenge, "add", row.id);
+        restamp(row.id, row.stamp);
+        // A passkey's id is the device's: one already here (this account's or another's) isn't taken again.
+        const stored = db
+          .prepare(
+            "INSERT INTO auth_passkeys (id, user, public_key, algorithm, counter, name, created) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+          )
+          .run(passkey.id, row.id, checked.publicKey, checked.algorithm, checked.counter, passkey.name, passkey.created);
+        if (stored.changes === 0) throw BAD_PASSKEY();
+        emit("passkey-added", { userId: row.id, from });
+        return passkey;
+      });
     },
 
     signInOptions(origin, from) {
@@ -1284,15 +1188,16 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
 
     removePasskey(session, id, from) {
       const row = recent(session, from);
-      const passkey = passkeysOf(row.id).find((p) => p.id === id);
-      if (!passkey) return null;
-      // Gone before the stamp changes, as in freshStart.
-      db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
-      restamp(row.id, row.stamp);
-      // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
-      db.prepare("DELETE FROM auth_sessions WHERE user = ? AND token != ?").run(row.id, row.hashed);
-      emit("passkey-removed", { userId: row.id, from });
-      return passkey;
+      return atomically(() => {
+        const passkey = passkeysOf(row.id).find((p) => p.id === id);
+        if (!passkey) return null;
+        restamp(row.id, row.stamp);
+        db.prepare("DELETE FROM auth_passkeys WHERE id = ? AND user = ?").run(id, row.id);
+        // Every other session ends: one the passkey started (a thief's, say) mustn't carry on, still recent, and add another.
+        db.prepare("DELETE FROM auth_sessions WHERE user = ? AND token != ?").run(row.id, row.hashed);
+        emit("passkey-removed", { userId: row.id, from });
+        return passkey;
+      });
     },
   };
 }

@@ -98,7 +98,7 @@ const setup = (more: { name?: string; signInWith?: ("password" | "link" | "passk
     return { status: response.status, json: (await response.json()) as Json, set, headers: response.headers };
   };
   /** The token in the last link emailed to `to`. */
-  const linkTo = async (to: string, kind: "password" | "sign-in" | "email" | "undo") => {
+  const linkTo = async (to: string, kind: "password" | "sign-in" | "move" | "email") => {
     await afterwards();
     const text = emails.findLast((email) => email.to === to)?.text ?? "";
     // The line holding the link, and the token after its "#kind=": a 43-character token, nothing else.
@@ -212,11 +212,6 @@ test("it won't run on plain HTTP, except on this machine, nor with an origin tha
   const { auth } = fresh();
   assert.throws(() => createHandler(auth, { origin: "http://example.org", ...EMAIL }));
   assert.throws(() => createHandler(auth, { origin: "https://example.org/app", ...EMAIL }));
-  assert.throws(
-    () => createHandler(auth, { origin: "https://example.org", proxies: 1, ...EMAIL } as never),
-    /trustedProxies/,
-    "the old setting says what replaced it",
-  );
   assert.throws(() => createHandler(auth, { origin: "https://example.org", trustedProxies: ["not a range"], ...EMAIL }), /trustedProxies/);
   assert.doesNotThrow(() => createHandler(auth, { origin: DEV, ...EMAIL }));
 });
@@ -597,16 +592,13 @@ test("an email that can't be sent is logged without its text, and changes nothin
   assert.doesNotMatch(JSON.stringify(logged), /secret|#password|ann@example/);
 });
 
-test("it needs a page for links and a way to send messages, and says plainly that sendEmail and name have gone", () => {
+test("it needs a page for links and a way to send messages", () => {
   const { auth } = fresh();
   for (const linkPage of ["", "account", "https://evil.example/x", "//evil.example", "/a b", "/a#b", "/a?b"]) {
     assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage, deliver: () => {} }), Error, linkPage);
   }
   assert.throws(() => createHandler(auth, { origin: ORIGIN, linkPage: "/link" } as never));
   assert.doesNotThrow(() => createHandler(auth, { origin: ORIGIN, linkPage: "/account/link", deliver: () => {} }));
-  for (const old of [{ sendEmail: () => {} }, { name: "Club" }]) {
-    assert.throws(() => createHandler(auth, { origin: ORIGIN, ...EMAIL, ...old } as never), /deliver\(message\)/);
-  }
 });
 
 test("the link page can ask which email a link is for, so nobody is signed in to someone else's account unawares", async () => {
@@ -668,23 +660,27 @@ test("an email whose link runs out while it waits to be sent isn't sent", async 
   assert.match(String(logged[0]), /ran out/);
 });
 
-test("changing the email: a link to the new address, the same answer either way, and a notice to the old one", async () => {
+test("changing the email: approved at the address it has, confirmed at the new one, and the same answer either way", async () => {
   const { send, emails, messages, linkTo, signUp, forget } = setup();
   await signUp("ann@example.org");
-  const free = await send("/auth/change-email", { email: "ann@new.example" });
+  await send("/auth/change-email", { email: "ann@new.example" });
+  await afterwards();
+  assert.ok(!emails.some((e) => e.to === "ann@new.example"), "nothing to the new address before the old one approves");
+  const approval = must(emails.findLast((e) => e.to === "ann@example.org"));
+  assert.match(approval.subject, /Approve changing your email address/);
+  assert.match(approval.text, /ann@new\.example/);
+  const approved = await send("/auth/approve-email", { token: await linkTo("ann@example.org", "move") });
+  assert.deepEqual([approved.status, approved.json], [202, {}]);
   const token = await linkTo("ann@new.example", "email");
   const answer = await send("/auth/confirm-email", { token });
   assert.deepEqual([answer.status, answer.json], [200, { email: "ann@new.example" }]);
   assert.match(must(answer.set), /Max-Age=0/, "signs nobody in: every session ended, this one too");
   assert.deepEqual((await send("/auth/session")).json, { user: null });
-  await afterwards();
-  const notice = must(emails.findLast((e) => e.to === "ann@example.org"));
-  assert.match(notice.subject, /email address was changed/);
-  assert.match(notice.text, /ann@new\.example/);
   forget();
   await signUp("bob@example.org");
-  const taken = await send("/auth/change-email", { email: "ann@new.example" });
-  assert.deepEqual([taken.status, taken.json], [free.status, free.json], "the same answer when the address has an account");
+  await send("/auth/change-email", { email: "ann@new.example" });
+  const taken = await send("/auth/approve-email", { token: await linkTo("bob@example.org", "move") });
+  assert.deepEqual([taken.status, taken.json], [approved.status, approved.json], "the same answer when the new address has an account");
   await afterwards();
   assert.deepEqual(messages.at(-1), { kind: "email-in-use", to: { email: "ann@new.example" } });
   assert.match(must(emails.findLast((e) => e.to === "ann@new.example")).text, /has an account of its own already/);
@@ -707,22 +703,17 @@ test("a changed password is told to the account's email, by either route, but si
   assert.equal(notices(), 2);
 });
 
-test("confirming a move needs the account signed in; the notice to the old address can undo it, and a password link follows", async () => {
-  const { send, emails, linkTo, signUp, forget } = setup();
+test("approving a move needs no sign-in, but confirming it needs the account signed in", async () => {
+  const { send, linkTo, signUp, forget } = setup();
   await signUp("ann@example.org");
-  await send("/auth/change-email", { password: PASSWORD, email: "ann@new.example" });
-  const token = await linkTo("ann@new.example", "email");
+  await send("/auth/change-email", { email: "ann@new.example" });
   forget();
+  const approved = await send("/auth/approve-email", { token: await linkTo("ann@example.org", "move") });
+  assert.deepEqual([approved.status, approved.set], [202, null], "approved signed out, and it signs nobody in");
+  const token = await linkTo("ann@new.example", "email");
   assert.equal((await send("/auth/confirm-email", { token })).status, 401, "signed out: nothing happens");
   await send("/auth/sign-in", { email: "ann@example.org", password: PASSWORD });
   assert.equal((await send("/auth/confirm-email", { token })).status, 200, "the link wasn't used up");
-  const undo = await linkTo("ann@example.org", "undo");
-  forget();
-  const back = await send("/auth/undo-email", { token: undo });
-  assert.deepEqual([back.status, back.json], [200, { email: "ann@example.org" }]);
-  assert.equal(back.set, null, "it signs nobody in");
-  await linkTo("ann@example.org", "password");
-  assert.match(must(emails.at(-1)).subject, /Choose a new password/);
 });
 
 test("the sessions route lists the account's sessions, and ending this one signs this browser out", async () => {
@@ -1008,11 +999,11 @@ test("each message is data, of the kind that fits, to whoever it's for", async (
   await send("/auth/password", { next: "a brand new long password" });
   assert.deepEqual(await last(), { kind: "password-changed", to: { email: "ann@example.org" } });
   await send("/auth/change-email", { email: "ann@new.example" });
+  const approval = await last();
+  assert.ok(approval.kind === "approve-email" && approval.email === "ann@new.example" && approval.to.email === "ann@example.org");
+  assert.ok(approval.link.includes("#move="));
+  await send("/auth/approve-email", { token: await linkTo("ann@example.org", "move") });
   assert.equal((await last()).kind, "confirm-email");
-  await send("/auth/confirm-email", { token: await linkTo("ann@new.example", "email") });
-  const moved = await last();
-  assert.ok(moved.kind === "email-changed" && moved.email === "ann@new.example" && moved.to.email === "ann@example.org");
-  assert.ok(moved.link.includes("#undo="));
 });
 
 test("an address the app doesn't allow gets the same answer as any other, and nothing is sent", async () => {

@@ -35,6 +35,19 @@ Keep these apart; a change that blurs them is the wrong change.
   built ahead of need. Accounts with no contact (a username and password) are out: the
   weakest sign-in there is, with no recovery and no notices.
 
+## Design: how changes stay safe
+
+- **One transaction per change.** A change of more than one statement runs in
+  `atomically`, so another process sharing the database sees all of it or none. Don't
+  close a race between two statements with a condition, an ordering, or a second
+  clearing: put them in one transaction. Count limits before it, never inside.
+- **The stamp is for what's checked in one step and acted on in another** (a password
+  checked, then a session started; a session checked, then a passkey added): act only
+  while it's still the stamp that was checked.
+- **Standard practice over cleverness.** Email moves follow OWASP: the address the
+  account has approves, then the new one confirms. Before adding a mechanism that fixes
+  a side effect of another, ask whether the other should go instead.
+
 ## Layout
 
 | What | Where |

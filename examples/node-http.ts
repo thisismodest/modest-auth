@@ -41,8 +41,8 @@ const page = (email: string | null) => `<!doctype html><meta charset="utf-8"><ti
 <form method="post" data-route="sign-out"><button>Sign out</button></form>
 <p><button id="passkey-add" type="button">Add a passkey</button> (needs a sign-in in the last 10 minutes)</p>
 <h2>Change your email</h2>
-<form method="post" data-route="change-email"><input name="email" type="email" required> <button>Email the new address a link</button></form>
-<p>Changing your email needs a recent sign-in: if it's been a while, sign in again first.</p>
+<form method="post" data-route="change-email"><input name="email" type="email" required> <button>Ask to move it</button></form>
+<p>Changing your email needs a recent sign-in (if it's been a while, sign in again first). Your current address approves it, then the new one confirms it.</p>
 <p id="status" role="status"></p>
 <script src="/app.js"></script>`;
 
@@ -53,7 +53,7 @@ const linkPage = `<!doctype html><meta charset="utf-8"><title>modest-auth exampl
 <form method="post" data-route="set-password" hidden><input name="password" type="password" required minlength="15"> <button>Save and sign in</button></form>
 <form method="post" data-route="sign-in-with-link" hidden><button>Sign in</button></form>
 <form method="post" data-route="confirm-email" hidden><button>Use this address</button></form>
-<form method="post" data-route="undo-email" hidden><button>Move it back</button></form>
+<form method="post" data-route="approve-email" hidden><button>Approve</button></form>
 <p id="status" role="status"></p>
 <script src="/link.js"></script>`;
 
@@ -106,14 +106,14 @@ history.replaceState(null, "", location.pathname);
 const heading = document.getElementById("for");
 post("link", { token }).then(({ res, json }) => {
   if (!res.ok) return (heading.textContent = json.error.message);
-  const [words, route] = { password: ["Choose a password for ", "set-password"], "sign-in": ["Sign in as ", "sign-in-with-link"], email: ["Use this address for your account: ", "confirm-email"], undo: ["Move your account back to ", "undo-email"] }[json.kind];
+  const [words, route] = { password: ["Choose a password for ", "set-password"], "sign-in": ["Sign in as ", "sign-in-with-link"], move: ["Move your account to ", "approve-email"], email: ["Use this address for your account: ", "confirm-email"] }[json.kind];
   heading.textContent = words + json.email;
   const form = document.querySelector("[data-route=" + route + "]");
   form.hidden = false;
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const { res, json } = await post(form.dataset.route, { ...Object.fromEntries(new FormData(form)), token });
-    if (res.ok && route === "undo-email") status("It's back, and everyone is signed out. Check your email for a link to get back in.");
+    if (res.status === 202) status("Approved: check the new address's email for a link to confirm it.");
     else if (res.ok) location.href = "/";
     else status(json.error.message);
   });
