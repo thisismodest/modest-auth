@@ -473,7 +473,8 @@ Worth knowing:
   query, but it holds the event loop for that moment. Several processes can share one
   database file: each change that takes more than one statement is one transaction, and
   while one process writes, the others wait (the whole process waits) up to two
-  seconds, then that request fails.
+  seconds, then that request fails. Don't call modest-auth inside a transaction of your
+  own on its connection: it refuses, as your rollback would undo its limits.
 - **Deleting an account leaves nothing to find,** in the file or its WAL: an erasure
   request after it is answered by there being nothing left (backups aside, until
   they're replaced). If you need a record that it happened, keep one from the

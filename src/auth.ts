@@ -24,7 +24,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { cleanEmail } from "./emails.ts";
 import { AuthError } from "./errors.ts";
-import { blockOf, databaseLimits, type Limit, settingUp } from "./limits.ts";
+import { blockOf, databaseLimits, IN_TRANSACTION, type Limit, settingUp } from "./limits.ts";
 import { checkHashingFree, checkNewPassword, checkPassword, hashPassword, LONGEST_TYPED, unmatchableHash } from "./passwords.ts";
 import { readAtMost } from "./streams.ts";
 import { isPlainLine } from "./text.ts";
@@ -466,25 +466,25 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   let pending: (() => void)[] | null = null;
   /**
    * Runs `change` as one transaction, so another process sharing the file sees all of it or none, and can't write
-   * between two of its statements: waiting first, as any write does, for one that's writing. Inside the app's own
-   * transaction (it may be the app's connection too), a savepoint of it. What it throws undoes all of it. Limits are
-   * counted before, never inside, so a refusal can't undo its own count.
+   * between two of its statements: waiting first, as any write does, for one that's writing. Never inside one the app
+   * opened (its rollback would undo the change after its events were told), and no limit is counted inside (the
+   * limits refuse to), as a refusal would undo its own count.
    */
   const atomically = <T>(change: () => T): T => {
     if (pending) return change();
-    const nested = db.isTransaction;
-    db.exec(nested ? "SAVEPOINT modest_auth" : "BEGIN IMMEDIATE");
+    if (db.isTransaction) throw new Error(IN_TRANSACTION);
+    db.exec("BEGIN IMMEDIATE");
     const after: (() => void)[] = [];
     pending = after;
     try {
       const result = change();
-      db.exec(nested ? "RELEASE modest_auth" : "COMMIT");
+      db.exec("COMMIT");
       pending = null;
       for (const run of after) run();
       return result;
     } catch (error) {
       pending = null;
-      db.exec(nested ? "ROLLBACK TO modest_auth; RELEASE modest_auth" : "ROLLBACK");
+      db.exec("ROLLBACK");
       throw error;
     }
   };
@@ -580,10 +580,13 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     if (typeof from !== "string" || !ADDRESS.test(from)) throw new Error("from must be where the request came from, as addressKey gives it.");
     countFrom(from);
   };
-  /** Counts a link of `kind` to `email`; false, quietly, past the limit, so the answer is the same either way. */
-  const inboxHasRoom = (kind: LinkKind, email: string) => {
+  /**
+   * Counts a link of `kind` to `email` (and, given, for the account `userId`); false, quietly, past the limit, so the
+   * answer is the same either way.
+   */
+  const inboxHasRoom = (kind: LinkKind, email: string, userId = "") => {
     try {
-      perInbox(`${kind}\0${email}`);
+      perInbox(`${kind}\0${userId}\0${email}`);
       return true;
     } catch (error) {
       if (error instanceof AuthError) return false;
@@ -701,10 +704,12 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   /** How many sessions ended. */
   const endAllSessions = (userId: string) => db.prepare("DELETE FROM auth_sessions WHERE user = ?").run(userId).changes;
   /**
-   * Every link to an email ends, and every link of the account `userId` (a move it asked for): once one is used, or
-   * the password or email changes, or the account goes.
+   * Every link of the account `userId` ends, and every link to its address that's no other account's: once one is
+   * used, or the password or email changes, or the account goes. Another account's move to the address is left to fail
+   * on its own, so how long it lasts can't show whether the address has an account.
    */
-  const endLinks = (email: string, userId = "") => void db.prepare("DELETE FROM auth_links WHERE email = ? OR user = ?").run(email, userId);
+  const endLinks = (email: string, userId: string) =>
+    void db.prepare("DELETE FROM auth_links WHERE user = ? OR (email = ? AND user IS NULL)").run(userId, email);
   type LinkRow = { kind: LinkKind; email: string; user: string | null; expires: number; newEmail: string | null };
   /**
    * A live link of one of `kinds` (never "none": those are stored only to do the same work), by its token: looked
@@ -745,13 +750,13 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       const id = randomUUID();
       const stamp = newStamp();
       db.prepare("INSERT INTO auth_users (id, email, password, stamp, created) VALUES (?, ?, ?, ?, ?)").run(id, email, password, stamp, Date.now());
-      endLinks(email);
+      endLinks(email, id);
       emit("account-made", { userId: id, from });
       return { id, email, made: true, stamp };
     }
     if (row?.id !== account) throw EXPIRED();
     if (password === null && !reset) {
-      endLinks(email);
+      endLinks(email, row.id);
       return { id: row.id, email, made: false, stamp: row.stamp };
     }
     const stamp = newStamp();
@@ -789,7 +794,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   const offer = (kind: LinkKind, email: string, options: LinkOptions) => {
     const allows = allowed(email);
     // Past the inbox's limit: nothing sent, but a link that does nothing is still stored, so the work is the same.
-    if (!inboxHasRoom(kind, email)) {
+    // A move to an address counts by the account moving too, so one account's can't use up another's.
+    if (!inboxHasRoom(kind, email, kind === "email" ? options.of?.id : undefined)) {
       newLink(kind, email, { ...options, refused: "no-account" });
       return null;
     }
@@ -1064,8 +1070,8 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       // Moved meanwhile, or gone: the approval was for an address it no longer has.
       const row = accountOf(link);
       if (row.email !== link.email || !link.newEmail) throw EXPIRED();
-      // To an address with an account already, one that does nothing, and a message saying so: the same answer, and
-      // work, either way.
+      // Then, as for any link asked for, one to the new address. To an address with an account already, one that does
+      // nothing, and a message saying so: the same answer, and work, either way.
       const taken = !!userRow("email", link.newEmail);
       return offer("email", link.newEmail, { refused: taken ? "email-in-use" : undefined, account: taken, of: { id: row.id } });
     },
@@ -1082,7 +1088,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
         db.prepare("UPDATE auth_users SET email = ?, stamp = ? WHERE id = ?").run(link.email, newStamp(), row.id);
         endAllSessions(row.id);
         endLinks(row.email, row.id);
-        endLinks(link.email);
+        endLinks(link.email, row.id);
         flush();
         emit("email-changed", { userId: row.id, from });
         return { id: row.id, email: link.email, previous: row.email };

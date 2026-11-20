@@ -50,7 +50,8 @@ the app to send. Several changes break the API; upgrading is below.
   passkey is added, or an account goes only while the stamp is the one checked.
 - **Each change of more than one statement is one transaction,** so another process
   sharing the database waits for it and sees all of it or none; one that fails
-  part-way changes nothing, and tells no event.
+  part-way changes nothing, and tells no event. Called inside a transaction the app
+  opened on its connection, modest-auth refuses (its rollback would undo the limits).
 - A password-only sign-in and a link's session refused for a change meanwhile say so
   as their own way would: a wrong password, or an expired link.
 - The per-account limit's pause always says to wait the whole hour, so it doesn't tell
