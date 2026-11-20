@@ -32,16 +32,15 @@ async function fullRun(h: Harness): Promise<string[]> {
   secrets.push(account.password);
   account.password = next;
   const moved = freshEmail("moved");
-  const { undo } = await moveAccount(h, account, moved);
-  await h.visitor().post("/auth/undo-email", { token: undo });
-  const reset = await h.takeEmail((m) => m.to === first && m.link?.kind === "password");
+  await moveAccount(h, account, moved);
+  const reset = await askForLink(h, "password", moved);
   const finalPassword = freshPassword();
   const last = h.visitor();
-  await unlessBusy(() => last.post("/auth/set-password", { token: reset.link?.token, password: finalPassword }));
+  await unlessBusy(() => last.post("/auth/set-password", { token: reset, password: finalPassword }));
   await last.post("/auth/sign-out");
-  await signIn(h, { email: first, password: finalPassword }, last);
+  await signIn(h, { email: moved, password: finalPassword }, last);
   await last.post("/auth/sign-out-everywhere");
-  await signIn(h, { email: first, password: finalPassword }, last);
+  await signIn(h, { email: moved, password: finalPassword }, last);
   await unlessBusy(() => last.post("/auth/delete-account", { password: finalPassword }));
   await wait(200);
 

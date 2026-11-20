@@ -36,8 +36,8 @@ const POSTS = [
   "end-session",
   "password",
   "change-email",
+  "approve-email",
   "confirm-email",
-  "undo-email",
   "delete-account",
 ];
 

@@ -108,7 +108,7 @@ export const freshEmail = (name = "person") => {
 /** A password the rules accept: long, random, and nothing like the email. */
 export const freshPassword = () => `Tq-${randomBytes(15).toString("base64url")}`;
 
-const LINK = /#(password|sign-in|email|undo)=([^\s"'<>]+)/;
+const LINK = /#(password|sign-in|move|email)=([^\s"'<>]+)/;
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
   const folder = mkdtempSync(join(tmpdir(), "modest-auth-scenarios-"));
@@ -401,16 +401,22 @@ export async function whoIs(visitor: Visitor): Promise<string | null> {
   return answer.json?.user?.email ?? null;
 }
 
-/** Moves an account to `to`, as its owner does: asks with the password, then opens the link signed in. */
-export async function moveAccount(harness: Harness, account: Account, to: string): Promise<{ undo: string }> {
+/** The token of a link to confirm moving `account` to `to`, as its owner gets one: asked for signed in, then approved at the address it has. */
+export async function askToMove(harness: Harness, account: Account, to: string): Promise<string> {
   const asked = await unlessBusy(() => account.visitor.post("/auth/change-email", { email: to }));
   if (asked.status >= 300) throw new Error(`change-email answered ${asked.status} ${asked.text}`);
-  const link = await harness.takeEmail((m) => m.to === to && m.link?.kind === "email");
-  const confirmed = await account.visitor.post("/auth/confirm-email", { token: link.link?.token });
+  const approval = await harness.takeEmail((m) => m.to === account.email && m.link?.kind === "move");
+  const approved = await harness.visitor().post("/auth/approve-email", { token: approval.link?.token });
+  if (approved.status !== 202) throw new Error(`approve-email answered ${approved.status} ${approved.text}`);
+  return (await harness.takeEmail((m) => m.to === to && m.link?.kind === "email")).link?.token ?? "";
+}
+
+/** Moves an account to `to`, as its owner does: asks, approves at the address it has, then confirms at the new one, signed in. */
+export async function moveAccount(harness: Harness, account: Account, to: string): Promise<void> {
+  const token = await askToMove(harness, account, to);
+  const confirmed = await account.visitor.post("/auth/confirm-email", { token });
   if (confirmed.status !== 200) throw new Error(`confirm-email answered ${confirmed.status} ${confirmed.text}`);
-  const notice = await harness.takeEmail((m) => m.to === account.email && m.link?.kind === "undo");
   account.email = to;
-  return { undo: notice.link?.token ?? "" };
 }
 
 /** The median of some numbers. */

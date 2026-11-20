@@ -63,14 +63,12 @@ safely, this is for you.
   so a stolen session can't be used to guess it.
 - **Forgotten passwords:** a password link, sent to an email that has an account,
   chooses a new password, and signs out everywhere else.
-- **Changing the email,** with a link to the new address, opened where the account is
-  signed in. Every session ends, and the old address is told, with a link that undoes
-  the move for 7 days (and makes the password useless, in case it was stolen); a
-  password link (or, without passwords, a sign-in link) at the old address does the
-  same. So for 7 days the old address can take the account back, even one handed on to
-  someone else.
-- **Notices:** a message to the account when its password changes or it's deleted, and
-  to the old address when its email does.
+- **Changing the email,** as OWASP advises: the address the account has approves it
+  first, by a link, then the new address confirms it, by a link opened where the account
+  is signed in. Nothing goes to the new address until the old one approves, so someone
+  with the password, or a session, can't move the account away. Every session ends.
+- **Notices:** a message to the account when its password changes, a passkey is added
+  or removed, or it's deleted.
 - **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
   was made, its sessions, and links waiting to be used; nothing that signs anyone in.
 - **A record of events,** if you want one: sessions started, wrong passwords, pauses,
@@ -219,9 +217,9 @@ The routes take and give JSON:
 | `GET /auth/sessions` | | The account's sessions: `{ sessions: [{ id, started, lastUsed, current }] }` |
 | `POST /auth/end-session` | `{ id }` | Ends one of them |
 | `GET /auth/my-data` | | Everything kept about the account, as a file to save |
-| `POST /auth/change-email` | `{ email }` | Emails a link to the new address (signed in recently) |
-| `POST /auth/confirm-email` | `{ token }` | From that link, signed in to the account: moves it, and ends every session. The old address gets a link to undo it, unless the account is moving back to an address it was moved from, while that move's undo lasts: that's the undo, in full (the password made useless, every passkey gone, and a link to get back in sent home) |
-| `POST /auth/undo-email` | `{ token }` | From the notice to the old address: moves it back, ends every session, and emails a link to get back in |
+| `POST /auth/change-email` | `{ email }` | Emails the address the account has a link to approve moving it (signed in recently) |
+| `POST /auth/approve-email` | `{ token }` | From that link: emails the new address a link to confirm it (or, if it has an account, a message saying so) |
+| `POST /auth/confirm-email` | `{ token }` | From the new address's link, signed in to the account: moves it, and ends every session |
 | `POST /auth/delete-account` | none, or `{}` | Deletes the account and its sessions (signed in recently) |
 
 Where sign-in links are sent: a site that signs in by link, or has no passwords (where
@@ -269,18 +267,19 @@ for an app that needs its own; see "Using the parts" below.
 ### The link page
 
 Emailed links open your page at `linkPage`, with the token after `#`:
-`/account/link#password=…`, `#sign-in=…`, `#email=…`, or `#undo=…`. The example has one. The page:
+`/account/link#password=…`, `#sign-in=…`, `#move=…`, or `#email=…`. The example has one. The page:
 
 1. **Reads the token first,** before any other script runs, and takes it out of the
    address bar (`history.replaceState`). Keep analytics and other sites' scripts off it.
 2. **Asks `POST /auth/link` which email it's for, and says so:** "Choose a password for
-   ann@example.org", "Sign in as ann@example.org", "Use this address for your account:
-   ann@new.example", or "Move your account back to ann@example.org".
+   ann@example.org", "Sign in as ann@example.org", "Move your account to ann@new.example"
+   (for a move's approval, `email` is where it moves to), or "Use this address for your
+   account: ann@new.example".
 3. **Waits for the person to act:** a password and a button, or just a button. It never
    acts by itself, because someone could send a person their own link, to sign them in
    to the wrong account unawares; showing the email is what lets them notice.
 4. **Sends the token** with the password to `set-password`, or alone to
-   `sign-in-with-link`, `confirm-email`, or `undo-email`.
+   `sign-in-with-link`, `approve-email`, or `confirm-email`.
 
 Because the token is after `#`, a mail service that opens links to check them can't
 use one up.
@@ -375,13 +374,13 @@ each message as data: what it's for, who it's to, and the link in it, if any.
 | --- | --- | --- |
 | `sign-up` | an address with no account | `link`, `expires`: to choose a password, or (without passwords) to sign in |
 | `sign-in` | an account | `link`, `expires` |
-| `new-password` | an account | `link`, `expires`: a forgotten password, or after an undone move |
+| `new-password` | an account | `link`, `expires`: a forgotten password |
 | `no-account` | an address with no account, that asked to sign in where there are passwords | |
 | `passkey-only` | an account that signs in by passkey only, where someone asked for a link into it (`recovery: "app"`) | |
-| `confirm-email` | an account's new address | `link`, `expires` |
+| `approve-email` | an account, someone signed in to it having asked to move it | `email` (where it would go), `link` (to approve it), `expires` |
+| `confirm-email` | an account's new address, once the move's approved | `link`, `expires` |
 | `email-in-use` | an address with an account of its own, that another account asked to move to | |
 | `password-changed` | an account | |
-| `email-changed` | the address an account moved from | `email` (where it went), `link` (to undo it), `expires` |
 | `passkey-added`, `passkey-removed` | an account | nothing more: a passkey's name is chosen by whoever added it, so it isn't given |
 
 Each has `to`, a contact: `{ email }`. With TypeScript, a `switch` on `kind` that misses
@@ -467,12 +466,19 @@ print messages in production: they hold the link, and logs are kept.
 Worth knowing:
 
 - **`createAuth` sets up the database connection** it's given: WAL, a two-second wait
-  for another writer, foreign keys on, and deleted rows overwritten.
-
+  for another writer, foreign keys on, and deleted rows overwritten. Those are settings
+  of the connection, so if it's your app's own, its deleted rows are overwritten too.
+  Giving modest-auth a database file of its own keeps the two apart.
 - **Database calls are synchronous** (that's `node:sqlite`): each is a small, indexed
   query, but it holds the event loop for that moment. Several processes can share one
-  database file; while one writes, the others wait (the whole process waits) up to two
+  database file: each change that takes more than one statement is one transaction, and
+  while one process writes, the others wait (the whole process waits) up to two
   seconds, then that request fails.
+- **Deleting an account leaves nothing to find,** in the file or its WAL: an erasure
+  request after it is answered by there being nothing left (backups aside, until
+  they're replaced). If you need a record that it happened, keep one from the
+  `account-deleted` event, which names the account by its id. Anything you must keep
+  (orders, invoices) belongs in your own tables, keyed by that id.
 - **Many people can share one address,** behind an office, a school, or a mobile
   network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
   shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one

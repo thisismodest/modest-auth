@@ -25,7 +25,6 @@ export {
   type Session,
   SIGN_IN_LINK_MINUTES,
   type SignInMethod,
-  UNDO_DAYS,
   type User,
 } from "./auth.ts";
 export { clearedCookie, readSessionCookie, sessionCookie } from "./cookies.ts";

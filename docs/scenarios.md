@@ -18,7 +18,7 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 9. (With the clock moved on) a password link at 61 minutes and a sign-in link at 16: refused.
 10. **[LIKELY]** A sign-in link for `ann@`, then the account moved to `bob@`, then the link used: no session for the moved account.
 11. A password link, the account deleted, the link used: a fresh empty account or a refusal; never the old sessions or data.
-12. Two accounts moved away from `ann@` in turn, then a password link at `ann@`: neither restored.
+12. Two accounts moved away from `ann@` in turn, then a password link at `ann@`: no account opened; it's a sign-up.
 
 ## Sign-in and sessions
 
@@ -27,7 +27,7 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 15. **[LIKELY]** A session id from `/auth/sessions` used as a cookie: signs nobody in. A ends B's session by id: B's survives; the answer matches a missing id.
 16. **[LIKELY]** 10 sign-ins with the old password raced against a password change: none started with the old password survives.
 17. 51 sessions: the first ended, 50 remain.
-18. After `sign-out-everywhere`, `password`, `confirm-email`, `undo-email`, or `delete-account`: each old cookie gives `{user:null}`, as promised.
+18. After `sign-out-everywhere`, `password`, `confirm-email`, or `delete-account`: each old cookie gives `{user:null}`, as promised.
 19. (With the clock moved on) a session unused 7 days has ended; one used daily ends at 30.
 
 ## The cookie
@@ -68,21 +68,21 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 44. A password with NUL, a newline, or right-to-left marks: accepted ("any characters"); signing in with its NFKC form and as typed: which work is recorded.
 45. `breachedRange` gets exactly 5 hex characters, once or twice; a hanging one lets the password through after about 5 seconds, logged without the password.
 
-## Changing password and email, and the undo link
+## Changing password and email
 
 46. A password change keeps this session, ends the rest, and emails a notice without the password.
 47. **[LIKELY]** A `confirm-email` link opened signed out, signed in to another account, or by the victim when the attacker sent it: nothing happens, and the link isn't spent.
 48. **[LIKELY]** A move to `new@`, someone signs up `new@` before the confirm, then the confirm: fails cleanly, with no merge and no second account on that address.
-49. **[LIKELY]** After a move away from `ann@`, a fresh account at `ann@`, then the undo link: no two accounts may share `ann@`.
-50. A thief moves the account twice and changes the password: the owner's first undo still restores it, ends every session, makes the old password useless, and emails a password link even past the link limits.
-51. The thief undoes their own second move: the owner's undo for the first still works.
+49. **[LIKELY]** A thief with the password and a session asks to move the account: nothing reaches the new address, and nothing moves, until the address the account has approves.
+50. An approval link signs nobody in, works once, and does nothing once the account has moved elsewhere.
+51. (Was: a thief's undo cancelling the owner's. There are no undo links now: a move needs the old address's approval first.)
 52. `change-email` raced with a password change: the move isn't stored.
-53. A change to the same address, its NFKC-equal form, or its Punycode form: refused or a no-op, with no "old address" notice to the same inbox.
-54. (With the clock moved on) an undo link at 7 days and a minute: refused.
+53. A change to the same address, its NFKC-equal form, or its Punycode form: refused, with nothing sent.
+54. (Was: an undo link after 7 days. There are no undo links now.)
 
 ## Deleting an account, and the copy of data
 
-55. `delete-account` from a session older than `RECENT_MINUTES`: 403 `sign-in-again`, nothing deleted; from a recent one, sessions and links end (undo links too), and sign-in then looks like an unknown email.
+55. `delete-account` from a session older than `RECENT_MINUTES`: 403 `sign-in-again`, nothing deleted; from a recent one, sessions and links end, and sign-in then looks like an unknown email.
 56. `my-data`: email, creation time, sessions, pending links; no hashes, tokens, salt, cost, or limit keys; `no-store`, no CORS even with an `Origin`; 401 signed out.
 57. An app table referencing `auth_users` with `ON DELETE CASCADE`: its rows go.
 
@@ -148,7 +148,6 @@ README.md and docs/threat-model.md alone, without seeing the code. They're teste
 - Log notes are "a few times each at most" in one place, "5 sources" in another.
 - "Ranges wide enough to be much of the internet": no threshold.
 - "Opened where the account is signed in": the same session, or any of the account's?
-- What should undo do when the old address now has another account?
 - For `Sec-Fetch-Site`, are `none` and `same-site` refused?
 - `my-data`'s "links waiting to be used": does that include move links to other addresses, and in what form?
 - NFKC passwords: does signing in accept both the typed and the normal form?

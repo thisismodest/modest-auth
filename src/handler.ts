@@ -12,9 +12,9 @@
 //   GET  /auth/sessions              the account's sessions: { sessions: [{ id, started, lastUsed, current }] }
 //   POST /auth/end-session           { id }: ends one of them
 //   GET  /auth/my-data               everything kept about the account, as a file to save
-//   POST /auth/change-email          { email }: a link to the new address (signed in recently)
-//   POST /auth/confirm-email         { token }: from that link, signed in; every session ends
-//   POST /auth/undo-email            { token }: from the notice to the old address
+//   POST /auth/change-email          { email }: a link to the address it has, to approve the move (signed in recently)
+//   POST /auth/approve-email         { token }: from that link: a link to the new address, to confirm it
+//   POST /auth/confirm-email         { token }: from the new address's link, signed in; every session ends
 //   POST /auth/delete-account         (no fields; signed in recently)
 //
 // Where sign-in links are sent (a site that signs in by link, or has no passwords, so links make accounts and
@@ -175,11 +175,6 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const { linkPage, deliver } = options;
   if (typeof linkPage !== "string" || !/^(\/[A-Za-z0-9._~-]+)+\/?$|^\/$/.test(linkPage))
     throw new Error('linkPage must be a path on the site, such as "/account/link".');
-  if ("sendEmail" in options || "name" in options) {
-    throw new Error(
-      "sendEmail and name have gone: give deliver(message) instead, and use emailFor(message, { origin, name }) in it for modest-auth's own emails.",
-    );
-  }
   if (typeof deliver !== "function") throw new Error("deliver must be a function that sends a message: (message, { signal }).");
   const passwords = auth.signInWith.includes("password");
   const passkeys = auth.signInWith.includes("passkey");
@@ -234,11 +229,6 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const passwordChanged = (email: string) => queue({ kind: "password-changed", to: { email } });
   const base = options.base ?? "/auth";
   if (!/^(\/[a-z0-9-]+)+$/.test(base)) throw new Error('base must be a path such as "/auth", in lowercase letters, numbers, and hyphens.');
-  if ("proxies" in options) {
-    throw new Error(
-      'proxies has gone: name the proxies in front in trustedProxies instead, such as ["loopback"] for one on this machine, ["private"] for a hosting platform\'s, or a proxy\'s own address.',
-    );
-  }
   const trusted = trusting(options.trustedProxies);
   /** This site's own pages, to tell a setting that's off from an attack. */
   const ownPage = pageOf(origin);
@@ -385,22 +375,14 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
       return reply(200, {}, current ? clearedCookie(origin) : undefined);
     }),
     "change-email": own(({ token }, b: Body, from: string) => sent(auth.requestEmailChange(token, b.email ?? "", from))),
+    // Whoever reads the account's address approves: no sign-in needed.
+    "approve-email": (_r, b, from) => sent(auth.approveEmailChange(b.token ?? "", from)),
     // Only by the account it moves, signed in here: someone could send a person their own link.
     "confirm-email": own(({ user }, b: Body, from: string) => {
       const moved = auth.useEmailLink(b.token ?? "", user.id, from);
-      const { undo } = moved;
-      if (undo) queue({ kind: "email-changed", to: { email: undo.to }, email: moved.email, link: linkTo("undo", undo.token ?? ""), expires: undo.expires });
-      // Moved back home: that's an undo, so a link to get back in, as from undo-email.
-      else send(moved.reset);
       // Every session ended, this one too.
       return signedOut({ email: moved.email });
     }, "Please sign in, then open the link again."),
-    "undo-email": (_r, b, from) => {
-      const back = auth.useUndoLink(b.token ?? "", from);
-      // Its password no longer works: a link to get back in, to the address it's back at.
-      send(back.reset);
-      return reply(200, { email: back.email });
-    },
     "delete-account": own(({ token, user }, _b: Body, from: string) => {
       auth.deleteAccount(token, from);
       // It can't be undone: the address is told, so a deletion its owner didn't make is at least known.

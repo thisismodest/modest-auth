@@ -5,7 +5,20 @@
 
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { type Answer, freshEmail, freshPassword, type Harness, hashTime, median, signUp, startHarness, steadyHeaders, unlessBusy, wait } from "./harness.ts";
+import {
+  type Account,
+  type Answer,
+  freshEmail,
+  freshPassword,
+  type Harness,
+  hashTime,
+  median,
+  signUp,
+  startHarness,
+  steadyHeaders,
+  unlessBusy,
+  wait,
+} from "./harness.ts";
 
 let h: Harness;
 /** One password hash, here, in ms. */
@@ -118,18 +131,24 @@ test("a slow email service doesn't make the next request's time show whether the
   }
 });
 
-test("asking to move to an address with an account or without gives the same answer, in the same time, and an email to each (37)", async (t) => {
-  const mover = await signUp(h);
+test("approving a move to an address with an account or without gives the same answer, in the same time, and an email to each (37)", async (t) => {
   const taken = await signUp(h);
   const toTaken: Answer[] = [];
   const toFree: Answer[] = [];
   const freeInboxes: string[] = [];
-  // Two of each: with the sign-up's link, that's the 5 links one address may ask for in 15 minutes.
+  /** Asks to move `mover` to `to`, and approves it at the address it has: the approval's answer. */
+  const approve = async (mover: Account, to: string) => {
+    assert.equal((await unlessBusy(() => mover.visitor.post("/auth/change-email", { email: to }))).status, 202);
+    const approval = await h.takeEmail((m) => m.to === mover.email && m.link?.kind === "move");
+    return unlessBusy(() => h.visitor().post("/auth/approve-email", { token: approval.link?.token }));
+  };
+  // Two movers, each moving once to a free address and once to the taken one.
   for (let i = 0; i < 2; i++) {
+    const mover = await signUp(h);
     const free = freshEmail("free");
     freeInboxes.push(free);
-    toFree.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { email: free })));
-    toTaken.push(await unlessBusy(() => mover.visitor.post("/auth/change-email", { email: taken.email })));
+    toFree.push(await approve(mover, free));
+    toTaken.push(await approve(mover, taken.email));
   }
   for (let i = 0; i < 2; i++) same(toTaken[i] as Answer, toFree[i] as Answer);
   t.diagnostic(
