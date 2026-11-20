@@ -90,9 +90,9 @@
 <span class="k">import</span> { createAuth, createHandler, emailFor, handleNode, toRequest } <span class="k">from</span> <span class="s">"modest-auth"</span>;
 
 <span class="k">const</span> ORIGIN = <span class="s">"https://example.org"</span>; <span class="c">// your site's address (HTTPS)</span>
-<span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.</span>
+<span class="c">// Its tables (auth_users, auth_sessions, auth_links, auth_codes, auth_passkeys, auth_challenges, auth_limits) can live in your app's own database.</span>
 <span class="k">const</span> auth = <span class="f">createAuth</span>(<span class="k">new</span> <span class="f">DatabaseSync</span>(process.env.DATABASE_PATH ?? <span class="s">"app.db"</span>), {
-  signInWith: [<span class="s">"link"</span>, <span class="s">"passkey"</span>], <span class="c">// any of "link", "password", and "passkey"</span>
+  signInWith: [<span class="s">"link"</span>, <span class="s">"passkey"</span>], <span class="c">// any of "link", "code", "password", and "passkey"</span>
 });
 <span class="k">const</span> handler = <span class="f">createHandler</span>(auth, {
   origin: ORIGIN,
@@ -142,8 +142,8 @@ server.<span class="f">listen</span>(<span class="s">3000</span>);</code></pre>
             <table>
               <thead><tr><th scope="col">Route</th><th scope="col">Body</th><th scope="col">Does</th></tr></thead>
               <tbody>
-                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in, sign up, or get back in (with <code>recovery: "app"</code>, only to sign up)</td></tr>
-                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token, reset }</code></td><td>From a sign-in link: signs in, making the account if need be. With <code>reset: "true"</code>, for someone who has lost a passkey, a fresh start: every other session, link, and passkey of the account ends</td></tr>
+                <tr><td><code>POST /auth/send-sign-in-link</code></td><td><code>{ email }</code></td><td>Emails a link to sign in, sign up, or get back in (with <code>recovery: "app"</code>, only to sign up); with codes, the link has one too, and the asking browser gets the cookie it needs</td></tr>
+                <tr><td><code>POST /auth/sign-in-with-link</code></td><td><code>{ token, reset }</code>, or <code>{ code }</code></td><td>From a sign-in link: signs in, making the account if need be. With <code>reset: "true"</code>, for someone who has lost a passkey, a fresh start: every other session, link, and passkey of the account ends. Or, with codes, the link's code, typed in the browser that asked</td></tr>
               </tbody>
             </table>
           </div>
@@ -267,6 +267,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
                 <tr><td><code>breached-password</code></td><td>422</td><td>Found in a data breach (with <code>breachedRange</code>)</td></tr>
                 <tr><td><code>invalid-password</code></td><td>422</td><td>Broken text (not valid Unicode)</td></tr>
                 <tr><td><code>invalid-link</code></td><td>400</td><td>The link has expired or been used</td></tr>
+                <tr><td><code>wrong-code</code></td><td>401</td><td>A sign-in link's code that's wrong, run out, or typed in another browser than the one that asked</td></tr>
                 <tr><td><code>wrong-credentials</code></td><td>401</td><td>The email and password don't match</td></tr>
                 <tr><td><code>sign-in-again</code></td><td>403</td><td>That needs a sign-in in the last 10 minutes</td></tr>
                 <tr><td><code>invalid-passkey</code></td><td>400</td><td>The passkey couldn't be used: for another site, not this account's, or not signed by it</td></tr>
@@ -308,7 +309,7 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             </div>
             <div>
               <h3><code>signInWith</code> <small>(createAuth)</small></h3>
-              <p>How people sign in: any of <code>"link"</code>, <code>"password"</code>, and <code>"passkey"</code>, each on its own or mixed. Required. Every account is still made by a link to its email.</p>
+              <p>How people sign in: any of <code>"link"</code>, <code>"password"</code>, and <code>"passkey"</code>, each on its own or mixed, and <code>"code"</code>, only beside <code>"link"</code>: each sign-in link then also has a 6-digit code, typed instead in the browser that asked. Required. Every account is still made by a link to its email (or its code).</p>
             </div>
             <div>
               <h3><code>recovery</code> <small>(createAuth)</small></h3>
@@ -321,6 +322,10 @@ history.<span class="f">replaceState</span>(<span class="k">null</span>, <span c
             <div>
               <h3><code>onEvent</code> <small>(createAuth)</small></h3>
               <p>Optional: told of each sign-in, failure, pause, and change, after the answer, with the account's id and where it came from. Never a password, token, or email.</p>
+            </div>
+            <div>
+              <h3><code>pepper</code> <small>(createAuth)</small></h3>
+              <p>A secret of 32 characters or more, kept outside the database (<code>openssl rand -base64 32</code>, in the app's environment). Required with <code>"code"</code>: each code, only 6 digits, is kept as a hash keyed by it, so a copy of the database can't be searched for one. Links and sessions don't need it.</p>
             </div>
             <div>
               <h3><code>breachedRange</code> <small>(createAuth)</small></h3>
@@ -386,10 +391,11 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
             <table>
               <thead><tr><th scope="col"><code>auth.</code></th><th scope="col">Does</th></tr></thead>
               <tbody>
-                <tr><td><code>requestLink(kind, email, from)</code></td><td>A link to send, or null: <code>{ kind, to, token, account, expires }</code>, with <code>token</code> null when the message should say there's no account</td></tr>
+                <tr><td><code>requestLink(kind, email, from, asker)</code></td><td>A link to send, or null: <code>{ kind, to, token, account, expires, code }</code>, with <code>token</code> null when the message should say there's no account. With codes, a sign-in link needs <code>asker</code>: a new <code>newAsker()</code> each time, given to the browser by <code>codeCookie</code> whatever the answer</td></tr>
                 <tr><td><code>lookUpLink(token, from)</code></td><td>Which email a link is for, without using it</td></tr>
                 <tr><td><code>usePasswordLink(token, password, from)</code></td><td>The account, made or with its new password; every session ends</td></tr>
                 <tr><td><code>useSignInLink(token, from, { reset })</code></td><td>The account a sign-in link is for (made, without passwords, if there wasn't one); with <code>reset</code>, or where the site doesn't sign in by link, a fresh start</td></tr>
+                <tr><td><code>useSignInCode(asker, code, from)</code></td><td>The same, by the link's code, typed in the browser that asked (<code>asker</code>: the link's, held in its cookie); 5 wrong tries end the code, and 10 codes a day per address</td></tr>
                 <tr><td><code>signIn(email, password, from)</code></td><td>The account, if the password's right</td></tr>
                 <tr><td><code>startSession(user)</code></td><td>A session token, for a user just returned by the calls above</td></tr>
                 <tr><td><code>userOf(token)</code></td><td>Who a session belongs to, or null</td></tr>
@@ -401,7 +407,8 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
                 <tr><td><code>approveEmailChange(token, from)</code></td><td>From that link: a link to send to the new address, to confirm it, or null</td></tr>
                 <tr><td><code>useEmailLink(token, userId, from)</code></td><td>Moves the account signed in as <code>userId</code>; gives the <code>previous</code> email</td></tr>
                 <tr><td><code>deleteAccount(session, from)</code></td><td>The account and its sessions, gone (a recent session)</td></tr>
-                <tr><td><code>recoveryLink(email)</code></td><td>A link into the account, for your own code to send to someone you've vouched for; never from a route</td></tr>
+                <tr><td><code>recoveryLink(email)</code></td><td>A link into the account, for your own code to send to someone you've vouched for; never from a route, and not counted against the address's links (wherever it's the way back in, a password link or a sign-in link on a site that doesn't sign in by link, opening it is a fresh start)</td></tr>
+                <tr><td><code>endAccess(email)</code></td><td>Every session, link, passkey, and the password of the account end, for your own code (someone else got in, or your records give the address to someone else now); nothing is sent; the account and its id stay; never from a route</td></tr>
                 <tr><td><code>passkeyOptions(session, origin, from)</code>, <code>addPasskey(session, made, name, origin, from)</code></td><td>Options to make a passkey, and adding the one made (a recent session)</td></tr>
                 <tr><td><code>signInOptions(origin, from)</code>, <code>signInWithPasskey(assertion, origin, from)</code></td><td>Options to sign in with one, and the account it signs in to</td></tr>
                 <tr><td><code>passkeysOf(userId)</code>, <code>removePasskey(session, id, from)</code></td><td>The account's passkeys, and removing one (a recent session)</td></tr>
@@ -412,7 +419,9 @@ app.<span class="f">use</span>(<span class="k">async</span> (req, res, next) =&g
             <code>from</code> is <code>addressKey({ remoteAddress, forwardedFor }, trustedProxies)</code>; refuse a request
             whose address comes back <code>"unknown"</code>. Cookies come from
             <code>sessionCookie(token, origin)</code>, <code>clearedCookie(origin)</code>, and
-            <code>readSessionCookie(header, origin)</code>.
+            <code>readSessionCookie(header, origin)</code>; with codes, <code>codeCookie(asker, origin)</code>,
+            <code>clearedCodeCookie(origin)</code>, and <code>readCodeCookie(header, origin)</code>, for the token from
+            <code>newAsker()</code>.
           </p>
         </section>
 

@@ -17,11 +17,12 @@
 //   POST /auth/confirm-email         { token }: from the new address's link, signed in; every session ends
 //   POST /auth/delete-account         (no fields; signed in recently)
 //
-// Where sign-in links are sent (a site that signs in by link, or has no passwords, so links make accounts and
-// get people back in):
+// Where sign-in links are sent (a site that signs in by link, or has no passwords, so links make accounts and get
+// people back in):
 //
-//   POST /auth/send-sign-in-link     { email }: to sign in (or sign up, or get back in)
-//   POST /auth/sign-in-with-link     { token, reset }: from a sign-in link (reset "true": every session, link, and passkey ended)
+//   POST /auth/send-sign-in-link     { email }: to sign in (or sign up, or get back in); with codes, the asking browser gets the code cookie
+//   POST /auth/sign-in-with-link     { token, reset }: from a sign-in link (reset "true": every session, link, and passkey ended);
+//                                    or, with codes, { code }: the link's code, typed in the browser that asked
 //
 // And only on a site with passwords:
 //
@@ -43,8 +44,8 @@
 // RECENT_MINUTES: an older one is told "sign-in-again", and signing in again (by any way the site has)
 // starts a fresh one.
 
-import type { Auth, Link, User } from "./auth.ts";
-import { clearedCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
+import { type Auth, type Link, newAsker, type User } from "./auth.ts";
+import { clearedCodeCookie, clearedCookie, codeCookie, readCodeCookie, readSessionCookie, sessionCookie, siteOrigin } from "./cookies.ts";
 import { AuthError } from "./errors.ts";
 import { atMost, blockOf, traceClient, trusting } from "./limits.ts";
 import { type Message, messageFor } from "./messages.ts";
@@ -133,9 +134,9 @@ export const HEADERS = {
   "cross-origin-resource-policy": "same-origin",
 };
 
-function reply(status: number, body: unknown, cookie?: string, retryAfter?: number): Response {
+function reply(status: number, body: unknown, cookies?: string | string[], retryAfter?: number): Response {
   const headers = new Headers(HEADERS);
-  if (cookie) headers.append("set-cookie", cookie);
+  for (const cookie of [cookies ?? []].flat()) headers.append("set-cookie", cookie);
   // Paused or busy: when it's worth trying again (seconds), from the limit itself.
   if (retryAfter !== undefined) headers.set("retry-after", String(Math.max(1, retryAfter)));
   return new Response(JSON.stringify(body), { status, headers });
@@ -278,18 +279,19 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     return token && user ? { token, user } : null;
   };
   const userOf = (request: Request) => signedInAs(request)?.user ?? null;
-  const signedIn = (user: User, old: string | null, from: string) => {
+  const signedIn = (user: User, old: string | null, from: string, also: string[] = []) => {
     // A fresh session at each sign-in, and the one the browser had ended: nobody can plant a session and wait.
     if (old) auth.endSession(old, from);
-    return reply(200, { user: { email: user.email } }, sessionCookie(auth.startSession(user), origin));
+    return reply(200, { user: { email: user.email } }, [sessionCookie(auth.startSession(user), origin), ...also]);
   };
   /** Signed out: the session cookie cleared. */
   const signedOut = (body: object = {}) => reply(200, body, clearedCookie(origin));
   /** Sends the message (after the answer), and answers the same whatever happened. */
-  const sent = (link: Link | null) => {
+  const sent = (link: Link | null, cookie?: string) => {
     send(link);
-    return reply(202, {});
+    return reply(202, {}, cookie);
   };
+  const codes = auth.signInWith.includes("code");
 
   // Only the site's own pages may change anything (browsers always send Origin on a POST).
   const fromSite = (request: Request) => {
@@ -312,10 +314,23 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
   const passkeyNotice = (kind: "passkey-added" | "passkey-removed", email: string) => queue({ kind, to: { email } });
   /** The routes for sign-in links: where they're sent (to sign in, or, without passwords, to make accounts and get back in). */
   const linkRoutes: Record<string, Route> = {
-    "send-sign-in-link": (_r, b, from) => sent(auth.requestLink("sign-in", b.email ?? "", from)),
-    // `reset: "true"`: a fresh start, every session, link, and passkey of the account ended (always, where links
-    // aren't a sign-in method, as they're only the way back in there).
-    "sign-in-with-link": (r, b, from) => signedIn(auth.useSignInLink(b.token ?? "", from, { reset: b.reset === "true" }), tokenOf(r), from),
+    // Where links have codes, the browser that asked holds the token its code needs: a new one each time, given
+    // whether or not a link went, and its code stored under it either way, so neither shows anything.
+    "send-sign-in-link": (_r, b, from) => {
+      if (!codes) return sent(auth.requestLink("sign-in", b.email ?? "", from));
+      const asker = newAsker();
+      return sent(auth.requestLink("sign-in", b.email ?? "", from, asker), codeCookie(asker, origin));
+    },
+    // From the link (`token`), or its code typed in the browser that asked (`code`). `reset: "true"`: a fresh start,
+    // every session, link, and passkey of the account ended (always, where links aren't a sign-in method, as they're
+    // only the way back in there).
+    "sign-in-with-link": (r, b, from) => {
+      if (codes && b.code !== undefined) {
+        const user = auth.useSignInCode(readCodeCookie(r.headers.get("cookie"), origin) ?? "", b.code, from);
+        return signedIn(user, tokenOf(r), from, [clearedCodeCookie(origin)]);
+      }
+      return signedIn(auth.useSignInLink(b.token ?? "", from, { reset: b.reset === "true" }), tokenOf(r), from);
+    },
   };
   /** The routes for passwords: only on a site that uses them. */
   const passwordRoutes: Record<string, Route> = {

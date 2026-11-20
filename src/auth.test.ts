@@ -218,7 +218,7 @@ test("its tables can share the app's own database", async () => {
   const auth = createAuth(db, { signInWith: ["password", "link"] });
   await signUp(auth, "editor@example.org", PASSWORD, HERE);
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((t) => t.name);
-  assert.deepEqual(tables, ["auth_challenges", "auth_limits", "auth_links", "auth_passkeys", "auth_sessions", "auth_users", "users"]);
+  assert.deepEqual(tables, ["auth_challenges", "auth_codes", "auth_limits", "auth_links", "auth_passkeys", "auth_sessions", "auth_users", "users"]);
   createAuth(db, { signInWith: ["password", "link"] });
   assert.equal(count(db, "auth_users"), 1, "made again on the same database: nothing lost");
 });
@@ -1328,6 +1328,7 @@ test("it won't run inside a transaction the app opened, whose rollback would und
   await assert.rejects(auth.signIn("ann@example.org", "a wrong long password", HERE), /inside a transaction/);
   assert.throws(() => auth.requestLink("password", "ann@example.org", HERE), /inside a transaction/);
   assert.throws(() => auth.endAllSessions(ann.id), /inside a transaction/, "a sign-out can't be reported done, then rolled back");
+  assert.throws(() => auth.endAccess("ann@example.org"), /inside a transaction/, "nor an end to every way in");
   assert.throws(() => auth.userOf(session), /inside a transaction/);
   db.exec("ROLLBACK");
   assert.equal(auth.userOf(session)?.id, ann.id);

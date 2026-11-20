@@ -9,11 +9,15 @@
 // Over plain HTTP (allowed only on this machine, for development) it has the same
 // flags but no Secure or prefix, and a name of its own with the port in it, so other
 // apps on localhost (which share cookies across ports), this one's too, don't overwrite it.
+//
+// A second cookie, only where "code" is a sign-in method: the token of the browser that
+// asked for a sign-in link, without which its code does nothing. The same flags, but
+// SameSite=Strict (only this site's own pages ever need it), for as long as the link.
 
-import { LONGEST_TOKEN, SESSION_MS } from "./auth.ts";
+import { LONGEST_TOKEN, SESSION_MS, SIGN_IN_LINK_MINUTES } from "./auth.ts";
 
-/** The site's origin, checked: just a scheme, host, and port; HTTPS, or plain HTTP on this machine. Whether it's HTTPS, and the cookie's name. */
-export function siteOrigin(given: string): { origin: string; secure: boolean; cookie: string } {
+/** The site's origin, checked: just a scheme, host, and port; HTTPS, or plain HTTP on this machine. Whether it's HTTPS, and the cookies' names. */
+export function siteOrigin(given: string): { origin: string; secure: boolean; cookie: string; codeCookie: string } {
   let url: URL;
   try {
     url = new URL(given);
@@ -24,7 +28,13 @@ export function siteOrigin(given: string): { origin: string; secure: boolean; co
   if (origin !== given) throw new Error(`origin must be just the scheme, host, and port, such as "${origin}".`);
   const secure = origin.startsWith("https://");
   if (!secure && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin)) throw new Error("origin must be HTTPS (plain HTTP only on this machine).");
-  return { origin, secure, cookie: secure ? "__Host-session" : `modest-auth-dev-session-${url.port || "80"}` };
+  const port = url.port || "80";
+  return {
+    origin,
+    secure,
+    cookie: secure ? "__Host-session" : `modest-auth-dev-session-${port}`,
+    codeCookie: secure ? "__Host-code" : `modest-auth-dev-code-${port}`,
+  };
 }
 
 const TOKEN = new RegExp(`^[A-Za-z0-9_-]{1,${LONGEST_TOKEN}}$`);
@@ -41,10 +51,11 @@ const trimmed = (text: string) => {
   return text.slice(start, end);
 };
 
-/** The Set-Cookie header for the site at `origin`: `value` for `seconds`. */
-function cookie(origin: string, value: string, seconds: number): string {
-  const { secure, cookie: name } = siteOrigin(origin);
-  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${secure ? "; Secure" : ""}`;
+/** The Set-Cookie header for the site at `origin`: `value` for `seconds`, as its session cookie, or its code cookie. */
+function cookie(origin: string, value: string, seconds: number, which: "session" | "code" = "session"): string {
+  const site = siteOrigin(origin);
+  const [name, sameSite] = which === "code" ? [site.codeCookie, "Strict"] : [site.cookie, "Lax"];
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${seconds}${site.secure ? "; Secure" : ""}`;
 }
 
 /** The Set-Cookie header that starts a session, for the site at `origin`. */
@@ -56,14 +67,27 @@ export function sessionCookie(token: string, origin: string): string {
 /** The Set-Cookie header that ends one (on signing out). */
 export const clearedCookie = (origin: string): string => cookie(origin, "", 0);
 
+/** The Set-Cookie header for the browser that asks for a sign-in link with a code: `asker`, for as long as the link. */
+export function codeCookie(asker: string, origin: string): string {
+  if (!TOKEN.test(asker)) throw new Error("That isn't a code's asker token.");
+  return cookie(origin, asker, SIGN_IN_LINK_MINUTES * 60, "code");
+}
+
+/** The Set-Cookie header that ends it (once a code is used). */
+export const clearedCodeCookie = (origin: string): string => cookie(origin, "", 0, "code");
+
 /**
  * The session token from a request's Cookie header, or null. If the header holds
  * more than one cookie of the name, none is believed: a browser keeps one, so a
  * second was planted by someone trying to swap their session in. Only spaces and
  * tabs are trimmed round a name: one with any other character round it isn't ours.
  */
-export function readSessionCookie(header: string | undefined | null, origin: string): string | null {
-  const wanted = siteOrigin(origin).cookie;
+export const readSessionCookie = (header: string | undefined | null, origin: string): string | null => readCookie(header, siteOrigin(origin).cookie);
+
+/** The asker token from a request's Cookie header (its code cookie), or null, read as the session's is. */
+export const readCodeCookie = (header: string | undefined | null, origin: string): string | null => readCookie(header, siteOrigin(origin).codeCookie);
+
+function readCookie(header: string | undefined | null, wanted: string): string | null {
   const found: string[] = [];
   for (const part of (header ?? "").split(";")) {
     const at = part.indexOf("=");

@@ -36,11 +36,15 @@ round modest-auth.
 
 | Threat | Mitigation | Where |
 | --- | --- | --- |
-| A way in the site didn't choose | How people sign in must be given (`signInWith`): any of a link, a password, and a passkey; anything else refused at start-up. A way not chosen is off entirely: its routes aren't there, and its functions refuse to run. Sign-in links are sent only where "link" is chosen, or there are no passwords (where they make accounts and get people back in) | `auth.ts`, `handler.ts` |
+| A way in the site didn't choose | How people sign in must be given (`signInWith`): any of a link, a code (only beside a link: it's a sign-in link's), a password, and a passkey; anything else refused at start-up. A way not chosen is off entirely: its routes aren't there, and its functions refuse to run. Sign-in links are sent only where "link" or "code" is chosen, or there are no passwords (where they make accounts and get people back in); they have codes only where "code" is | `auth.ts`, `handler.ts` |
 | An inbox as a way into a passkey account | `recovery: "app"`, only with `signInWith: ["passkey"]`: no link into an existing account is sent at anyone's asking (the same answer, and work, as for any address; the inbox is told the account signs in by passkey), so only the app's own code can make one (`recoveryLink`). Sign-up still proves the address by a link, which makes a new account and nothing else | `auth.ts` |
 | Someone the app doesn't want having an account | `allow`, if given, is asked before a link is sent or used, an account made, or a session started or used, so someone it stops allowing is signed out at their next request, for good: their sessions end, so none comes back if it allows them again. It can only refuse: only a plain `true` is a yes, and a mistake in it (throwing, or answering anything else, a promise included) is a refusal, logged without details. A refused address is answered as any other, does the same work, and is sent nothing | `auth.ts`, `handler.ts` |
 | Signing up with someone else's email | An account is made only by a link emailed to the address: where there are passwords, whoever opens it chooses one; where there aren't, opening a sign-in link makes it | `auth.ts` |
 | Guessing, reusing, or stretching a link | 256-bit tokens, kept only as SHA-256 hashes; single-use, taken in one statement; 60 minutes to choose a password, 15 to sign in; a password link can't sign in, nor a sign-in link choose a password; a password refused at a link doesn't use it up; using a link, a new password, or deleting the account ends the email's other links | `auth.ts` |
+| Guessing a sign-in link's code | 6 digits (NIST SP 800-63B's least, with tries limited): 5 wrong tries end the code (its link still works, in the address's own inbox), each taken in the change that compares it, so tries sent at once can't share one; 10 codes a day typed for one address, right or wrong, across codes, so a year of guessing still has well under a 1% chance, while links and passkeys keep working (past the cap, answered as a wrong code, as a pause would show that codes were typed at the address today); 15 minutes, and single-use (a link and its code are one). The cap is per address: guessing across many addresses at once is held back by the limits on asking (links per address and IPv6 /48), not by it | `auth.ts` |
+| Learning, by typing at a code, whether its address has an account, or what happens to it | Every ask stores a code under the asking browser's new token, whatever the answer (a link, none for no account, none `allow` refuses, none past the inbox's limit); every typed code counts the address and takes a try, the same either way; a code lasts as its link was made to, used or ended, so its work doesn't change when someone signs in; past the day's cap the same work is done, and nothing is right; and deleting the account wipes the address from its codes rather than removing them | `auth.ts`, `handler.ts` |
+| Using a sign-in link's code from anywhere but where it was asked for | It works only with the token the asking browser was given (an `HttpOnly`, `SameSite=Strict` cookie, `__Host-code` over HTTPS, for as long as the link); one whether or not a link went, so the cookie shows nothing; only the latest asked for in a browser works there | `auth.ts`, `handler.ts`, `cookies.ts` |
+| Phishing a sign-in link's code | Not stopped, as for any typed code: a fake site asks for one for you, then asks you for it. The message says where to type it, and that nobody will ask for it; passkeys stay the way in that can't be phished. The code is only as safe as wherever `deliver` sends it | `messages.ts`, `README.md` |
 | A link leaking from its URL | The token follows `#`, which browsers never send to a server or in `Referer`; the link page takes it out of the address bar; a mail service that opens links to check them can't use one | `handler.ts`, `examples/node-http.ts` |
 | Sending someone your own link, to sign them in to your account (login CSRF) | The link page asks `/auth/link` which email it's for, shows it, and acts only when the person does | `handler.ts`, `examples/node-http.ts` |
 | Phishing a passkey (a look-alike site, or one framing ours) | The browser's client data must name exactly the handler's origin, of the right type (making one, or signing in), not from inside another site's frame (`crossOrigin` or `topOrigin` refused); the authenticator data must be for this site's host | `webauthn.ts` |
@@ -84,7 +88,7 @@ round modest-auth.
 | Passwords known from breaches elsewhere | If the app gives a `breachedRange`, new passwords found in that set (Have I Been Pwned's, say) are refused; only the first 5 characters of the password's SHA-1 leave (for its normal form, and the form typed if that differs), so the service never learns it | `auth.ts` |
 | An event's record giving secrets or who has an account away | Events carry the account's id and where it came from, never a password, token, or email; they're told after the answer, and a failing `onEvent` is logged, not passed on | `auth.ts` |
 | Piling up sessions for one account | 50 at most; the oldest ends | `auth.ts` |
-| A copy of the database | Passwords only as salted scrypt hashes; sessions and links only as SHA-256 hashes of 256-bit tokens; limit keys only as hashes | `passwords.ts`, `auth.ts`, `limits.ts` |
+| A copy of the database | Passwords only as salted scrypt hashes; sessions and links only as SHA-256 hashes of 256-bit tokens; codes, which are short, only as hashes keyed by the pepper, a secret kept outside the database (required with codes), so a copy can't be searched for one; limit keys only as hashes | `passwords.ts`, `auth.ts`, `limits.ts` |
 | Hashes that grow weaker as computers get faster | Each hash records its cost; an older one is replaced at the current cost at the next sign-in | `passwords.ts`, `auth.ts` |
 | A stored hash naming a huge cost, to tie the server up | Costs above the current one are refused unchecked | `passwords.ts` |
 | Stealing a session with an injected script | `HttpOnly` cookie | `cookies.ts` |
@@ -109,6 +113,12 @@ round modest-auth.
 | Deleted accounts and old passwords lingering on disk | `secure_delete`, and the WAL emptied into the file after a deletion, a new password, or clearing old links (when nothing else is reading at that moment; otherwise tried again, without waiting, at each clearing until done; never failing the request) | `auth.ts` |
 
 ## Known limits
+
+- **Someone with both a copy of the database and the pepper can find a code they asked
+  for.** A code is only 6 digits, kept as a hash keyed by the pepper (a secret outside
+  the database) with the asking browser's token. With the database alone, that hash
+  can't be searched; with the pepper too, whoever asked can try every code in its 15
+  minutes. Keep the pepper as private as the server's other secrets.
 
 - **Whoever reads an inbox can take over its account,** by choosing a new password or
   signing in by link, as on most sites. Email is the way back in.
@@ -194,7 +204,7 @@ round modest-auth.
   the old cost, which is small by the time it's replaced.
 - **Limit keys are hashes,** but of things that can be guessed (addresses, emails): a
   copy of the database could show which recently tried which. Rows are cleared once
-  their window (an hour at most) has passed, as later requests come in.
+  their window (a day at most, the cap on codes) has passed, as later requests come in.
 - **Backups keep deleted accounts** until they're replaced: the app's to manage.
 - **No pepper:** password hashes don't also use a secret kept outside the database
   (NIST suggests one). A copy of the database alone is enough to start guessing, at
@@ -236,6 +246,10 @@ round modest-auth.
   to vouch for them.
 - **`recoveryLink` lets in whoever opens it.** It's for the app's own code, after the
   app has checked who it's for; sent to the wrong person, it's an account handed over.
+- **`allow` refusing someone signs them out, but keeps their password and passkeys,** so
+  if they're allowed again, those work again. Where that matters (someone else got in,
+  an address now someone else's), the app's own code calls `endAccess`, which ends every
+  way in. The account stays, so whoever signs in at the address next has it, and its id.
 - **A session that's ended doesn't stop a change already checked against it,** except a
   password change, which lands only while its session is there. The others don't wait
   on anything, so there's no gap to use.

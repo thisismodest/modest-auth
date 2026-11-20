@@ -304,3 +304,65 @@ test("a change is all or nothing: one that fails part-way changes nothing, and t
   db.exec("DROP TRIGGER failing");
   assert.equal(auth.useSignInLink(must(link.token), HERE, { reset: true }).id, ann.id, "and the link wasn't used up");
 });
+
+test("endAccess: the app's own code ends every way in (sessions, links, passkeys, the password), keeps the account, and sends nothing", async () => {
+  const events: AuthEvent[] = [];
+  const { db, auth, ann, session } = await setup({ onEvent: (event) => void events.push(event) });
+  const { passkey } = add(auth, session);
+  const other = auth.startSession(signInWith(auth, passkey, ann.id));
+  const waiting = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.70"));
+  // Signed in just before, not yet given a session: it can't have one after.
+  const checked = await auth.signIn("ann@example.org", PASSWORD, HERE);
+  await later();
+  events.length = 0;
+  assert.equal(auth.endAccess("Ann@Example.org"), true);
+  assert.throws(() => auth.startSession(checked));
+  await later();
+  assert.deepEqual(
+    events.map((e) => [e.type, e.userId]),
+    [["access-ended", ann.id]],
+  );
+  assert.equal(auth.userOf(session), null);
+  assert.equal(auth.userOf(other), null);
+  assert.throws(() => auth.useSignInLink(must(waiting.token), "192.0.2.70"), code("invalid-link"));
+  assert.deepEqual(auth.passkeysOf(ann.id), []);
+  assert.throws(() => signInWith(auth, passkey, ann.id), code("invalid-passkey"));
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, HERE), code("wrong-credentials"));
+  assert.equal(auth.dataOf(ann.id)?.email, "ann@example.org", "the account stays");
+  assert.equal(count(db, "auth_links"), 0, "nothing sent, nothing waiting");
+  // A new link to the address is the way back in.
+  const back = must(auth.requestLink("sign-in", "ann@example.org", "192.0.2.71"));
+  assert.equal(auth.useSignInLink(must(back.token), "192.0.2.71").id, ann.id);
+});
+
+test("endAccess works whatever allow says, uses up no one's limits, and is false where there's no account", async () => {
+  let allowing = true;
+  const { auth, ann, session } = await setup({ allow: () => allowing });
+  const { passkey } = add(auth, session);
+  allowing = false;
+  for (let i = 0; i < 30; i++) auth.endAccess("ann@example.org");
+  allowing = true;
+  // Allowed again: nothing from before works, the passkey and the password included.
+  assert.equal(auth.userOf(session), null);
+  assert.deepEqual(auth.passkeysOf(ann.id), []);
+  assert.throws(() => signInWith(auth, passkey, ann.id), code("invalid-passkey"));
+  await assert.rejects(auth.signIn("ann@example.org", PASSWORD, HERE), code("wrong-credentials"));
+  assert.equal(auth.endAccess("nobody@example.org"), false);
+  assert.ok(must(auth.requestLink("sign-in", ann.email, HERE)).token, "the address can still be sent a link");
+});
+
+test("endAccess is all or nothing: one that fails part-way changes nothing, and tells no event", async () => {
+  const events: AuthEvent[] = [];
+  const { db, auth, ann, session } = await setup({ onEvent: (event) => void events.push(event) });
+  add(auth, session);
+  await later();
+  events.length = 0;
+  // It fails as it takes the passkeys, after the sessions have ended.
+  db.exec("CREATE TEMP TRIGGER failing BEFORE DELETE ON auth_passkeys BEGIN SELECT RAISE(ABORT, 'failed part-way'); END");
+  assert.throws(() => auth.endAccess("ann@example.org"), /failed part-way/);
+  await later();
+  assert.equal(auth.userOf(session)?.id, ann.id, "the sessions it ended are back");
+  assert.equal(auth.passkeysOf(ann.id).length, 1);
+  assert.deepEqual(events, [], "nothing told of a change that wasn't kept");
+  db.exec("DROP TRIGGER failing");
+});

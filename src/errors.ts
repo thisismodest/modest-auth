@@ -16,6 +16,8 @@ export type AuthErrorCode =
   | "invalid-password"
   /** An emailed link that has expired, been used, or was never sent. */
   | "invalid-link"
+  /** A sign-in link's code that's wrong, run out, or typed in another browser than the one that asked. */
+  | "wrong-code"
   /** Signing in with a wrong email or password (the same either way). */
   | "wrong-credentials"
   /** A passkey that doesn't check out: made or used for another site, not this account's, or not signed by it. */
@@ -36,6 +38,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   "invalid-password": 422,
   "invalid-link": 400,
   "wrong-credentials": 401,
+  "wrong-code": 401,
   "sign-in-again": 403,
   "invalid-passkey": 400,
   "too-many-tries": 429,

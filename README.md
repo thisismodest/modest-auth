@@ -59,8 +59,8 @@ safely, this is for you.
 
 ## What it does
 
-- **Sign in by an emailed link, a password, or a passkey:** the site chooses which
-  (`signInWith`).
+- **Sign in by an emailed link (or its code), a password, or a passkey:** the site
+  chooses which (`signInWith`).
 - **Accounts made only by a link to their email,** so nobody can sign up with someone
   else's.
 - **Getting back in, separate from signing in** (`recovery`): a link to the account's
@@ -110,7 +110,7 @@ import { createAuth, createHandler, emailFor, handleNode, toRequest } from "mode
 
 const ORIGIN = "https://example.org"; // your site's address (HTTPS)
 
-// Its tables (auth_users, auth_sessions, auth_links, auth_limits) can live in your app's own database.
+// Its tables (auth_users, auth_sessions, auth_links, auth_codes, auth_passkeys, auth_challenges, auth_limits) can live in your app's own database.
 // On a persistent disk or volume, outside the code (so a deploy or rebuild doesn't wipe it).
 const auth = createAuth(new DatabaseSync(process.env.DATABASE_PATH ?? "app.db"), {
   // How people sign in: by an emailed link, and a password. ["link"] alone for no passwords at all.
@@ -169,8 +169,8 @@ these links make accounts and get people back in). Otherwise they're not there a
 
 | Route | Body | Does |
 | --- | --- | --- |
-| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in, sign up, or get back in (with `recovery: "app"`, only to sign up) |
-| `POST /auth/sign-in-with-link` | `{ token, reset }` | From a sign-in link: signs in, making the account if need be. With `reset: "true"` (for someone who has lost a passkey), a fresh start: every other session, link, and passkey of the account ends. Where the site doesn't sign in by link, always |
+| `POST /auth/send-sign-in-link` | `{ email }` | Emails a link to sign in, sign up, or get back in (with `recovery: "app"`, only to sign up). Where the site signs in by code, the link has a code too, and the asking browser gets the cookie its code needs |
+| `POST /auth/sign-in-with-link` | `{ token, reset }`, or `{ code }` | From a sign-in link: signs in, making the account if need be. With `reset: "true"` (for someone who has lost a passkey), a fresh start: every other session, link, and passkey of the account ends. Where the site doesn't sign in by link, always. Or, by code: the link's code, typed in the browser that asked |
 
 And only where there are passwords:
 
@@ -225,6 +225,40 @@ Emailed links open your page at `linkPage`, with the token after `#`:
 
 Because the token is after `#`, a mail service that opens links to check them can't
 use one up.
+
+### Codes
+
+With `"code"` in `signInWith` (beside `"link"`: a code is a sign-in link's, so it needs
+links on), and a `pepper`, each sign-in link also has a 6-digit code, in the same
+message (`code`), for someone reading it on another device than the one signing in:
+their phone, say, signing in on a desktop. The page where they asked shows a box for it
+and sends `{ code }` to `sign-in-with-link`. It works only in the browser that asked: that
+browser was given a short-lived, `HttpOnly`, `SameSite=Strict` cookie (`__Host-code`),
+and the code means nothing without it. A link and its code are one: either used, both
+are gone. A code takes 5 wrong tries (`CODE_TRIES`), then it's gone (its link still
+works, in the address's own inbox); and 10 codes a day can be typed for one address,
+right or wrong (`CODES_A_DAY`), so a 6-digit code's guesses stay few. Past that, only
+codes stop working for the day, answered as a wrong code (a pause would show that codes
+were typed at the address today): links and passkeys still work.
+A browser holds one request at a time, so only the code of the latest link it asked for
+works there; asking again, even past the address's limit of links (when none is sent),
+replaces it. A code lasts as its link was made to, even once the link is used or ended
+(when it does nothing), so typing at it shows nothing of what happened to the account
+meanwhile; deleting the account wipes its address from them at once.
+
+Codes need a `pepper`: a random secret of 32 characters or more (never one chosen by
+hand), kept outside the database, in the app's environment. Make one once, with `openssl rand -base64 32`, and give it to
+`createAuth` (`pepper: process.env.AUTH_PEPPER`), the same in every process that shares
+the database. A code is only 6 digits, so it's kept as a hash keyed by the pepper: a copy
+of the database, without it, can't be searched for one. Changing it only stops the codes
+waiting. Links and sessions don't use it: their tokens are 256 bits, so their hashes
+already can't be searched.
+
+A code can be phished, as any typed code can: a fake site asks for one for you, then
+asks you for it. So the message says where to type it, and that nobody will ask for it,
+and passkeys stay the way in that can't be phished. A code is only as safe as wherever
+it's sent: your `deliver` can send it by email, or to the person's own chat, but never
+anywhere other people, or your app's other features, can read it.
 
 ### Passkeys on your pages
 
@@ -314,8 +348,8 @@ each message as data: what it's for, who it's to, and the link in it, if any.
 
 | `kind` | To | Has |
 | --- | --- | --- |
-| `sign-up` | an address with no account | `link`, `expires`: to choose a password, or (without passwords) to sign in |
-| `sign-in` | an account | `link`, `expires` |
+| `sign-up` | an address with no account | `link`, `expires`: to choose a password, or (without passwords) to sign in; and, without passwords, where the site signs in by code, `code` |
+| `sign-in` | an account | `link`, `expires`; and where the site signs in by code, `code` (not on a link the app's own code makes, which nobody asked for) |
 | `new-password` | an account | `link`, `expires`: a forgotten password |
 | `no-account` | an address with no account, that asked to sign in where there are passwords | |
 | `passkey-only` | an account that signs in by passkey only, where someone asked for a link into it (`recovery: "app"`) | |
@@ -423,7 +457,9 @@ Worth knowing:
   request after it is answered by there being nothing left (backups aside, until
   they're replaced). If you need a record that it happened, keep one from the
   `account-deleted` event, which names the account by its id. Anything you must keep
-  (orders, invoices) belongs in your own tables, keyed by that id.
+  (orders, invoices) belongs in your own tables, keyed by that id. Where the site signs
+  in by code, the day's count of codes for the address, kept as a hash of it, lasts out
+  its day.
 - **Many people can share one address,** behind an office, a school, or a mobile
   network. They share its allowance of 20 sign-ins and 5 links in 15 minutes, so a busy
   shared address can pause briefly. Likewise everyone in one IPv6 /48 (often one
@@ -450,7 +486,29 @@ link back to whoever asked: it goes only to its address.
 `recoveryLink(email)` is the one link made for the app's own code alone: the way back
 in where `recovery` is `"app"`, for someone the app has vouched for another way (an
 admin, support). Whoever opens it is in, so it's never a route, and never sent to anyone
-the app hasn't checked.
+the app hasn't checked. It isn't counted against the address's links, so it's also the
+one for a link the app's own code hands someone for an existing account (printed in a
+terminal, say): `requestLink` is for people asking, and its limits are theirs. Wherever
+it's the way back in (a password link, or a sign-in link on a site that doesn't sign in
+by link), opening it is a fresh start: every session, link, and passkey of the account
+ends, not just a sign-in.
+
+With codes, a sign-in link asked for needs the asking browser's token: make a new one
+each time with `newAsker()`, pass it to `requestLink` as its fourth argument, and give it
+to the browser with `codeCookie(asker, origin)` whatever the answer, null included, so
+whether a cookie was set shows nothing. Its code is stored under it either way. When the
+code comes back, read the token with `readCodeCookie(header, origin)` and pass both to
+`useSignInCode(asker, code, from)`; once signed in, clear it with `clearedCodeCookie(origin)`.
+
+`endAccess(email)` is the other side, also the app's own code alone: every session,
+link, and passkey of the account ends, and its password, so nobody is in, or can get in,
+but by a new link to the address (where `recovery` is `"app"`, only one the app makes,
+with `recoveryLink`). For when someone else got in, or the app's own records no longer
+give the address to the person it was. It only takes away, and sends nothing. It works
+whatever `allow` says, so someone the app stops allowing keeps no password or passkey
+that would work if they were allowed back. The account stays, so the next person to sign
+in at that address has it, and its id: whatever the app keeps under that id, it moves or
+removes first.
 
 ```ts
 // Who's asking (behind a proxy, name it as a second argument, such as ["loopback"]).
@@ -466,8 +524,9 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 ## In detail
 
 - **How people sign in is the site's choice,** and has to be made (`signInWith`): any of
-  an emailed link, a password, and a passkey, each on its own or mixed. Every account
-  is still made by a link to its email, which proves the address.
+  an emailed link, a password, and a passkey, each on its own or mixed, and, beside the
+  link, its code (typed in the browser that asked). Every account is still made by a
+  link to its email, which proves the address.
 - **Getting back in is separate:** a link to the account's email, whatever the methods
   (to choose a new password where there are passwords, else to sign in once and add a
   passkey). Or, on a site that signs in by passkey alone, `recovery: "app"`: no link
@@ -505,9 +564,9 @@ const current = auth.userOf(readSessionCookie(req.headers.cookie, "https://examp
 - **A copy of an account's data** for its owner (as UK GDPR asks): its email, when it
   was made, its sessions, and links waiting to be used; nothing that signs anyone in.
 - **A record of events,** if you want one: sessions started, wrong passwords, pauses,
-  new accounts, password and email changes, signing out, and deletions, given to your
-  `onEvent` after each answer, with the account's id and where it came from, but never
-  a password, token, or email.
+  new accounts, password and email changes, signing out, access the app ended, and
+  deletions, given to your `onEvent` after each answer, with the account's id and where
+  it came from, but never a password, token, or email.
 - **Breached passwords refused,** if you want: new passwords checked against a
   breached-password set such as Have I Been Pwned's, through your `breachedRange`,
   which is given only the first 5 characters of the password's SHA-1 (of its normal
