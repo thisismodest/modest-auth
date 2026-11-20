@@ -40,7 +40,8 @@ Keep these apart; a change that blurs them is the wrong change.
 - **One transaction per change.** A change of more than one statement runs in
   `atomically`, so another process sharing the database sees all of it or none. Don't
   close a race between two statements with a condition, an ordering, or a second
-  clearing: put them in one transaction. Count limits before it, never inside.
+  clearing: put them in one transaction. Count limits before it, never inside (they
+  refuse to count inside any transaction, as a rollback would undo the count).
 - **The stamp is for what's checked in one step and acted on in another** (a password
   checked, then a session started; a session checked, then a passkey added): act only
   while it's still the stamp that was checked.

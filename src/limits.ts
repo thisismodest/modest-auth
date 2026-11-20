@@ -43,6 +43,13 @@ export function settingUp(step: () => void): void {
 export type Limit = (key: string) => void;
 
 /**
+ * Said when modest-auth is called inside a transaction the app opened on its connection: rolled back, it would take
+ * limits' counts and changes with it, so it isn't done.
+ */
+export const IN_TRANSACTION =
+  "modest-auth was called inside a transaction on its database connection: rolled back, it would undo the limits' counts. Call it outside any transaction (or give it a connection of its own).";
+
+/**
  * Rate limits kept in `db`: `limit(name, max, windowMs)` makes one. With `wholeWait`, a refusal says to wait the whole
  * window, not when it ends: for a limit others' tries count towards too, whose end would say when the first came.
  */
@@ -61,6 +68,8 @@ export function databaseLimits(db: DatabaseSync): (name: string, max: number, wi
   let swept = 0;
   return (name, max, windowMs, { wholeWait = false } = {}) =>
     (key) => {
+      // A count rolled back with the transaction around it would be no limit at all.
+      if (db.isTransaction) throw new Error(IN_TRANSACTION);
       const now = Date.now();
       if (now - swept > 10_000) {
         swept = now;

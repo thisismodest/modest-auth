@@ -1299,3 +1299,34 @@ test("the per-account pause says to wait the whole hour, so it doesn't tell when
     assert.equal(paused.retryAfter, 3600);
   });
 });
+
+test("a move to an address lasts its 60 minutes whatever that address's account does, so it can't show there is one", async () => {
+  const { auth } = fresh({ signInWith: ["link", "password"] });
+  const mallory = await signUp(auth, "mallory@evil.example", PASSWORD, HERE);
+  await signUp(auth, "vic@example.org", PASSWORD, "192.0.2.230");
+  const confirm = must(confirmLink(auth, auth.startSession(mallory), "vic@example.org", HERE));
+  const shown = () => must(auth.dataOf(mallory.id)).links.filter((link) => link.email === "vic@example.org").length;
+  assert.equal(shown(), 1);
+  auth.useSignInLink(must(must(auth.requestLink("sign-in", "vic@example.org", "192.0.2.231")).token), "192.0.2.231");
+  assert.equal(shown(), 1, "Vic signing in by link doesn't end Mallory's move");
+  assert.equal(confirm.token, null, "which never had anything to open");
+});
+
+test("each account's moves to an address count apart, so nobody can use up an owner's confirmation", async () => {
+  const { auth } = fresh();
+  const mallory = await signUp(auth, "mallory@evil.example", PASSWORD, HERE);
+  const ann = await signUp(auth, "ann@example.org", PASSWORD, "192.0.2.240");
+  const malloryOwn = auth.startSession(mallory);
+  for (let i = 0; i < 3; i++) confirmLink(auth, malloryOwn, "ann@new.example", `198.51.100.${10 + i}`);
+  assert.ok(must(confirmLink(auth, auth.startSession(ann), "ann@new.example", "198.51.100.20")).token);
+});
+
+test("it won't run inside a transaction the app opened, whose rollback would undo its limits and changes", async () => {
+  const { db, auth } = fresh();
+  await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  db.exec("BEGIN");
+  await assert.rejects(auth.signIn("ann@example.org", "a wrong long password", HERE), /inside a transaction/);
+  assert.throws(() => auth.requestLink("password", "ann@example.org", HERE), /inside a transaction/);
+  db.exec("ROLLBACK");
+  assert.ok(auth.requestLink("password", "ann@example.org", HERE));
+});
