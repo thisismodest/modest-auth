@@ -97,6 +97,8 @@ test("HASHING says how many hash at once and how many may wait, and that's what 
 });
 
 test("while hashing is as busy as it gets, reading a file still takes moments (89)", async (t) => {
+  // A read waiting behind the hashing would take at least one hash: half of one, on this machine, is the bar.
+  const hash = await hashTime();
   const sends = flood(HASHING.atOnce + HASHING.waiting);
   await wait(30);
   const took: number[] = [];
@@ -108,5 +110,5 @@ test("while hashing is as busy as it gets, reading a file still takes moments (8
   await Promise.all(sends);
   const middle = [...took].sort((a, b) => a - b)[5] ?? 0;
   t.diagnostic(`file reads during the flood: ${took.map((ms) => ms.toFixed(1)).join(", ")} ms`);
-  assert.ok(middle < 25, `a file read took ${middle.toFixed(1)} ms in the middle, waiting behind the hashing`);
+  assert.ok(middle < hash / 2, `a file read took ${middle.toFixed(1)} ms in the middle (a hash takes ${hash.toFixed(1)}), waiting behind the hashing`);
 });
