@@ -100,6 +100,29 @@ give one).
       makes (an admin, support), never from a route.
 - [ ] **Passkeys only, for an account that chooses it,** on a site that offers more.
 
+## Edge cases still to solve
+
+- [ ] **An account with no way in yet.** On a passkey-only site, someone opens the
+      sign-up link and leaves before adding a passkey: the account exists, with nothing
+      to sign in with. With `recovery: "link"` they can ask for another link; with
+      `"app"`, only `recoveryLink` gets them back. Either the account isn't made until
+      its first passkey is added, or one left unfinished ends after a while.
+- [ ] **Every passkey lost, with `recovery: "app"`:** a standard way for the app to
+      vouch for someone, rather than each app inventing its own.
+- [ ] **Whole changes, not statements.** Eight rounds of review kept finding races
+      between two processes sharing the database, each in a gap between two statements
+      of one change, each closed with its own condition. Running each change that takes
+      more than one statement as one immediate transaction (a savepoint inside the app's
+      own, if it has one open) would close the gaps as a class; the conditions that
+      only exist for races could then go.
+- [ ] **Links outlive a change to the site's methods** until they run out (60 minutes
+      at most).
+- [ ] **Notices can be dropped under a flood,** with everything past the 1,000
+      waiting.
+- [ ] **An account moved by a thief is theirs after 7 days,** once the old address's
+      undo link has run out.
+- [ ] `HEAD` to a reading route answers `404`, not the head of its `GET`.
+
 ## Before 1.0
 
 - [ ] A paid, independent security audit of a release candidate, and its findings fixed
