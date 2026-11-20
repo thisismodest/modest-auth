@@ -840,15 +840,14 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
   /**
    * Empties the WAL into the file, so removed rows don't linger beside it: after a deletion or a new password
    * (waiting, as any write does, for another process), and after clearing old links on an everyday request
-   * (`wait` false: not waiting at all). Best effort, never failing the request: if another process is reading,
-   * or the app is part-way through its own transaction or query on this connection (it's the app's connection
-   * too), it's tried again at every clearing until it's done. The app's own busy_timeout is left as it was.
+   * (`wait` false: not waiting at all). Best effort, never failing the request: if another process is reading, or
+   * the app is part-way through a query on this connection (it may be the app's connection too), it's tried again at
+   * every clearing until it's done. The app's own busy_timeout is left as it was.
    */
   const flush = (wait = true) => {
     unflushed = true;
     // Part of a change: once it's kept.
     if (pending) return void pending.push(() => flush(wait));
-    if (db.isTransaction) return;
     const timeout = (db.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout;
     try {
       if (!wait) db.exec("PRAGMA busy_timeout = 0;");
@@ -874,7 +873,7 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
     if (cleared || unflushed) flush(false);
   };
 
-  return {
+  const auth: Auth = {
     signInWith,
     signInLinks,
 
@@ -1206,4 +1205,20 @@ export function createAuth(db: DatabaseSync, options: AuthOptions): Auth {
       });
     },
   };
+  // Every call refused inside a transaction the app opened on this connection: its rollback would undo what was done
+  // (a sign-out reported done, then undone) and the limits' counts.
+  return new Proxy(auth, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== "function") return value;
+      // An async one rejects, as its callers await it; any other throws.
+      const async = Object.prototype.toString.call(value) === "[object AsyncFunction]";
+      return (...args: unknown[]) => {
+        if (!db.isTransaction) return Reflect.apply(value, target, args);
+        const refusal = new Error(IN_TRANSACTION);
+        if (async) return Promise.reject(refusal);
+        throw refusal;
+      };
+    },
+  });
 }

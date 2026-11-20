@@ -474,7 +474,9 @@ Worth knowing:
   database file: each change that takes more than one statement is one transaction, and
   while one process writes, the others wait (the whole process waits) up to two
   seconds, then that request fails. Don't call modest-auth inside a transaction of your
-  own on its connection: it refuses, as your rollback would undo its limits.
+  own on its connection, nor hold one open across an `await` there: every call refuses
+  inside one, as your rollback would undo what it did (a sign-out, say) and its limits.
+  If your app does either, give modest-auth a connection of its own.
 - **Deleting an account leaves nothing to find,** in the file or its WAL: an erasure
   request after it is answered by there being nothing left (backups aside, until
   they're replaced). If you need a record that it happened, keep one from the

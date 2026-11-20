@@ -423,15 +423,13 @@ test("an expired link's email, which may have no account, is in neither the data
   );
 });
 
-test("clearing old links doesn't disturb the app's own transaction, nor wait for another process", async () => {
+test("clearing old links doesn't wait for another process", async () => {
   await onDisk((db, dir) =>
     withClock((ahead, realNow) => {
       const auth = createAuth(db, { signInWith: ["password", "link"] });
       auth.requestLink("sign-in", "someone@example.org", HERE);
       ahead(61 * MINUTE);
-      db.exec("BEGIN");
-      assert.doesNotThrow(() => auth.userOf("any token"), "inside the app's transaction");
-      db.exec("COMMIT");
+      auth.userOf("any token");
       const reader = new DatabaseSync(join(dir, "auth.db"));
       reader.exec("BEGIN");
       reader.prepare("SELECT count(*) FROM auth_users").get();
@@ -1324,9 +1322,14 @@ test("each account's moves to an address count apart, so nobody can use up an ow
 test("it won't run inside a transaction the app opened, whose rollback would undo its limits and changes", async () => {
   const { db, auth } = fresh();
   await signUp(auth, "ann@example.org", PASSWORD, HERE);
+  const session = await openSession(auth, "ann@example.org", HERE);
+  const ann = must(auth.userOf(session));
   db.exec("BEGIN");
   await assert.rejects(auth.signIn("ann@example.org", "a wrong long password", HERE), /inside a transaction/);
   assert.throws(() => auth.requestLink("password", "ann@example.org", HERE), /inside a transaction/);
+  assert.throws(() => auth.endAllSessions(ann.id), /inside a transaction/, "a sign-out can't be reported done, then rolled back");
+  assert.throws(() => auth.userOf(session), /inside a transaction/);
   db.exec("ROLLBACK");
+  assert.equal(auth.userOf(session)?.id, ann.id);
   assert.ok(auth.requestLink("password", "ann@example.org", HERE));
 });
