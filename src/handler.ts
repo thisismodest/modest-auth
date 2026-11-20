@@ -389,8 +389,9 @@ export function createHandler(auth: Auth, options: HandlerOptions): Handler {
     "confirm-email": own(({ user }, b: Body, from: string) => {
       const moved = auth.useEmailLink(b.token ?? "", user.id, from);
       const { undo } = moved;
-      // None when it moved back home: the address it left was only ever a stop on the way.
       if (undo) queue({ kind: "email-changed", to: { email: undo.to }, email: moved.email, link: linkTo("undo", undo.token ?? ""), expires: undo.expires });
+      // Moved back home: that's an undo, so a link to get back in, as from undo-email.
+      else send(moved.reset);
       // Every session ended, this one too.
       return signedOut({ email: moved.email });
     }, "Please sign in, then open the link again."),
