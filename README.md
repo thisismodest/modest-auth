@@ -246,8 +246,8 @@ replaces it. A code lasts as its link was made to, even once the link is used or
 (when it does nothing), so typing at it shows nothing of what happened to the account
 meanwhile; deleting the account wipes its address from them at once.
 
-Codes need a `pepper`: a secret of 32 characters or more, kept outside the database, in
-the app's environment. Make one once, with `openssl rand -base64 32`, and give it to
+Codes need a `pepper`: a random secret of 32 characters or more (never one chosen by
+hand), kept outside the database, in the app's environment. Make one once, with `openssl rand -base64 32`, and give it to
 `createAuth` (`pepper: process.env.AUTH_PEPPER`), the same in every process that shares
 the database. A code is only 6 digits, so it's kept as a hash keyed by the pepper: a copy
 of the database, without it, can't be searched for one. Changing it only stops the codes

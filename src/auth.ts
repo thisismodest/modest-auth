@@ -105,8 +105,8 @@ export type AuthOptions = {
    */
   breachedRange?(prefix: string, options: { signal: AbortSignal }): Promise<string | Response> | string | Response;
   /**
-   * A secret kept outside the database (an environment variable, such as AUTH_PEPPER), of 32 characters or more:
-   * `openssl rand -base64 32` makes one. Every short secret is kept as a keyed hash under it, so a copy of the
+   * A random secret kept outside the database (an environment variable, such as AUTH_PEPPER), of 32 characters or
+   * more: `openssl rand -base64 32` makes one (never one chosen by hand). Every short code is kept as a keyed hash under it, so a copy of the
    * database, without it, can't be searched for one. Required where "code" is a sign-in method (a code is 6 digits).
    * Links and sessions don't need it: their tokens are 256 bits, which no copy can search. Changing it only stops
    * the codes waiting.
@@ -459,8 +459,9 @@ function recoveryOf(given: unknown, methods: readonly SignInMethod[]): "link" | 
 }
 
 /**
- * The pepper, checked, as the one function every short secret is kept through: a keyed hash (HMAC-SHA256) of its
- * parts. Required where a method that keeps one is chosen ("code"); refused if it's too short to be a secret.
+ * The pepper, checked, as the one function every short code modest-auth makes is kept through: a keyed hash
+ * (HMAC-SHA256) of its parts. Required where a method that makes one is chosen ("code"); refused if it's too short
+ * to be a secret (how random it is can't be checked: it must come from `openssl rand`, not be chosen).
  */
 function pepperOf(given: unknown, methods: readonly SignInMethod[]): ((...parts: string[]) => string) | null {
   if (given === undefined) {

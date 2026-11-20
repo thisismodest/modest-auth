@@ -38,8 +38,8 @@ one new event type.
   say `by: "code"`.
 - **`pepper`,** a secret kept outside the database (`openssl rand -base64 32`), required
   with codes: each code is kept as a hash keyed by it, so a copy of the database can't be
-  searched for one. Every short secret goes through it; links and sessions, with 256-bit
-  tokens, don't need it.
+  searched for one. Every short code modest-auth makes goes through it; links and
+  sessions, with 256-bit tokens, don't need it, and passwords aren't peppered.
 - **`endAccess(email)`,** for the app's own code: every session, link, and passkey of the
   account ends, and its password, so nobody is in, or can get in, but by a new link to the
   address (with `recovery: "app"`, one the app makes). For when someone else got in, or

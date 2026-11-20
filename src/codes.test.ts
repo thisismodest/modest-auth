@@ -421,6 +421,8 @@ test("after an account is deleted, typing at a code for its address does the sam
 test("codes need a pepper, a real one: and keep each code only as a hash keyed by it, which a copy of the database can't search", () => {
   assert.throws(() => fresh({ signInWith: ["link", "code"] }), /a pepper is needed/);
   assert.throws(() => fresh({ signInWith: ["link", "code"], pepper: "too short" }), /32 characters or more/);
+  // @ts-expect-error: not a string, as a mistake in the app's code might give
+  assert.throws(() => fresh({ signInWith: ["link", "code"], pepper: Buffer.alloc(40) }), /32 characters or more/);
   assert.ok(fresh({ signInWith: ["link"], pepper: PEPPER }), "given where nothing needs it yet: fine");
   const { db, auth } = site();
   const link = ask(auth);
